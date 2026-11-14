@@ -2,9 +2,11 @@
 //! (or instead of) installing anything, answered for gala's machine,
 //! where Windows Installer has installed nothing: gala has no installer
 //! database and no installer service, so no product or component is
-//! known. What the Office Deployment Tool's setup.exe imports (by
-//! ordinal: build.rs), as Windows answers for products and components it
-//! does not have (`msi_test`, `wow64_msi_test`; Wine's conformance tests):
+//! known. What the Office Deployment Tool's setup.exe and its
+//! integrator.exe import (by ordinal: build.rs), as Windows answers for
+//! products and components it does not have, and for a database it
+//! cannot open (`msi_test`, `wow64_msi_test`; Wine's conformance tests,
+//! and the answers measured on Windows 11 build 26200):
 //! - MsiQueryProductStateW, MsiGetComponentPathW, MsiLocateComponentW:
 //!   INSTALLSTATE_UNKNOWN, INSTALLSTATE_INVALIDARG for an argument that
 //!   is missing or not a braced GUID;
@@ -14,7 +16,14 @@
 //!   ERROR_UNKNOWN_COMPONENT;
 //! - MsiSetInternalUI: the process's UI level and window, kept;
 //! - MsiCloseHandle: no MSI handle is ever opened (ERROR_INVALID_HANDLE
-//!   for any but 0).
+//!   for any but 0);
+//! - MsiOpenDatabaseW: ERROR_OPEN_FAILED, which is Windows' answer both
+//!   for a path that is not there and for a file that is not an
+//!   installer database, since gala has no database engine to open one
+//!   with; ERROR_CREATE_FAILED for the create modes, which is Windows'
+//!   answer when it cannot create one. Windows asked to create a
+//!   database where it can does create it, which gala cannot: the one
+//!   place its answer is not Windows' (ROADMAP OF).
 //!
 //! Each answer that stands for "Windows Installer has nothing here" is
 //! recorded in the ledger (`msi.dll!<function>: nothing installed`, kind
@@ -62,9 +71,20 @@ unsafe extern "system" {
 const ERROR_SUCCESS: u32 = 0;
 const ERROR_INVALID_HANDLE: u32 = 6;
 const ERROR_INVALID_PARAMETER: u32 = 87;
+const ERROR_OPEN_FAILED: u32 = 110;
 const ERROR_NO_MORE_ITEMS: u32 = 259;
 const ERROR_UNKNOWN_PRODUCT: u32 = 1605;
 const ERROR_UNKNOWN_COMPONENT: u32 = 1607;
+const ERROR_CREATE_FAILED: u32 = 1631;
+
+/// MSIDBOPEN_CREATE and MSIDBOPEN_CREATEDIRECT, the persistence modes
+/// that make a database rather than open one; MSIDBOPEN_PATCHFILE is a
+/// flag above them (msiquery.h). A mode is a small integer cast to a
+/// string pointer, so a pointer that is none of them is a path to
+/// persist to, which is no more openable here.
+const MSIDBOPEN_CREATE: usize = 3;
+const MSIDBOPEN_CREATEDIRECT: usize = 4;
+const MSIDBOPEN_PATCHFILE: usize = 32;
 const INSTALLSTATE_INVALIDARG: i32 = -2;
 const INSTALLSTATE_UNKNOWN: i32 = -1;
 
@@ -116,6 +136,37 @@ fn is_guid(p: *const u16) -> bool {
         }
     }
     true
+}
+
+/// MsiOpenDatabaseW (#92): opens an installer database, which gala has
+/// no engine for, so none opens. Windows' answers, measured: a NULL
+/// path is ERROR_INVALID_PARAMETER and leaves the handle alone; past
+/// that the handle is set to 0 first, and an empty path or no handle at
+/// all is ERROR_INVALID_PARAMETER; a path that is not there and a file
+/// that is not a database are both ERROR_OPEN_FAILED; a create mode
+/// that cannot create one is ERROR_CREATE_FAILED, which is what gala
+/// answers every create with (`msi_test`, `wow64_msi_test`).
+#[unsafe(no_mangle)]
+pub extern "system" fn MsiOpenDatabaseW(
+    path: *const u16,
+    persist: *const u16,
+    database: *mut u32,
+) -> u32 {
+    if path.is_null() || database.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    // SAFETY: the caller's handle, not null.
+    unsafe { *database = 0 };
+    // SAFETY: the caller's string, its first unit.
+    if unsafe { *path } == 0 {
+        return ERROR_INVALID_PARAMETER;
+    }
+    nothing_installed(b"MsiOpenDatabaseW", 92);
+    let mode = persist.addr() & !MSIDBOPEN_PATCHFILE;
+    if mode == MSIDBOPEN_CREATE || mode == MSIDBOPEN_CREATEDIRECT {
+        return ERROR_CREATE_FAILED;
+    }
+    ERROR_OPEN_FAILED
 }
 
 /// MsiCloseHandle (#8): gala's msi opens no handles, so 0 (which closes
