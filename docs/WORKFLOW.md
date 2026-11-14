@@ -937,7 +937,13 @@ Vulkan-Headers) Vulkan on lavapipe through the Khronos loader (PREBUILT
   instructions the Intel way whatever vendor the guest's CPUID names, so
   behaviour that differs between Intel and AMD only shows under KVM on
   that vendor's host (CI's runners are AMD: an AMD-only bug is CI-only
-  here). The boot log's `cpu:` line names the vendor.
+  here). The boot log's `cpu:` line names the vendor, and its
+  `xtask: accelerator:` line says which accelerator ran it (QMP's
+  `query-kvm`, not what the host has): QEMU is given `-accel kvm -accel
+  tcg` and falls back to the second without failing, so a run that
+  should have been near-native and took ten times as long looks like
+  any other. A fallback on a host that has `/dev/kvm` is called out
+  with it, and QEMU's standard error says what it could not open.
 - **Docker**: `cargo xtask docker-test [xtask args]` builds
   `docker/test.Dockerfile` (Ubuntu 24.04, OVMF, xorriso, the pinned
   toolchain, QEMU's build dependencies) and runs `cargo xtask test` (or

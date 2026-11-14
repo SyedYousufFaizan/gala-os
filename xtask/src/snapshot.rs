@@ -561,14 +561,14 @@ fn shell_path(p: &Path) -> Result<String> {
 }
 
 /// A QMP connection (QEMU's JSON monitor).
-struct Qmp {
+pub(crate) struct Qmp {
     reader: BufReader<UnixStream>,
     writer: UnixStream,
 }
 
 impl Qmp {
     /// Connects to `socket`, waiting up to `wait` for QEMU to make it.
-    fn connect(socket: &Path, wait: Duration) -> Result<Qmp> {
+    pub(crate) fn connect(socket: &Path, wait: Duration) -> Result<Qmp> {
         let start = Instant::now();
         let stream = loop {
             match UnixStream::connect(socket) {
@@ -588,7 +588,7 @@ impl Qmp {
 
     /// Runs `command` with `args` (a JSON object); its "return", compact,
     /// or the error QEMU gave.
-    fn cmd(&mut self, command: &str, args: &str) -> Result<String> {
+    pub(crate) fn cmd(&mut self, command: &str, args: &str) -> Result<String> {
         let line = format!("{{\"execute\":\"{command}\",\"arguments\":{args}}}\n");
         self.writer.write_all(line.as_bytes()).map_err(|e| format!("QMP {command}: {e}"))?;
         loop {
@@ -617,7 +617,7 @@ fn json_str<'a>(json: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// "kvm" or "tcg", as QEMU says.
-fn accel(q: &mut Qmp) -> Result<String> {
+pub(crate) fn accel(q: &mut Qmp) -> Result<String> {
     let r = q.cmd("query-kvm", "{}")?;
     Ok(if r.contains("\"enabled\":true") { "kvm" } else { "tcg" }.into())
 }

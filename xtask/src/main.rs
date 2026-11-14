@@ -13395,7 +13395,7 @@ fn run_vm_once(
     let mut snap_taken = false;
     let qmp_thread = {
         let qmp = qmp.clone();
-        thread::spawn(move || telemetry::qmp_cpu_count(&qmp))
+        thread::spawn(move || telemetry::qmp_facts(&qmp))
     };
     let start = Instant::now();
     let mut to_banner = None;
@@ -13598,13 +13598,14 @@ fn run_vm_once(
     if let Ok(served) = fs::read_to_string(iso.with_extension("serve.log")) {
         serial += &served;
     }
-    let vcpus = qmp_thread.join().ok().flatten();
+    let facts = qmp_thread.join().ok().flatten();
     let _ = fs::remove_file(&qmp);
     serial += &boot_telemetry(BootFacts {
         iso,
         status,
         stopped,
-        vcpus,
+        vcpus: facts.as_ref().map(|f| f.vcpus),
+        kvm: facts.as_ref().and_then(|f| f.kvm),
         host_before: &host_before,
         serial: &serial,
         logs: [&qemu_log, &bios_log, &phases_log],
@@ -13643,6 +13644,15 @@ fn run_vm_once(
             Err(e) => format!("xtask: net client: {e}\n"),
         };
     }
+    // The log on disk is where a run's story is read from afterwards
+    // (`cargo xtask triage`, CI's artifacts, the next session): write
+    // back what xtask added to QEMU's own output -- the accelerator, the
+    // vCPUs, the vm time, the host, the verdicts -- or those lines exist
+    // only in the report of a run that failed, and a run that passed
+    // cannot be asked how it ran.
+    if let Err(e) = fs::write(&log, &serial) {
+        eprintln!("xtask: cannot write {}: {e}", log.display());
+    }
     Ok((status, serial, BootTime { to_banner: to_banner.unwrap_or(total), total }))
 }
 
@@ -13652,6 +13662,8 @@ struct BootFacts<'a> {
     status: Option<std::process::ExitStatus>,
     stopped: bool,
     vcpus: Option<usize>,
+    /// Whether the machine ran under KVM (None: unanswered).
+    kvm: Option<bool>,
     host_before: &'a str,
     serial: &'a str,
     /// QEMU's log, SeaBIOS's, the kernel's phase markers.
@@ -13659,9 +13671,10 @@ struct BootFacts<'a> {
 }
 
 /// The `xtask:` lines appended to a boot's serial log (telemetry.rs): how
-/// QEMU ended, its vCPUs, the host; after an abnormal end (not the
-/// kernel's own exit code, not stopped by xtask) also the last phase
-/// markers and the tail of QEMU's log, so a silent death has a story.
+/// QEMU ended, its vCPUs, its accelerator, the host; after an abnormal
+/// end (not the kernel's own exit code, not stopped by xtask) also the
+/// last phase markers and the tail of QEMU's log, so a silent death has
+/// a story.
 fn boot_telemetry(f: BootFacts) -> String {
     let want = telemetry::vm_cpus(f.iso);
     let mut out = format!(
@@ -13671,6 +13684,22 @@ fn boot_telemetry(f: BootFacts) -> String {
         f.host_before,
         telemetry::host_state()
     );
+    out += &format!(
+        "xtask: accelerator: {}\n",
+        match f.kvm {
+            Some(true) => "KVM",
+            Some(false) => "TCG (software emulation)",
+            None => "? (QMP did not answer)",
+        }
+    );
+    // QEMU is started with `-accel kvm -accel tcg`, so a KVM it cannot
+    // open costs ten times the run time and hides everything that
+    // differs between Intel and AMD -- with nothing in the log to say
+    // so (WORKFLOW "KVM").
+    if f.kvm == Some(false) && Path::new("/dev/kvm").exists() {
+        out += "xtask: the host has /dev/kvm but QEMU emulated this run: `-accel kvm` was \
+                refused (its standard error says why, below)\n";
+    }
     if let Some(n) = telemetry::cpus_online(f.serial).filter(|&n| n < want) {
         out += &format!("xtask: {}\n", fewer_cpus(n, want));
     }
