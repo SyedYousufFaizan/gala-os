@@ -939,11 +939,25 @@ Vulkan-Headers) Vulkan on lavapipe through the Khronos loader (PREBUILT
   that vendor's host (CI's runners are AMD: an AMD-only bug is CI-only
   here). The boot log's `cpu:` line names the vendor.
 - **Docker**: `cargo xtask docker-test [xtask args]` builds
-  `docker/test.Dockerfile` (Ubuntu 24.04, QEMU, OVMF, xorriso, the
-  pinned toolchain) and runs `cargo xtask test` (or the given arguments)
-  inside it with the repository at /work and build output in
-  `target/docker`. It passes `/dev/kvm` through when the host has it and
-  forwards the `XTASK_*` variables and proxy settings. In a cloud
+  `docker/test.Dockerfile` (Ubuntu 24.04, OVMF, xorriso, the pinned
+  toolchain, QEMU's build dependencies) and runs `cargo xtask test` (or
+  the given arguments) inside it with the repository at /work and build
+  output in `target/docker`. It passes `/dev/kvm` through when the host
+  has it, mounts `~/.cache/gala-qemu-docker` at
+  `/root/.cache/gala-qemu` (the container's `HOME` is /root) and builds
+  the pinned QEMU there first when it is missing, and forwards every
+  `XTASK_*` variable and the proxy settings. That cache is the
+  container's own and not the host's `~/.cache/gala-qemu`: QEMU links
+  against the glibc and libslirp of whatever built it, so sharing one
+  cache between a host newer than the image and the image gives the
+  container a QEMU it cannot load (`version GLIBC_2.42 not found`, 0.1s
+  into the run, which reads as a QEMU that crashed). The image carries
+  no QEMU package on purpose: the distribution's is 8.2.2, whose TCG
+  loses writes to a rewritten page ("QEMU" below), and a container that
+  has one runs the tests on it silently. The container is root over a tree
+  owned by the host's user, so the image lets git read it
+  (`safe.directory '*'`); without that every revision git is asked for
+  comes back empty, which read as a stale Limine checkout. In a cloud
   container without a running daemon, start one with `dockerd &`.
 - **Never run two xtask boot runs at once** (a full `cargo xtask test`
   and a single `boot-test`): they share ISO and serial-log files under

@@ -5635,6 +5635,17 @@ fn fetch_limine_once() -> Result<PathBuf> {
         .current_dir(&dir)
         .output()
         .map_err(|e| format!("git rev-parse: {e}"))?;
+    if !head.status.success() {
+        // Not a mismatch: git could not read the checkout at all (it
+        // refuses one owned by another user, which is every bind mount in
+        // the test container). Its own words are the diagnosis, and
+        // reporting the empty revision instead hid them.
+        return Err(format!(
+            "git rev-parse in {dir:?} failed ({}): {}",
+            head.status,
+            String::from_utf8_lossy(&head.stderr).trim()
+        ));
+    }
     let head = String::from_utf8_lossy(&head.stdout);
     if head.trim() != LIMINE_COMMIT {
         return Err(format!(
@@ -19898,9 +19909,9 @@ fn docker_test(args: &[String]) -> Result {
         copy(Path::new(&ca), &ca_dir.join("extra.crt"))?;
     }
     let mut build = Command::new("docker");
-    build
-        .args(["build", "--quiet", "-t", DOCKER_IMAGE, "-f"])
-        .arg(root().join("docker/test.Dockerfile"));
+    // Not --quiet: the image's apt and rustup steps take minutes, and a
+    // build that prints nothing looks like a hang.
+    build.args(["build", "-t", DOCKER_IMAGE, "-f"]).arg(root().join("docker/test.Dockerfile"));
     if host_network {
         build.args(["--network", "host"]);
     }
@@ -19908,29 +19919,63 @@ fn docker_test(args: &[String]) -> Result {
         build.arg("--build-arg").arg(format!("{var}={value}"));
     }
     run_cmd(build.arg(root().join("docker")))?;
-    let mut cmd = Command::new("docker");
-    cmd.args(["run", "--rm", "-v"]).arg(format!("{}:/work", root().display()));
-    if host_network {
-        cmd.args(["--network", "host"]);
-    }
-    for (var, value) in &proxies {
-        cmd.arg("-e").arg(format!("{var}={value}"));
-    }
-    if Path::new("/dev/kvm").exists() {
-        cmd.args(["--device", "/dev/kvm"]);
-    }
-    for var in ["XTASK_VERBOSE", "XTASK_QEMU_ARGS", "XTASK_FIRMWARE", "XTASK_NO_BATCH"] {
-        if let Ok(value) = env::var(var) {
+    // The container's HOME is /root, so the pinned QEMU is looked for in
+    // /root/.cache/gala-qemu (qemu_prefix()): mount a cache there and
+    // build QEMU_VERSION into it first when it is missing, or the image,
+    // which carries no QEMU, has none to run. It is the container's own
+    // cache, not the host's: QEMU links against the glibc and libslirp
+    // of whatever built it, so a build made on a host newer than the
+    // image (Ubuntu 24.04) dies 0.1s into the run with `version
+    // GLIBC_2.42 not found`, which reads as a QEMU that crashed.
+    let qemu_cache = host_home().join(".cache/gala-qemu-docker");
+    fs::create_dir_all(&qemu_cache).map_err(|e| format!("{}: {e}", qemu_cache.display()))?;
+    let qemu_mount = format!("{}:/root/.cache/gala-qemu", qemu_cache.display());
+    let container = |cmd: &mut Command| {
+        cmd.args(["run", "--rm", "-v"]).arg(format!("{}:/work", root().display()));
+        cmd.arg("-v").arg(&qemu_mount);
+        if host_network {
+            cmd.args(["--network", "host"]);
+        }
+        for (var, value) in &proxies {
             cmd.arg("-e").arg(format!("{var}={value}"));
         }
+        if Path::new("/dev/kvm").exists() {
+            cmd.args(["--device", "/dev/kvm"]);
+        }
+        // Every XTASK_* variable, so that what steers a run on the host
+        // steers it in the container too (the timeout, the events, the
+        // screenshot times, the kernel command line, the snapshots).
+        for (var, value) in env::vars() {
+            if var.starts_with("XTASK_") {
+                cmd.arg("-e").arg(format!("{var}={value}"));
+            }
+        }
+        cmd.args([DOCKER_IMAGE, "cargo", "xtask"]);
+    };
+    if !qemu_cache.join(QEMU_VERSION).join("bin/qemu-system-x86_64").is_file() {
+        eprintln!(
+            "xtask: QEMU {QEMU_VERSION} not in {}: building it in the container",
+            qemu_cache.display()
+        );
+        let mut build_qemu = Command::new("docker");
+        container(&mut build_qemu);
+        run_cmd(build_qemu.arg("qemu"))?;
     }
-    cmd.args([DOCKER_IMAGE, "cargo", "xtask"]);
+    let mut cmd = Command::new("docker");
+    container(&mut cmd);
     if args.is_empty() {
         cmd.arg("test");
     } else {
         cmd.args(args);
     }
     run_cmd(&mut cmd)
+}
+
+/// The host user's home directory, which holds the container's QEMU
+/// cache beside the host's own (`qemu_prefix()` reads the same variable
+/// inside the container, where it is the mount point).
+fn host_home() -> PathBuf {
+    env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from)
 }
 
 /// Checked-in files a test program opens beside itself, exported to

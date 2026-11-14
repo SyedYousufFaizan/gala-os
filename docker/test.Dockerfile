@@ -12,11 +12,25 @@ FROM ubuntu:24.04
 COPY extra-ca/ /usr/local/share/ca-certificates/extra/
 ARG http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY
 
+# No QEMU package: the distribution's is 8.2.2, whose TCG loses writes
+# to a rewritten page (WORKFLOW "QEMU"), and a container that carries one
+# uses it silently when the pinned build is missing. These are what
+# `cargo xtask qemu` needs to build QEMU_VERSION instead, into the
+# ~/.cache/gala-qemu that docker-test mounts.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        qemu-system-x86 ovmf xorriso git make gcc libc6-dev curl ca-certificates \
+        ovmf xorriso git make gcc libc6-dev curl ca-certificates \
+        python3 python3-venv ninja-build pkg-config flex bison bzip2 xz-utils \
+        libglib2.0-dev libpixman-1-dev libslirp-dev libfdt-dev zlib1g-dev \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# The repository is bind-mounted from the host, owned by the host's user,
+# while the container is root: git then refuses to read it ("detected
+# dubious ownership") and every revision it is asked for comes back empty
+# (the Limine checkout's, for one). The container has nothing of its own
+# in /work, so the tree it is given is a tree it may read.
+RUN git config --system --add safe.directory '*'
 
 # The toolchain pinned in rust-toolchain.toml (keep in sync).
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
