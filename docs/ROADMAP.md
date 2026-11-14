@@ -200,7 +200,7 @@ has a section under "Open items".
 | WD | Windows divergences: the test programs on real Windows | in progress | triage in `user/windows/` (build 26200); the first fixes done; probes to come back |
 | LX | Linux personality | in progress | seams 2, 3, 6 and milestone 1 done, seam 4's Linux side (links, case-sensitive directories, modes kept); static busybox runs (milestone 2), TCP sockets, threads, futex, epoll; file mappings, glibc's dynamic programs (LD step 1); seam 5's first core object, AF_UNIX sockets, and memfd (LD step 2) |
 | CT | Linux containers: Docker Desktop and Podman over a WSL facade | planned | spec recordings first; needs LX beyond milestone 5 |
-| LD | Desktop Linux applications | in progress | step 1: dynamically linked glibc programs run through ld.so (`lx_dyn`); step 2: memfd and AF_UNIX sockets with SCM_RIGHTS (`lx_memfd`, `lx_unix`), the Wayland wire format (`wl_abi`) and the first in-kernel Wayland server (wl_compositor, wl_shm, xdg_wm_base, wl_output; toplevels as desktop windows: `lx_wl`), wl_seat input and window control (`lx_wl_input`), weston-simple-shm (`lx_simple_shm`), popups (`lx_wl_popup`); step 3: the first GTK program, its window drawn and clicked (`lx_gtk`, GTK 3 on a Linux root of Ubuntu's packages); step 5: X11 programs through rootless Xwayland, gala its window manager, xterm on a pty (`lx_xterm`), GTK under X11 (`lx_gtk_x11`); step 6's first part: a distribution's desktop in one window (`lx_xdesktop`); step 7: Linux distributions in the start menu (`linux_menu`); step 9's first part: GIMP in batch mode, its saved file Ubuntu's byte for byte (`lx_gimp_batch`; System V shared memory: `lx_shm`; sysinfo: `lx_sysinfo`); next: GIMP's window (step 9) |
+| LD | Desktop Linux applications | in progress | step 1: dynamically linked glibc programs run through ld.so (`lx_dyn`); step 2: memfd and AF_UNIX sockets with SCM_RIGHTS (`lx_memfd`, `lx_unix`), the Wayland wire format (`wl_abi`) and the first in-kernel Wayland server (wl_compositor, wl_shm, xdg_wm_base, wl_output; toplevels as desktop windows: `lx_wl`), wl_seat input and window control (`lx_wl_input`), weston-simple-shm (`lx_simple_shm`), popups (`lx_wl_popup`); step 3: the first GTK program, its window drawn and clicked (`lx_gtk`, GTK 3 on a Linux root of Ubuntu's packages); step 5: X11 programs through rootless Xwayland, gala its window manager, xterm on a pty (`lx_xterm`), GTK under X11 (`lx_gtk_x11`); step 6's first part: a distribution's desktop in one window (`lx_xdesktop`); step 7: Linux distributions in the start menu (`linux_menu`); step 9's first part: GIMP 3.2 in batch mode, its saved file Ubuntu 26.04's byte for byte (`lx_gimp_batch`; System V shared memory: `lx_shm`; sysinfo: `lx_sysinfo`); next: GIMP's window (step 9) |
 | AR | ARM64 port | planned | the kernel's aarch64 `arch` on QEMU `virt`, then ARM64 Windows and Linux user mode |
 | XT | 64-bit Windows programs on ARM64 | planned | dynamic binary translation of x64 code; after AR |
 | AN | Android applications | planned | binder, ART, SwiftShader graphics; x86_64 images first |
@@ -3651,54 +3651,47 @@ the next breakthroughs).
    (user namespaces, seccomp-bpf; shares CT's namespace work) so
    `--no-sandbox` goes, and the clipboard between the two browsers
    (`wl_data_device` bridged to the Windows clipboard).
-9. GIMP on Linux (the owner): a distribution's GIMP (Ubuntu 24.04's
-   2.10.36, a GTK 2 program: X11 only, so its window comes through
-   Xwayland as step 5's do) started on the desktop, opening an image,
-   applying a filter and saving it, in a boot scenario with a screen
-   check, the saved file compared with the one GIMP writes on real
-   Linux. Done, its first part: GIMP in batch mode (`lx_gimp_batch`, the
-   Linux root "gimp" beside "gtk3" and "x11"): the console GIMP loads a
-   PNG through its file-png plug-in, blurs and inverts it with GEGL from
-   script-fu (each plug-in a process over pipes, tiles handed over in a
-   System V segment) and saves a PNG whose SHA-256 is the one GIMP
-   writes on Ubuntu, its whole transcript Ubuntu's; what it reached:
-   sysinfo and sched_getaffinity (`lx_sysinfo`), System V shared memory
-   (`lx_shm`). Next: its window (`gimp` under Xwayland with a screen
-   check: the image opened, a filter from the menu, File > Export),
-   which needs gtk2's engine and theme files, the icon theme, fonts and
-   GIMP's own data (brushes, patterns, tool presets: what `-d` left
-   out); then all of its plug-ins (about 120 processes queried at a
-   first start). In progress (the owner): GIMP 3.2.2 on Ubuntu 26.04
-   LTS instead (GTK 3, native Wayland; WORKFLOW "Linux roots from Ubuntu
-   26.04"), the Linux roots with it: glibc 2.43, libffi, libwayland-client,
-   weston and the "gtk3" and "x11" roots are resolute's (traced on 26.04),
-   and every `lx_` scenario but two passes on them, `lx_gtk` among them
-   (GTK 3's images through glycin: bubblewrap fails as on an unprivileged
-   Linux without user namespaces and glycin runs its loaders unsandboxed,
-   its warning in the scenarios' own transcripts, recorded on 26.04).
-   `lx_xdesktop` times out: the screen check passes, but the `exit` typed
-   into its xterm never reaches the xterm's shell (the keys reach
-   Xwayland, and twm and xterm each read an X event per key, but xterm
-   writes nothing to its pty; pointing at the xterm first does not
-   change it); `linux_menu` waits for its session's end the same way;
-   `lx_gimp_batch` fails: its "gimp" root is still 24.04's 2.10, now
-   beside 26.04's libraries (its script for 3.2, `user/lx/gimp/batch3.scm`,
-   deterministic on 26.04: `file-png-export` with every optional chunk
-   off). What 26.04 needed that gala lacked, each test first: the ioctls
-   every descriptor answers (`lx_fdioctl`), capget and capset
-   (`lx_caps`), timerfd (`lx_timerfd`), descriptor arguments' upper halves
-   ignored (`lx_fdbits`: glycin's int fds), PR_SET_NO_NEW_PRIVS,
-   PR_GET_AUXV and PR_SET_PDEATHSIG (`lx_prctl`: bubblewrap, uutils'
-   `sleep`, glycin's loaders), /proc's first part and unshare, a namespace
-   refused as Linux refuses it at max_user_namespaces 0 (`lx_procfs`),
-   sigaltstack (`lx_altstack`: Rust's runtime), and an epoll_wait seeing
-   what another thread ADDs or MODs meanwhile (`lx_epoll`: glycin's
-   loader connection, armed from one thread while another waits). Next:
-   `lx_xdesktop`'s keys; seccomp's probes (GET_ACTION_AVAIL,
+9. GIMP on Linux (the owner): a distribution's GIMP (Ubuntu 26.04 LTS's
+   3.2.2, a GTK 3 program: its window over gala's Wayland server)
+   started on the desktop, opening an image, applying a filter and
+   saving it, in a boot scenario with a screen check, the saved file
+   compared with the one GIMP writes on real Linux. Done, its first
+   part: GIMP in batch mode (`lx_gimp_batch`, the Linux root "gimp"
+   beside "gtk3" and "x11"; WORKFLOW "GIMP"): the console GIMP 3.2 loads
+   its data and a PNG through its file-png plug-in, blurs and inverts it
+   with GEGL from script-fu (each plug-in a process, tiles handed over in
+   a System V segment) and saves a PNG whose SHA-256 is the one GIMP
+   writes on Ubuntu 26.04, its whole transcript Ubuntu's. Next: its
+   window (`gimp` over Wayland with a screen check: the image opened, a
+   filter from the menu, File > Export), which needs GTK's theme and
+   icon files and fonts in the root; then all of its plug-ins (about 130
+   processes queried at a first start). The Linux roots moved to Ubuntu
+   26.04 LTS with it (WORKFLOW "Linux roots from Ubuntu 26.04"): glibc
+   2.43, libffi, libwayland-client, weston and the "gtk3", "x11" and
+   "gimp" roots are resolute's (traced on 26.04), and every `lx_`
+   scenario but one passes on them, `lx_gtk` among them (GTK 3's images
+   through glycin: bubblewrap fails as on an unprivileged Linux without
+   user namespaces and glycin runs its loaders unsandboxed, its warning
+   in the scenarios' own transcripts, recorded on 26.04). `lx_xdesktop`
+   times out: the screen check passes, but the `exit` typed into its
+   xterm never reaches the xterm's shell (the keys reach Xwayland, and
+   twm and xterm each read an X event per key, but xterm writes nothing
+   to its pty; pointing at the xterm first does not change it);
+   `linux_menu` waits for its session's end the same way. What 26.04
+   needed that gala lacked, each test first: the ioctls every descriptor
+   answers (`lx_fdioctl`), capget and capset (`lx_caps`), timerfd
+   (`lx_timerfd`), descriptor arguments' upper halves ignored
+   (`lx_fdbits`: glycin's int fds), PR_SET_NO_NEW_PRIVS, PR_GET_AUXV and
+   PR_SET_PDEATHSIG (`lx_prctl`: bubblewrap, uutils' `sleep`, glycin's
+   loaders), /proc's first part and unshare, a namespace refused as Linux
+   refuses it at max_user_namespaces 0 (`lx_procfs`), sigaltstack
+   (`lx_altstack`: Rust's runtime), and an epoll_wait seeing what another
+   thread ADDs or MODs meanwhile (`lx_epoll`: glycin's loader connection,
+   armed from one thread while another waits). Next: `lx_xdesktop`'s
+   keys; GIMP's window; seccomp's probes (GET_ACTION_AVAIL,
    GET_NOTIF_SIZES; a filter mode's flags checked: EFAULT for a NULL
-   program); xterm's setfsuid and setfsgid (ENOSYS now); GIMP 3.2's root
-   and `lx_gimp_batch` on `batch3.scm`, then its window over native
-   Wayland; THIRD_PARTY's rows for the new versions. Linux system calls
+   program); xterm's setfsuid and setfsgid (ENOSYS now); pidfd_open
+   (ENOSYS: GLib watches children with SIGCHLD then). Linux system calls
    are traced with `events=syscall` (`lx syscall`). Open: a Linux process
    keeps its name across execve (the log says `sh (pid N)` for
    gimp-console), and rseq is ENOSYS

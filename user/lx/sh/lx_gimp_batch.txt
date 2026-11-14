@@ -1,7 +1,17 @@
-gimp-console-2.10: exit status 0
-37848d212bf0b473597187e13f00357a22b80a8d879e9a19e3dc42bafaef7459  out.png
+gimp-console-3.2: exit status 0
+e4e1ff01c12286fe46ed632942e86b6482c60110e2aebda05312f923399b0a20  out.png
 -- stderr:
-using gegl copy
-using gegl copy
+GIMP-Warning: Welcome to GIMP 3.2.2!
+
+PNG image-Warning: Operation not supported
+
+PNG image-Warning: Operation not supported
+
+PNG image-Warning: Operation not supported
+
+PNG image-Warning: Operation not supported
+
+PNG image-Warning: Operation not supported
+
 batch command executed successfully
 -- exit status 0

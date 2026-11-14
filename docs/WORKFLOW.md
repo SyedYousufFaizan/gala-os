@@ -2234,34 +2234,45 @@ A root is what its workload opened on real 26.04, traced:
 ### GIMP (ROADMAP LD step 9)
 
 - Scenario `lx_gimp_batch` (`cargo xtask boot-test 'lx_gimp_batch$'`,
-  about 80 s in the kernel under TCG): `/bin/sh /lx/gimp/batch.sh` runs
-  `gimp-console-2.10` in batch mode on `user/lx/gimp/in.png` (made by
-  `mkpng.py`) with `batch.scm` and `--gimprc=gimprc`, then busybox's
-  sha256sum of the PNG it saved; its transcript is
-  `user/lx/sh/lx_gimp_batch.txt`. Record it on Ubuntu 24.04 with GIMP
-  2.10.36-3build3 (`apt-get install gimp=2.10.36-3build3
-  libgimp2.0t64=2.10.36-3build3 gimp-data=2.10.36-3build3`): `env -i
-  HOME=<an empty directory> PATH=/usr/bin:/bin BB= DIR=$PWD/user/lx/gimp
-  sh user/lx/gimp/batch.sh`, stdout, then `-- stderr:` and stderr, then
-  `-- exit status 0`.
+  about 135 s of run time under TCG: one of `SLOW_SCENARIOS`):
+  `/bin/sh /lx/gimp/batch.sh` runs `gimp-console-3.2` in batch mode on
+  `user/lx/gimp/in.png` (made by `mkpng.py`) with `batch.scm` and a
+  writable copy of `gimprc` in `$HOME` (GIMP writes it back at the end;
+  cp keeps the source's mode, and gala's `/lx` files are 0555), then
+  busybox's sha256sum of the PNG it saved; its transcript is
+  `user/lx/sh/lx_gimp_batch.txt`. Record it in a fresh Ubuntu 26.04
+  chroot (`mkchroot.sh ... gimp`, GIMP 3.2.2-1) holding only the root's
+  plug-ins (move the others in `/usr/lib/x86_64-linux-gnu/gimp/3.0/
+  plug-ins` aside, and `extensions/org.gimp.extension.goat-exercises`),
+  as uid 1000 with a new empty home: `chroot --userspec=1000:1000 <dir>
+  env -i HOME=<home> PATH=/usr/bin:/bin BB= DIR=<a copy of user/lx/gimp>
+  sh <that copy>/batch.sh`, stdout, then `-- stderr:` and stderr, then
+  `-- exit status 0`. Run it twice: the transcripts must be the same.
 - **The saved file is compared byte for byte**, so it carries nothing
   that changes between runs: the gimprc turns off exporting the colour
   profile, Exif, XMP and IPTC (their dates and document ids), and
-  file-png-save2's arguments every optional chunk. GEGL's and babl's
+  `file-png-export`'s arguments every optional chunk. GEGL's and babl's
   modules come in x86_64 variants picked by the CPU's features; the
   guest's (QEMU's `-cpu max`) gives the host's bytes.
-- **The root "gimp"** is what `strace -f -e trace=%file,execve` of that
-  run opened on Ubuntu, less what the "gtk3", "x11" and "glibc" roots
-  ship and the host's extras (dconf's GIO module, the caches, GEGL's
-  probes of `dot` and `convert`). A first start queries every plug-in
-  in `/usr/lib/gimp/2.0/plug-ins` (about 120 processes): the root has
-  only those the scenario uses (script-fu and file-png). To find a new
-  plug-in's files, run the host's GIMP with a gimprc whose
-  `(plug-in-path "<dir>")` holds copies of just the plug-ins wanted.
+- **GIMP loads its data** (no `-d`): Script-Fu's scripts name a brush, a
+  gradient and a pattern as defaults and warn, with a pid and a time,
+  when they are missing; and Script-Fu crashes without its scripts'
+  directory (a `script-fu-path` without GIMP's own). The first start
+  measures babl's conversions (`~/.cache/babl`): most of the run time.
+- **The root "gimp"** is what `strace -f -y` of that run opened on
+  26.04 (`plan.py`), less what the "gtk3", "x11" and "glibc" roots ship,
+  coreutils (busybox's applets in gala) and GEGL's probe of graphviz's
+  `dot`; directories looked for with nothing used beneath them
+  (`usr/share/locale/`, which each plug-in checks for its catalogs) are
+  `<dir>/` entries. A start queries every plug-in in the plug-ins and
+  extensions directories (each a process): the root has only those the
+  scenario uses (script-fu and file-png).
 - Reading a run: `XTASK_EVENTS=ipc` shows GIMP's segment (`lx shm`:
   gimp-console gets, attaches and removes it; each plug-in attaches and
-  detaches; it is destroyed at the last detach); GLib's criticals and
-  GIMP's own messages are on its stderr in the transcript.
+  detaches; it is destroyed at the last detach), `XTASK_EVENTS=syscall`
+  every Linux call (a failing open's errno is what GLib's message turns
+  into words); GLib's criticals and GIMP's own messages are on its
+  stderr in the transcript.
 
 ### The WSL facade's tests (user/wsl_test, ROADMAP CT)
 

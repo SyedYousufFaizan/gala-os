@@ -3,7 +3,9 @@ the chroot (`strace -f -y`: absolute paths and the paths opened descriptors
 name), by owning package, as package paths (usrmerge: /lib -> usr/lib).
 Files no package owns (generated caches, the users) are listed under "".
 A file reached through update-alternatives, or through a link into another
-package, is "<installed>=<the file in its package>". A file used through a
+package, is "<installed>=<the file in its package>". A directory used with
+nothing used beneath it (GIMP's plug-ins check that /usr/share/locale is
+there) is "<dir>/", by one of its owners. A file used through a
 directory link's target is also wanted under the link (boot modules carry
 no links). WORKFLOW "Linux roots from Ubuntu 26.04"."""
 import json, re, subprocess, sys
@@ -60,6 +62,14 @@ def through_alternatives(p):
     chain = run("sh", "-c", 'p="$1"; while [ -L "$p" ]; do t=$(readlink "$p"); case $t in /*) p=$t;; *) p=$(dirname "$p")/$t;; esac; echo "$p"; done', "-", p)
     return "/etc/alternatives/" in chain
 
+# Directories used, with nothing used beneath them: the root must hold
+# them all the same (boot modules carry a tree's empty directories).
+dirs = set()
+for p in sorted(paths - set(files)):
+    if run("sh", "-c", 'test -d "$1" && ! test -L "$1" && echo d', "-", p).strip():
+        dirs.add(p.rstrip("/"))
+kept = [norm(p) for p in files]
+
 by = {}
 for p, real in files.items():
     if through_alternatives(p):
@@ -77,5 +87,18 @@ for p, real in files.items():
         alt = "/" + norm(p)
         pkg = owner(alt) if alt != p else ""
     by.setdefault(pkg, set()).add(norm(p))
+for d in sorted(dirs):
+    n = norm(d)
+    if any(k.startswith(n + "/") for k in kept):
+        continue
+    # dpkg -S names every package with something there: one the plan has
+    # already, else the first.
+    o = run("dpkg", "-S", d).splitlines()
+    names = o[0].split(": ", 1)[0] if o and ": " in o[0] else ""
+    owners = [x.strip().split(":")[0] for x in names.split(",") if x.strip()]
+    if not owners:
+        continue
+    pkg = next((x for x in owners if x in by), owners[0])
+    by.setdefault(pkg, set()).add(n + "/")
 json.dump({k: sorted(v) for k, v in by.items()}, open(out, "w"), indent=1)
 print(len(files), "files,", len(by) - ("" in by), "packages;", "unowned:", sorted(by.get("", [])))
