@@ -363,6 +363,7 @@ pub fn init() -> Result<(), SpawnError> {
     };
     let boot = sched.add(adopted("boot", false, ALL_CPUS)?)?;
     sched.cpus[0] = Cpu { online: true, current: boot, ..OFFLINE };
+    crate::sync::lockdep::running(0, lockdep_holder(boot));
     *SCHED.lock() = Some(sched);
     let idle = spawn("idle", idle_loop, 0)?;
     with(|s| {
@@ -391,6 +392,7 @@ pub fn run_ap(index: u32) -> ! {
             since: time::raw_monotonic_ns(),
             ..OFFLINE
         };
+        crate::sync::lockdep::running(cpu, lockdep_holder(id));
         Ok::<_, SpawnError>(())
     });
     if let Err(e) = added {
@@ -722,10 +724,19 @@ fn finish_switch() {
     });
 }
 
+/// `id` as the thread lockdep names as a lock's holder: its own number,
+/// one higher so that 0 is left to mean "no thread recorded".
+fn lockdep_holder(id: ThreadId) -> u64 {
+    id.as_usize() as u64 + 1
+}
+
 /// Picks the next thread and switches to it. The current thread is
 /// re-queued if it is still running.
 fn schedule() {
     let restore = cpu::disable_interrupts();
+    // Nothing may be held here: the held locks belong to the CPU, not to
+    // the thread (ARCHITECTURE "Lock-order checking", the invariant).
+    crate::sync::lockdep::none_held_at_switch();
     let switch_pair = {
         let mut guard = SCHED.lock();
         let s = guard.as_mut().expect("scheduler not initialized");
@@ -747,6 +758,9 @@ fn schedule() {
                 n.affinity = 1 << here;
             }
         }
+        // From here the locks taken on this CPU belong to `next`: the
+        // switch below runs it on this same CPU.
+        crate::sync::lockdep::running(here, lockdep_holder(next));
         let cpu = &mut s.cpus[here];
         cpu.current = next;
         cpu.quantum_left = QUANTUM_TICKS;

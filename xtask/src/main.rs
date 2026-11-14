@@ -4678,9 +4678,58 @@ fn user_build_for(target: &str) -> Command {
     cmd
 }
 
+/// The Debian package that provides a program the tests run on the host
+/// beside the VM. `docker/test.Dockerfile` installs all of them and CI's
+/// apt line names the same packages, so this table is also the list of
+/// what a host needs to run the suite outside Docker.
+fn host_package(program: &str) -> Option<&'static str> {
+    Some(match program {
+        "7z" => "p7zip-full",
+        "unzip" => "unzip",
+        "psql" => "postgresql-client",
+        "ssh" | "sftp" | "scp" => "openssh-client",
+        "msiextract" | "msiinfo" | "msibuild" => "msitools",
+        "musl-gcc" => "musl-tools",
+        "weston" => "weston",
+        "Xvfb" => "xvfb",
+        "xorriso" => "xorriso",
+        "update-mime-database" => "shared-mime-info",
+        _ => return None,
+    })
+}
+
+/// What to say about a program the host has not got: the package that
+/// provides it, and that `docker-test`'s image carries it.
+fn missing_program(program: &str) -> String {
+    let mut s = format!("the host has no {program}");
+    if let Some(package) = host_package(program) {
+        s.push_str(&format!(" (apt install {package})"));
+    }
+    s.push_str("; `cargo xtask docker-test` runs the tests in an image that carries it");
+    s
+}
+
+/// A failure to start `cmd`. `std::io`'s own message for a program that
+/// is not on PATH is "No such file or directory", which reads as a
+/// missing input file rather than as a host without the tool, so a
+/// missing program says which package has it instead.
+fn spawn_error(cmd: &Command, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        let program = cmd.get_program().to_string_lossy().into_owned();
+        return format!("{} (the command was {cmd:?})", missing_program(&program));
+    }
+    format!("failed to spawn {cmd:?}: {e}")
+}
+
+/// Whether `program` is a file in one of PATH's directories.
+fn on_path(program: &str) -> bool {
+    env::var_os("PATH")
+        .is_some_and(|path| env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
 /// Runs `cmd`, showing its output only if it fails.
 fn run_quiet(cmd: &mut Command) -> Result {
-    let out = cmd.output().map_err(|e| format!("failed to spawn {cmd:?}: {e}"))?;
+    let out = cmd.output().map_err(|e| spawn_error(cmd, &e))?;
     if out.status.success() {
         return Ok(());
     }
@@ -4689,7 +4738,7 @@ fn run_quiet(cmd: &mut Command) -> Result {
 }
 
 fn run_cmd(cmd: &mut Command) -> Result {
-    let status = cmd.status().map_err(|e| format!("failed to spawn {cmd:?}: {e}"))?;
+    let status = cmd.status().map_err(|e| spawn_error(cmd, &e))?;
     if status.success() { Ok(()) } else { Err(format!("{cmd:?} failed: {status}")) }
 }
 
@@ -5405,8 +5454,7 @@ fn fetch_prebuilt(path: &str) -> Result {
         for exclude in p.excludes {
             cmd.arg(format!("-x!{exclude}"));
         }
-        run_cmd(&mut cmd)
-            .map_err(|e| format!("{e} (7z is in p7zip-full: apt install p7zip-full)"))?;
+        run_cmd(&mut cmd)?;
     } else {
         let mut cmd = Command::new("unzip");
         cmd.args(["-q", "-o"]).arg(&zip).args(p.members).arg("-d").arg(&dir);
@@ -5635,6 +5683,17 @@ fn fetch_limine_once() -> Result<PathBuf> {
         .current_dir(&dir)
         .output()
         .map_err(|e| format!("git rev-parse: {e}"))?;
+    if !head.status.success() {
+        // Not a mismatch: git could not read the checkout at all (it
+        // refuses one owned by another user, which is every bind mount in
+        // the test container). Its own words are the diagnosis, and
+        // reporting the empty revision instead hid them.
+        return Err(format!(
+            "git rev-parse in {dir:?} failed ({}): {}",
+            head.status,
+            String::from_utf8_lossy(&head.stderr).trim()
+        ));
+    }
     let head = String::from_utf8_lossy(&head.stdout);
     if head.trim() != LIMINE_COMMIT {
         return Err(format!(
@@ -13384,7 +13443,7 @@ fn run_vm_once(
     let mut snap_taken = false;
     let qmp_thread = {
         let qmp = qmp.clone();
-        thread::spawn(move || telemetry::qmp_cpu_count(&qmp))
+        thread::spawn(move || telemetry::qmp_facts(&qmp))
     };
     let start = Instant::now();
     let mut to_banner = None;
@@ -13458,27 +13517,30 @@ fn run_vm_once(
         {
             let serve_log = iso.with_extension("serve.log");
             let monitor = socket.clone();
-            client = Some(thread::spawn(move || match kind {
-                NetClient::Echo => net_client(port),
-                NetClient::Http(page) => http_client(port, page),
-                NetClient::Nginx => nginx_client(port),
-                NetClient::Tls => tls_client(port),
-                NetClient::Contains(parts) => contains_client(port, parts),
-                NetClient::Outbound => Ok(()),
-                NetClient::Ssh => ssh_client(port, false),
-                NetClient::SshPassword => ssh_client(port, true),
-                NetClient::SshServer => ssh_server_client(port),
-                NetClient::SshShell => ssh_shell_client(port),
-                NetClient::Sftp => sftp_client(port),
-                NetClient::Scp => scp_client(port),
-                NetClient::SshForward => ssh_forward_client(port),
-                NetClient::SshInner => ssh_inner_client(port),
-                NetClient::Psql => psql_client(port),
-                NetClient::Ftp => ftp_client(port),
-                NetClient::WebDriver => webdriver_client(port),
-                NetClient::Wpt => wpt::client(port, &serve_log, &monitor),
-                NetClient::HandoverNet => handover_net_client(port),
-                NetClient::Udp => udp_client(port),
+            client = Some(thread::spawn(move || {
+                missing_client_program(&kind)?;
+                match kind {
+                    NetClient::Echo => net_client(port),
+                    NetClient::Http(page) => http_client(port, page),
+                    NetClient::Nginx => nginx_client(port),
+                    NetClient::Tls => tls_client(port),
+                    NetClient::Contains(parts) => contains_client(port, parts),
+                    NetClient::Outbound => Ok(()),
+                    NetClient::Ssh => ssh_client(port, false),
+                    NetClient::SshPassword => ssh_client(port, true),
+                    NetClient::SshServer => ssh_server_client(port),
+                    NetClient::SshShell => ssh_shell_client(port),
+                    NetClient::Sftp => sftp_client(port),
+                    NetClient::Scp => scp_client(port),
+                    NetClient::SshForward => ssh_forward_client(port),
+                    NetClient::SshInner => ssh_inner_client(port),
+                    NetClient::Psql => psql_client(port),
+                    NetClient::Ftp => ftp_client(port),
+                    NetClient::WebDriver => webdriver_client(port),
+                    NetClient::Wpt => wpt::client(port, &serve_log, &monitor),
+                    NetClient::HandoverNet => handover_net_client(port),
+                    NetClient::Udp => udp_client(port),
+                }
             }));
         }
         // A scenario that ends in the bootloader (R8: Limine refusing a
@@ -13587,13 +13649,14 @@ fn run_vm_once(
     if let Ok(served) = fs::read_to_string(iso.with_extension("serve.log")) {
         serial += &served;
     }
-    let vcpus = qmp_thread.join().ok().flatten();
+    let facts = qmp_thread.join().ok().flatten();
     let _ = fs::remove_file(&qmp);
     serial += &boot_telemetry(BootFacts {
         iso,
         status,
         stopped,
-        vcpus,
+        vcpus: facts.as_ref().map(|f| f.vcpus),
+        kvm: facts.as_ref().and_then(|f| f.kvm),
         host_before: &host_before,
         serial: &serial,
         logs: [&qemu_log, &bios_log, &phases_log],
@@ -13632,6 +13695,15 @@ fn run_vm_once(
             Err(e) => format!("xtask: net client: {e}\n"),
         };
     }
+    // The log on disk is where a run's story is read from afterwards
+    // (`cargo xtask triage`, CI's artifacts, the next session): write
+    // back what xtask added to QEMU's own output -- the accelerator, the
+    // vCPUs, the vm time, the host, the verdicts -- or those lines exist
+    // only in the report of a run that failed, and a run that passed
+    // cannot be asked how it ran.
+    if let Err(e) = fs::write(&log, &serial) {
+        eprintln!("xtask: cannot write {}: {e}", log.display());
+    }
     Ok((status, serial, BootTime { to_banner: to_banner.unwrap_or(total), total }))
 }
 
@@ -13641,6 +13713,8 @@ struct BootFacts<'a> {
     status: Option<std::process::ExitStatus>,
     stopped: bool,
     vcpus: Option<usize>,
+    /// Whether the machine ran under KVM (None: unanswered).
+    kvm: Option<bool>,
     host_before: &'a str,
     serial: &'a str,
     /// QEMU's log, SeaBIOS's, the kernel's phase markers.
@@ -13648,9 +13722,10 @@ struct BootFacts<'a> {
 }
 
 /// The `xtask:` lines appended to a boot's serial log (telemetry.rs): how
-/// QEMU ended, its vCPUs, the host; after an abnormal end (not the
-/// kernel's own exit code, not stopped by xtask) also the last phase
-/// markers and the tail of QEMU's log, so a silent death has a story.
+/// QEMU ended, its vCPUs, its accelerator, the host; after an abnormal
+/// end (not the kernel's own exit code, not stopped by xtask) also the
+/// last phase markers and the tail of QEMU's log, so a silent death has
+/// a story.
 fn boot_telemetry(f: BootFacts) -> String {
     let want = telemetry::vm_cpus(f.iso);
     let mut out = format!(
@@ -13660,6 +13735,22 @@ fn boot_telemetry(f: BootFacts) -> String {
         f.host_before,
         telemetry::host_state()
     );
+    out += &format!(
+        "xtask: accelerator: {}\n",
+        match f.kvm {
+            Some(true) => "KVM",
+            Some(false) => "TCG (software emulation)",
+            None => "? (QMP did not answer)",
+        }
+    );
+    // QEMU is started with `-accel kvm -accel tcg`, so a KVM it cannot
+    // open costs ten times the run time and hides everything that
+    // differs between Intel and AMD -- with nothing in the log to say
+    // so (WORKFLOW "KVM").
+    if f.kvm == Some(false) && Path::new("/dev/kvm").exists() {
+        out += "xtask: the host has /dev/kvm but QEMU emulated this run: `-accel kvm` was \
+                refused (its standard error says why, below)\n";
+    }
     if let Some(n) = telemetry::cpus_online(f.serial).filter(|&n| n < want) {
         out += &format!("xtask: {}\n", fewer_cpus(n, want));
     }
@@ -16970,6 +17061,35 @@ fn nginx_client(port: u16) -> Result {
 /// What `ssh_client` asks sshd's session to print.
 const SSH_ECHO: &str = "gala-ssh-ok";
 
+/// The host program a net client runs, if it runs one.
+fn client_program(kind: &NetClient) -> Option<&'static str> {
+    match kind {
+        NetClient::Psql => Some("psql"),
+        NetClient::Ssh
+        | NetClient::SshPassword
+        | NetClient::SshServer
+        | NetClient::SshShell
+        | NetClient::SshForward
+        | NetClient::SshInner => Some("ssh"),
+        NetClient::Sftp => Some("sftp"),
+        NetClient::Scp => Some("scp"),
+        _ => None,
+    }
+}
+
+/// Refuses a client whose host program the host has not got. These
+/// clients run under `timeout`, which reports a program it cannot start
+/// as its own exit 127 ("failed to execute process"), and that reads in
+/// the log as a client that failed rather than as a host without the
+/// tool -- after a boot where the guest did its part.
+fn missing_client_program(kind: &NetClient) -> Result {
+    let Some(program) = client_program(kind) else { return Ok(()) };
+    if on_path(program) {
+        return Ok(());
+    }
+    Err(missing_program(program))
+}
+
 /// The host side of `sshd_login`: the host's ssh with the test key
 /// user/sshd/client_ed25519 (galatest's authorized key) logs on as
 /// `galatest` and runs `echo gala-ssh-ok`; its verbose trace says how far
@@ -19898,9 +20018,9 @@ fn docker_test(args: &[String]) -> Result {
         copy(Path::new(&ca), &ca_dir.join("extra.crt"))?;
     }
     let mut build = Command::new("docker");
-    build
-        .args(["build", "--quiet", "-t", DOCKER_IMAGE, "-f"])
-        .arg(root().join("docker/test.Dockerfile"));
+    // Not --quiet: the image's apt and rustup steps take minutes, and a
+    // build that prints nothing looks like a hang.
+    build.args(["build", "-t", DOCKER_IMAGE, "-f"]).arg(root().join("docker/test.Dockerfile"));
     if host_network {
         build.args(["--network", "host"]);
     }
@@ -19908,29 +20028,63 @@ fn docker_test(args: &[String]) -> Result {
         build.arg("--build-arg").arg(format!("{var}={value}"));
     }
     run_cmd(build.arg(root().join("docker")))?;
-    let mut cmd = Command::new("docker");
-    cmd.args(["run", "--rm", "-v"]).arg(format!("{}:/work", root().display()));
-    if host_network {
-        cmd.args(["--network", "host"]);
-    }
-    for (var, value) in &proxies {
-        cmd.arg("-e").arg(format!("{var}={value}"));
-    }
-    if Path::new("/dev/kvm").exists() {
-        cmd.args(["--device", "/dev/kvm"]);
-    }
-    for var in ["XTASK_VERBOSE", "XTASK_QEMU_ARGS", "XTASK_FIRMWARE", "XTASK_NO_BATCH"] {
-        if let Ok(value) = env::var(var) {
+    // The container's HOME is /root, so the pinned QEMU is looked for in
+    // /root/.cache/gala-qemu (qemu_prefix()): mount a cache there and
+    // build QEMU_VERSION into it first when it is missing, or the image,
+    // which carries no QEMU, has none to run. It is the container's own
+    // cache, not the host's: QEMU links against the glibc and libslirp
+    // of whatever built it, so a build made on a host newer than the
+    // image (Ubuntu 24.04) dies 0.1s into the run with `version
+    // GLIBC_2.42 not found`, which reads as a QEMU that crashed.
+    let qemu_cache = host_home().join(".cache/gala-qemu-docker");
+    fs::create_dir_all(&qemu_cache).map_err(|e| format!("{}: {e}", qemu_cache.display()))?;
+    let qemu_mount = format!("{}:/root/.cache/gala-qemu", qemu_cache.display());
+    let container = |cmd: &mut Command| {
+        cmd.args(["run", "--rm", "-v"]).arg(format!("{}:/work", root().display()));
+        cmd.arg("-v").arg(&qemu_mount);
+        if host_network {
+            cmd.args(["--network", "host"]);
+        }
+        for (var, value) in &proxies {
             cmd.arg("-e").arg(format!("{var}={value}"));
         }
+        if Path::new("/dev/kvm").exists() {
+            cmd.args(["--device", "/dev/kvm"]);
+        }
+        // Every XTASK_* variable, so that what steers a run on the host
+        // steers it in the container too (the timeout, the events, the
+        // screenshot times, the kernel command line, the snapshots).
+        for (var, value) in env::vars() {
+            if var.starts_with("XTASK_") {
+                cmd.arg("-e").arg(format!("{var}={value}"));
+            }
+        }
+        cmd.args([DOCKER_IMAGE, "cargo", "xtask"]);
+    };
+    if !qemu_cache.join(QEMU_VERSION).join("bin/qemu-system-x86_64").is_file() {
+        eprintln!(
+            "xtask: QEMU {QEMU_VERSION} not in {}: building it in the container",
+            qemu_cache.display()
+        );
+        let mut build_qemu = Command::new("docker");
+        container(&mut build_qemu);
+        run_cmd(build_qemu.arg("qemu"))?;
     }
-    cmd.args([DOCKER_IMAGE, "cargo", "xtask"]);
+    let mut cmd = Command::new("docker");
+    container(&mut cmd);
     if args.is_empty() {
         cmd.arg("test");
     } else {
         cmd.args(args);
     }
     run_cmd(&mut cmd)
+}
+
+/// The host user's home directory, which holds the container's QEMU
+/// cache beside the host's own (`qemu_prefix()` reads the same variable
+/// inside the container, where it is the mount point).
+fn host_home() -> PathBuf {
+    env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from)
 }
 
 /// Checked-in files a test program opens beside itself, exported to

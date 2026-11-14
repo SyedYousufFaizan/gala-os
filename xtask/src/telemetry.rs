@@ -7,16 +7,15 @@
 //! (the kernel's boot phase markers, port 0x403:
 //! kernel/src/arch/x86_64/bootphase.rs). After the run a few `xtask:` lines
 //! go at the end of the serial log: how QEMU exited, how many vCPUs it
-//! made (QMP `query-cpus-fast`), the host's load and free memory at the
-//! start and the end; after an abnormal end also the last phase markers
-//! and the tail of QEMU's log.
+//! made (QMP `query-cpus-fast`), which accelerator ran it (`query-kvm`,
+//! because `-accel kvm -accel tcg` falls back without failing), the
+//! host's load and free memory at the start and the end; after an
+//! abnormal end also the last phase markers and the tail of QEMU's log.
 
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The kernel's phase-marker port (kernel/src/arch/x86_64/bootphase.rs).
 pub const PHASE_PORT: &str = "0x403";
@@ -51,39 +50,29 @@ pub fn qmp_socket() -> PathBuf {
 
 /// Asks QEMU (QMP at `socket`) how many vCPUs it created; waits up to
 /// 10 s for the socket.
-pub fn qmp_cpu_count(socket: &Path) -> Option<usize> {
-    let start = Instant::now();
-    let stream = loop {
-        match UnixStream::connect(socket) {
-            Ok(s) => break s,
-            Err(_) if start.elapsed() < Duration::from_secs(10) => {
-                std::thread::sleep(Duration::from_millis(20))
-            }
-            Err(_) => return None,
-        }
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let mut writer = stream.try_clone().ok()?;
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line).ok()?; // greeting
-    writer.write_all(b"{\"execute\":\"qmp_capabilities\"}\n").ok()?;
-    let reply = |reader: &mut BufReader<UnixStream>| -> Option<String> {
-        // Skip asynchronous events until a "return" (or "error").
-        for _ in 0..20 {
-            let mut line = String::new();
-            reader.read_line(&mut line).ok()?;
-            if line.contains("\"return\"") || line.contains("\"error\"") {
-                return Some(line);
-            }
-        }
-        None
-    };
-    reply(&mut reader)?;
-    writer.write_all(b"{\"execute\":\"query-cpus-fast\"}\n").ok()?;
-    let cpus = reply(&mut reader)?;
+pub fn qmp_facts(socket: &Path) -> Option<VmFacts> {
+    // The crate's one QMP client (snapshot.rs): it waits for QEMU to
+    // make the socket, says the greeting and qmp_capabilities, and skips
+    // the asynchronous events that come between a command and its
+    // answer, giving back each answer compact.
+    let mut qmp = crate::snapshot::Qmp::connect(socket, Duration::from_secs(10)).ok()?;
+    let cpus = qmp.cmd("query-cpus-fast", "{}").ok()?;
+    // Which accelerator the machine actually got: QEMU is started with
+    // `-accel kvm -accel tcg` and takes the second when the first is
+    // refused, saying so on its standard error and nowhere else. This is
+    // the answer a snapshot's manifest records, from the same code, so a
+    // log and a snapshot cannot disagree about a run.
+    let kvm = crate::snapshot::accel(&mut qmp).ok().map(|a| a == "kvm");
     let _ = std::fs::remove_file(socket);
-    Some(cpus.matches("\"cpu-index\"").count())
+    Some(VmFacts { vcpus: cpus.matches("\"cpu-index\"").count(), kvm })
+}
+
+/// What QMP told about a running VM (`qmp_facts`).
+pub struct VmFacts {
+    /// Processors the machine has.
+    pub vcpus: usize,
+    /// Whether it runs under KVM (None: `query-kvm` went unanswered).
+    pub kvm: Option<bool>,
 }
 
 /// How QEMU ended, in words.
