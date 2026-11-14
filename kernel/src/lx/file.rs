@@ -145,6 +145,9 @@ static RUN: AtomicUsize = AtomicUsize::new(NO_VOLUME);
 const NO_VOLUME: NodeId = usize::MAX;
 /// The mount point's name in the root.
 const RUN_NAME: [u16; 3] = [b'r' as u16, b'u' as u16, b'n' as u16];
+/// `/proc`'s name in the root, and `self` in it (`lx::procfs`).
+const PROC_NAME: [u16; 4] = [b'p' as u16, b'r' as u16, b'o' as u16, b'c' as u16];
+const SELF_NAME: [u16; 4] = [b's' as u16, b'e' as u16, b'l' as u16, b'f' as u16];
 
 /// The user database's volume (`publish_identity`), `/etc`'s node and
 /// the two files bound over `/etc/passwd` and `/etc/group`; NO_VOLUME
@@ -167,6 +170,9 @@ struct Mounts {
     root: NodeId,
     /// `/run`'s volume root.
     run: NodeId,
+    /// `/proc`'s volume root (`lx::procfs`), and the pid its `self` names.
+    proc: NodeId,
+    pid: u64,
     /// `/etc`, and the files bound over its `passwd` and `group`.
     etc: NodeId,
     passwd: NodeId,
@@ -178,6 +184,8 @@ impl Mounts {
     const EMPTY: Mounts = Mounts {
         root: ramfs::ROOT,
         run: NO_VOLUME,
+        proc: NO_VOLUME,
+        pid: 0,
         etc: NO_VOLUME,
         passwd: NO_VOLUME,
         group: NO_VOLUME,
@@ -203,9 +211,13 @@ impl Mounts {
     fn in_dir(&self, dir: NodeId) -> ([Mounted; 2], usize) {
         let mut out = [(&b""[..], 0, 0); 2];
         let mut n = 0;
-        if dir == ramfs::ROOT && self.run != NO_VOLUME {
-            out[0] = (b"run", self.run, abi::DT_DIR);
-            n = 1;
+        if dir == ramfs::ROOT {
+            for (name, node) in [(&b"proc"[..], self.proc), (&b"run"[..], self.run)] {
+                if node != NO_VOLUME {
+                    out[n] = (name, node, abi::DT_DIR);
+                    n += 1;
+                }
+            }
         } else if dir == self.etc {
             for (name, node) in [(&b"group"[..], self.group), (&b"passwd"[..], self.passwd)] {
                 if node != NO_VOLUME {
@@ -221,13 +233,15 @@ impl Mounts {
 /// The mounts of a process whose root is `root`: the shared tree's with
 /// `/run` (made if it was not) and the user database; a distribution's
 /// tree has none (its `/run` and `/etc` are its own directories).
-fn mounts(fs: &mut ramfs::RamFs, root: NodeId) -> core::result::Result<Mounts, FsError> {
+fn mounts(fs: &mut ramfs::RamFs, root: NodeId, pid: u64) -> core::result::Result<Mounts, FsError> {
     if root != ramfs::ROOT {
         return Ok(Mounts { root, ..Mounts::EMPTY });
     }
     Ok(Mounts {
         root,
         run: run_volume(fs)?,
+        proc: super::procfs::volume(fs)?,
+        pid,
         etc: ETC.load(Ordering::Relaxed),
         passwd: PASSWD.load(Ordering::Relaxed),
         group: GROUP.load(Ordering::Relaxed),
@@ -731,7 +745,8 @@ pub fn resolve(
     let parsed = parse(path)?;
     let root = call.lx.root;
     let start = if parsed.absolute { root } else { start_dir(call, dirfd)? };
-    with_fs(|fs| walk_mounted(fs, root, start, &parsed, follow))
+    let pid = call.process.id;
+    with_fs(|fs| walk_mounted(fs, root, pid, start, &parsed, follow))
 }
 
 /// Resolves `path` from directory `root` as a process rooted there would
@@ -739,7 +754,7 @@ pub fn resolve(
 /// `follow` (`lx::distro`'s unpacking).
 pub fn resolve_in(root: NodeId, path: &[u8], follow: bool) -> core::result::Result<Found, u16> {
     let parsed = parse(path)?;
-    with_fs(|fs| walk_mounted(fs, root, root, &parsed, follow))
+    with_fs(|fs| walk_mounted(fs, root, 0, root, &parsed, follow))
 }
 
 /// `walk` with the mounts of a process rooted at `root` (`/run`,
@@ -747,11 +762,12 @@ pub fn resolve_in(root: NodeId, path: &[u8], follow: bool) -> core::result::Resu
 fn walk_mounted(
     fs: &mut ramfs::RamFs,
     root: NodeId,
+    pid: u64,
     start: NodeId,
     p: &Parsed,
     follow: bool,
 ) -> core::result::Result<Found, u16> {
-    let m = mounts(fs, root).map_err(errno_of)?;
+    let m = mounts(fs, root, pid).map_err(errno_of)?;
     walk(fs, &m, start, p, follow)
 }
 
@@ -823,6 +839,19 @@ fn walk(
             dir = m.run;
             continue;
         }
+        if dir == ramfs::ROOT && m.proc != NO_VOLUME && name[..] == PROC_NAME[..] {
+            if last {
+                return Ok(Found { dir, name: None, node: Some(m.proc), dots: None });
+            }
+            dir = m.proc;
+            continue;
+        }
+        // `/proc/self`: the caller's pid (Linux's is a link to it).
+        let name = if dir == m.proc && m.pid != 0 && name[..] == SELF_NAME[..] {
+            super::procfs::self_name(m.pid).map_err(errno_of)?
+        } else {
+            name
+        };
         if dir == m.etc
             && let Some(f) = m.etc_file(&name)
         {
@@ -1571,7 +1600,7 @@ pub fn getdents64(call: &Call<'_>, fd: u64, buf: u64, count: u64) -> Result {
     let (used, full) = {
         let mut cursor = file.cursor.lock();
         with_fs(|fs| {
-            let m = mounts(fs, call.lx.root).map_err(errno_of)?;
+            let m = mounts(fs, call.lx.root, call.process.id).map_err(errno_of)?;
             let (mounted, n) = m.in_dir(file.node);
             fill_dirents(fs, file.node, &mounted[..n], &mut cursor, &mut out)
         })?
@@ -1974,15 +2003,22 @@ pub fn readlinkat(call: &Call<'_>, dirfd: u64, path: u64, buf: u64, size: u64) -
         return Err(EINVAL);
     }
     let bytes = read_path(&call.process, path)?;
+    // `/proc/self` names the caller's pid (`lx::procfs`).
+    if bytes == b"/proc/self" && call.lx.root == ramfs::ROOT {
+        let pid = super::procfs::self_name(call.process.id).map_err(errno_of)?;
+        let n = pid.len().min(size as usize);
+        let mut text = [0u8; 20];
+        for (t, &c) in text.iter_mut().zip(&pid[..n]) {
+            *t = c as u8;
+        }
+        call.process.write(buf, &text[..n.min(20)]).map_err(|_| EFAULT)?;
+        return Ok(n as u64);
+    }
     if bytes == PROC_SELF_EXE {
         let exe = path_of(call.lx.root, *call.lx.exe.lock())?;
         let n = exe.len().min(size as usize);
         call.process.write(buf, &exe[..n]).map_err(|_| EFAULT)?;
         return Ok(n as u64);
-    }
-    if bytes.starts_with(b"/proc/") {
-        // Any other /proc path: no /proc yet (ENOENT from the walk).
-        ledger::record("readlinkat", "linux option missing", 0);
     }
     let n = resolve(call, dirfd, &bytes, false)?.existing()?;
     let mut target = Vec::new();
@@ -2242,7 +2278,7 @@ pub fn executable_at(
     }
     let parsed = parse(path)?;
     let start = if parsed.absolute { root } else { cwd };
-    let n = with_fs(|fs| walk_mounted(fs, root, start, &parsed, true))?.existing()?;
+    let n = with_fs(|fs| walk_mounted(fs, root, 0, start, &parsed, true))?.existing()?;
     let ok = with_fs(|fs| fs.node(n).is_some_and(|node| !node.is_dir() && perm(node) & 0o100 != 0));
     if !ok {
         return Err(EACCES);
@@ -2253,9 +2289,9 @@ pub fn executable_at(
 }
 
 /// The link `/proc/self/exe` (proc(5)): the program the process runs, by
-/// its path. There is no /proc on the file system yet; this one path is
-/// recognised as given, as the devices are (glibc's ld.so reads it for
-/// `$ORIGIN` in a library search path).
+/// its path, answered here for any process (one rooted in a
+/// distribution's tree too, which has no /proc: glibc's ld.so reads it
+/// for `$ORIGIN` in a library search path).
 const PROC_SELF_EXE: &[u8] = b"/proc/self/exe";
 
 /// The directory of the Linux path `path` (where a program `lxrun=`
@@ -2264,7 +2300,7 @@ const PROC_SELF_EXE: &[u8] = b"/proc/self/exe";
 pub fn directory_of(path: &str) -> NodeId {
     let dir = path.rsplit_once('/').map_or("", |(d, _)| d);
     let Ok(parsed) = parse(dir.as_bytes()) else { return ramfs::ROOT };
-    with_fs(|fs| walk_mounted(fs, ramfs::ROOT, ramfs::ROOT, &parsed, true))
+    with_fs(|fs| walk_mounted(fs, ramfs::ROOT, 0, ramfs::ROOT, &parsed, true))
         .ok()
         .and_then(|f| f.node)
         .unwrap_or(ramfs::ROOT)

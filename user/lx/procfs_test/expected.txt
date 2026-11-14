@@ -1,0 +1,29 @@
+/proc is a directory = yes
+/proc/self is a directory (followed) = yes
+readlink(/proc/self) is getpid() = yes
+-- /proc/sys
+overflowuid = 6 "65534\n"
+overflowgid = 6 "65534\n"
+max_user_namespaces is a regular file = yes
+  a number and a newline = yes
+-- /proc/self/ns
+cgroup: a link yes, "cgroup:[N]" yes, /proc/<pid>'s the same yes
+ipc: a link yes, "ipc:[N]" yes, /proc/<pid>'s the same yes
+mnt: a link yes, "mnt:[N]" yes, /proc/<pid>'s the same yes
+net: a link yes, "net:[N]" yes, /proc/<pid>'s the same yes
+pid: a link yes, "pid:[N]" yes, /proc/<pid>'s the same yes
+user: a link yes, "user:[N]" yes, /proc/<pid>'s the same yes
+uts: a link yes, "uts:[N]" yes, /proc/<pid>'s the same yes
+readlink(/proc/self/ns/nothing) = -2 (ENOENT)
+-- /proc/self/exe and auxv
+readlink(/proc/self/exe) is absolute = yes
+/proc/self/auxv is PR_GET_AUXV's vector up to AT_NULL = yes
+-- opening /proc
+open(/proc, O_PATH|O_DIRECTORY) = yes
+fstatat(it, sys/kernel/overflowuid) = 0
+open(/proc/0) = -2 (ENOENT)
+open(/proc/sys/kernel/nothing) = -2 (ENOENT)
+-- a user namespace
+unshare(CLONE_NEWUSER): done, EPERM or ENOSPC = yes
+procfs_test: ok
+-- exit status 0

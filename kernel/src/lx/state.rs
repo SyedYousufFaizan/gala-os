@@ -284,7 +284,14 @@ pub struct LxThread {
     /// at most 15 bytes and a NUL, the rest NULs. A new thread has its
     /// creator's, a process its program's file name (`Comm::of_path`).
     pub comm: Comm,
+    /// sigaltstack(2): its alternate signal stack (`DISABLED_STACK`: none),
+    /// where SA_ONSTACK handlers run (`sigcalls::push_frame`).
+    pub altstack: lx_abi::signal::Stack,
 }
+
+/// No alternate signal stack (a new thread's, after execve).
+pub const DISABLED_STACK: lx_abi::signal::Stack =
+    lx_abi::signal::Stack { ss_sp: 0, ss_flags: lx_abi::signal::SS_DISABLE, ss_size: 0 };
 
 /// A thread's name: 16 bytes, NUL-terminated.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -346,6 +353,9 @@ pub struct LxProcess {
     /// PR_SET_NO_NEW_PRIVS: set once, kept by its children and across
     /// execve (gala has no set-user-id programs it would hold back).
     pub no_new_privs: core::sync::atomic::AtomicBool,
+    /// PR_SET_PDEATHSIG: the signal it gets when its parent ends (0:
+    /// none); not a fork's child's, kept across execve.
+    pub pdeathsig: core::sync::atomic::AtomicU32,
     /// The image's auxiliary vector, as its initial stack has it (pairs
     /// up to AT_NULL's): PR_GET_AUXV's answer, as Linux's saved_auxv.
     pub auxv: IrqMutex<Vec<u8>>,
@@ -401,6 +411,7 @@ pub fn create(
         exe: IrqMutex::new(exe),
         rlimits: IrqMutex::new(super::resource::Limits::default()),
         no_new_privs: core::sync::atomic::AtomicBool::new(false),
+        pdeathsig: core::sync::atomic::AtomicU32::new(0),
         auxv: IrqMutex::new(Vec::new()),
         vfork: IrqMutex::new(Vfork { released: true, waiter: None }),
         alarm: IrqMutex::new(None),
@@ -459,6 +470,7 @@ pub fn fork(parent: &LxProcess, pid: u64, vfork: bool) -> Result<KArc<LxProcess>
             parent.no_new_privs.load(core::sync::atomic::Ordering::Relaxed),
         ),
         auxv: IrqMutex::new(auxv),
+        pdeathsig: core::sync::atomic::AtomicU32::new(0),
         vfork: IrqMutex::new(Vfork { released: !vfork, waiter: None }),
         // A child starts with no timer (setitimer(2)).
         alarm: IrqMutex::new(None),
@@ -476,6 +488,7 @@ pub fn fork(parent: &LxProcess, pid: u64, vfork: bool) -> Result<KArc<LxProcess>
 /// Undoes `fork` for a child whose thread could not start: unlisted, no
 /// longer the parent's child, its fds closed; nobody is told.
 pub fn discard(child: &LxProcess) {
+    super::procfs::ended(child.pid);
     TABLE.lock().retain(|p| p.pid != child.pid);
     if let Some(parent) = get(child.parent) {
         parent.children.lock().running.retain(|&c| c != child.pid);
@@ -551,6 +564,7 @@ impl fmt::Display for Ending {
 /// output lines is logged, then how it ended; its state goes, its fds
 /// close, and then its parent is told (`child_ended`).
 pub fn ended(pid: u64, status: NtStatus) {
+    super::procfs::ended(pid);
     let state = {
         let mut table = TABLE.lock();
         let i = table.iter().position(|p| p.pid == pid);
@@ -577,8 +591,18 @@ pub fn ended(pid: u64, status: NtStatus) {
     let fds = core::mem::take(&mut *state.fds.lock());
     drop(fds);
     // Its own children are nobody's now (no reaper yet: they are not
-    // waited for).
-    state.children.lock().ended.clear();
+    // waited for); those that asked (PR_SET_PDEATHSIG) get their signal.
+    let orphans = {
+        let mut children = state.children.lock();
+        children.ended.clear();
+        core::mem::take(&mut children.running)
+    };
+    for child in orphans {
+        let sig = get(child).map_or(0, |c| c.pdeathsig.load(core::sync::atomic::Ordering::Relaxed));
+        if sig != 0 {
+            super::sigcalls::send_from_kernel(child, sig);
+        }
+    }
     if state.parent != 0
         && let Some(parent) = get(state.parent)
     {
@@ -647,7 +671,13 @@ impl LxProcess {
         mask: lx_abi::signal::SigSet,
         comm: Comm,
     ) -> Result<(), AllocError> {
-        self.threads.lock().try_push(LxThread { tid, clear_tid: 0, robust_list: 0, comm })?;
+        self.threads.lock().try_push(LxThread {
+            tid,
+            clear_tid: 0,
+            robust_list: 0,
+            comm,
+            altstack: DISABLED_STACK,
+        })?;
         if let Err(e) = self.signals.lock().add_thread(tid, mask) {
             self.threads.lock().retain(|t| t.tid != tid);
             return Err(e);
@@ -685,6 +715,17 @@ impl LxProcess {
     }
 
     /// Names thread `tid` (prctl's PR_SET_NAME, execve).
+    /// Thread `tid`'s alternate signal stack.
+    pub fn altstack(&self, tid: u64) -> lx_abi::signal::Stack {
+        self.threads.lock().iter().find(|t| t.tid == tid).map_or(DISABLED_STACK, |t| t.altstack)
+    }
+
+    pub fn set_altstack(&self, tid: u64, s: lx_abi::signal::Stack) {
+        if let Some(t) = self.threads.lock().iter_mut().find(|t| t.tid == tid) {
+            t.altstack = s;
+        }
+    }
+
     pub fn set_comm(&self, tid: u64, comm: Comm) {
         if let Some(t) = self.threads.lock().iter_mut().find(|t| t.tid == tid) {
             t.comm = comm;

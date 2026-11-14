@@ -340,6 +340,8 @@ fn handle(call: &Call<'_>, number: u64) -> Result {
         nr::TIMERFD_CREATE => super::timerfd::timerfd_create(call, a(0), a(1)),
         nr::TIMERFD_SETTIME => super::timerfd::timerfd_settime(call, a(0), a(1), a(2), a(3)),
         nr::TIMERFD_GETTIME => super::timerfd::timerfd_gettime(call, a(0), a(1)),
+        nr::UNSHARE => super::fork::unshare(call, a(0)),
+        nr::SIGALTSTACK => sigcalls::sigaltstack(call, a(0), a(1)),
         nr::CAPGET => super::caps::capget(call, a(0), a(1)),
         nr::CAPSET => super::caps::capset(call, a(0), a(1)),
         nr::SYSINFO => super::sysinfo::sysinfo(call, a(0)),

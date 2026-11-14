@@ -18,9 +18,14 @@
 //!   PR_GET_NO_NEW_PRIVS: the process's flag (`LxProcess::no_new_privs`),
 //!   kept by its children and across execve, never cleared; gala has no
 //!   set-user-id programs for it to hold back (bubblewrap sets it first).
+//! - PR_SET_PDEATHSIG and PR_GET_PDEATHSIG: the signal (up to 64) the
+//!   process gets when its parent process ends (`state::ended`; Linux's
+//!   is the parent thread's end: the same for a single-threaded parent),
+//!   none in a fork's child, kept across execve.
 //! - PR_GET_AUXV: the image's auxiliary vector as its initial stack has it
-//!   (`LxProcess::auxv`, Linux's saved_auxv): as much as fits copied, its
-//!   whole size returned (rustix reads it so: uutils' coreutils).
+//!   (`LxProcess::auxv`) in Linux's saved_auxv, 448 bytes with zeros
+//!   after AT_NULL: as much as fits copied, 448 returned (rustix reads it
+//!   so: uutils' coreutils; /proc/self/auxv has the pairs only).
 //! - Any other option is EINVAL, as Linux answers an unknown one, and is
 //!   counted in the ledger (`"what":"linux option missing"`, service
 //!   `prctl`, detail the option) so the next ones are chosen from data.
@@ -32,12 +37,17 @@ use super::errno::{EFAULT, EINVAL};
 use super::state::Comm;
 use crate::nt::ledger;
 
+const PR_SET_PDEATHSIG: u64 = 1;
+const PR_GET_PDEATHSIG: u64 = 2;
 const PR_SET_NAME: u64 = 15;
 const PR_GET_NAME: u64 = 16;
 const PR_CAPBSET_READ: u64 = 23;
 const PR_SET_NO_NEW_PRIVS: u64 = 38;
 const PR_GET_NO_NEW_PRIVS: u64 = 39;
 const PR_GET_AUXV: u64 = 0x4155_5856;
+/// The size of Linux's saved auxiliary vector (AT_VECTOR_SIZE u64 words
+/// on x86-64, Linux 6.18), which PR_GET_AUXV reports.
+const SAVED_AUXV: usize = 448;
 /// The last capability (capability.h's CAP_LAST_CAP: CAP_CHECKPOINT_RESTORE).
 const CAP_LAST_CAP: u64 = 40;
 
@@ -45,6 +55,19 @@ pub fn prctl(call: &Call<'_>, option: u64, args: [u64; 4]) -> Result {
     let [arg2, arg3, arg4, arg5] = args;
     use core::sync::atomic::Ordering::Relaxed;
     match option {
+        // A signal for the parent's end (`state::ended` sends it).
+        PR_SET_PDEATHSIG => {
+            if arg2 > u64::from(lx_abi::signal::NSIG) {
+                return Err(EINVAL);
+            }
+            call.lx.pdeathsig.store(arg2 as u32, Relaxed);
+            Ok(0)
+        }
+        PR_GET_PDEATHSIG => {
+            let sig = call.lx.pdeathsig.load(Relaxed) as i32;
+            call.process.write(arg2, &sig.to_le_bytes()).map_err(|_| EFAULT)?;
+            Ok(0)
+        }
         // Once set, kept (no way back), by children too.
         PR_SET_NO_NEW_PRIVS => {
             if arg2 != 1 || arg3 | arg4 | arg5 != 0 {
@@ -64,12 +87,18 @@ pub fn prctl(call: &Call<'_>, option: u64, args: [u64; 4]) -> Result {
             if arg4 | arg5 != 0 {
                 return Err(EINVAL);
             }
+            // Linux's saved_auxv: AT_VECTOR_SIZE words (Linux 6.18: 448
+            // bytes), the pairs and zeros after AT_NULL's.
+            let mut saved = [0u8; SAVED_AUXV];
             let auxv = call.lx.auxv.lock();
-            let n = (arg3 as usize).min(auxv.len());
+            let k = auxv.len().min(SAVED_AUXV);
+            saved[..k].copy_from_slice(&auxv[..k]);
+            drop(auxv);
+            let n = (arg3 as usize).min(SAVED_AUXV);
             if n > 0 {
-                call.process.write(arg2, &auxv[..n]).map_err(|_| EFAULT)?;
+                call.process.write(arg2, &saved[..n]).map_err(|_| EFAULT)?;
             }
-            Ok(auxv.len() as u64)
+            Ok(SAVED_AUXV as u64)
         }
         PR_SET_NAME => {
             // Up to 15 bytes or a NUL, a byte at a time: the string may end

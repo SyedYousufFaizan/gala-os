@@ -73,6 +73,7 @@ pub mod mm;
 pub mod ntio;
 pub mod poll;
 pub mod prctl;
+pub mod procfs;
 pub mod pty;
 pub mod resource;
 pub mod session;

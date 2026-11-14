@@ -156,42 +156,28 @@ impl Watch {
                     self.polled = true;
                 }
             }
-            Object::Unix(_) | Object::EventFd(_) | Object::TimerFd(_) => {
-                let w = match object {
-                    Object::Unix(u) => &u.core.waiters,
-                    Object::EventFd(e) => &e.waiters,
-                    Object::TimerFd(t) => &t.waiters,
-                    _ => return,
-                };
-                if self.sockets.iter().any(|q| KArc::ptr_eq(q, w)) {
-                    return;
-                }
-                if self.sockets.try_push(w.clone()).is_err() {
-                    self.polled = true;
-                    return;
-                }
-                if w.add(self.me).is_err() {
-                    self.sockets.pop();
-                    self.polled = true;
-                }
-            }
-            Object::Pty(end) => {
-                let w = &end.pty.waiters;
-                if self.sockets.iter().any(|q| KArc::ptr_eq(q, w)) {
-                    return;
-                }
-                if self.sockets.try_push(w.clone()).is_err() {
-                    self.polled = true;
-                    return;
-                }
-                if w.add(self.me).is_err() {
-                    self.sockets.pop();
-                    self.polled = true;
-                }
-            }
+            Object::Unix(u) => self.add_queue(&u.core.waiters),
+            Object::EventFd(e) => self.add_queue(&e.waiters),
+            Object::TimerFd(t) => self.add_queue(&t.waiters),
+            Object::Pty(end) => self.add_queue(&end.pty.waiters),
             Object::Socket(_) | Object::Epoll(_) => self.polled = true,
             // Always ready: nothing to wait for.
             Object::Console(_) | Object::File(_) | Object::Device(_) | Object::Nt(_) => {}
+        }
+    }
+
+    /// Waits on wait queue `w` too (out of memory: polls instead).
+    pub fn add_queue(&mut self, w: &KArc<crate::unix::Waiters>) {
+        if self.sockets.iter().any(|q| KArc::ptr_eq(q, w)) {
+            return;
+        }
+        if self.sockets.try_push(w.clone()).is_err() {
+            self.polled = true;
+            return;
+        }
+        if w.add(self.me).is_err() {
+            self.sockets.pop();
+            self.polled = true;
         }
     }
 

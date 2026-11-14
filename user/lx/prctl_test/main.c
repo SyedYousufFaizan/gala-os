@@ -11,7 +11,9 @@
  * with /proc/self/exe). The ids are printed as relations, not numbers.
  *
  * Then what Ubuntu 26.04 reached (ROADMAP LD): PR_SET_NO_NEW_PRIVS and
- * PR_GET_NO_NEW_PRIVS (bubblewrap's first step, for glycin's sandbox) and
+ * PR_GET_NO_NEW_PRIVS (bubblewrap's first step, for glycin's sandbox),
+ * PR_SET_PDEATHSIG and PR_GET_PDEATHSIG (Rust's Command, glycin's
+ * loaders), and
  * PR_GET_AUXV (rustix, in uutils' coreutils), its auxiliary vector checked
  * by what any machine's has (AT_PAGESZ 4096, AT_NULL last). */
 #include <pthread.h>
@@ -22,6 +24,8 @@
 #define PR_SET_NAME 15
 #define PR_GET_NAME 16
 #define PR_CAPBSET_READ 23
+#define PR_SET_PDEATHSIG 1
+#define PR_GET_PDEATHSIG 2
 #define PR_SET_NO_NEW_PRIVS 38
 #define PR_GET_NO_NEW_PRIVS 39
 #define PR_GET_AUXV 0x41555856
@@ -138,6 +142,53 @@ int main(void)
 	say_bool("  the first pair copied", small[0] == aux[0] && small[1] == aux[1]);
 	say_ret("PR_GET_AUXV(arg4 1)", sys6(SYS_prctl, PR_GET_AUXV, (i64)aux, sizeof aux, 1, 0, 0));
 	say_ret("PR_GET_AUXV(bad pointer)", sys6(SYS_prctl, PR_GET_AUXV, 1, sizeof aux, 0, 0, 0));
+
+	/* The parent-death signal (Rust's Command sets it in a child for
+	 * glycin's loaders): set, read back, cleared in a fork's child, and
+	 * sent when the parent ends. */
+	int sig = -1;
+	say_ret("PR_GET_PDEATHSIG at start", sys2(SYS_prctl, PR_GET_PDEATHSIG, (i64)&sig));
+	say("  signal", sig);
+	say_ret("PR_SET_PDEATHSIG(SIGKILL)", sys2(SYS_prctl, PR_SET_PDEATHSIG, 9));
+	sys2(SYS_prctl, PR_GET_PDEATHSIG, (i64)&sig);
+	say("  PR_GET_PDEATHSIG", sig);
+	say_ret("PR_SET_PDEATHSIG(65)", sys2(SYS_prctl, PR_SET_PDEATHSIG, 65));
+	say_ret("PR_GET_PDEATHSIG(bad pointer)", sys2(SYS_prctl, PR_GET_PDEATHSIG, 1));
+	child = lx_fork();
+	if (child == 0) {
+		int got = -1;
+		sys2(SYS_prctl, PR_GET_PDEATHSIG, (i64)&got);
+		lx_exit(got);
+	}
+	say_status("a child's PR_GET_PDEATHSIG (its exit status)", wait_for(child, 0));
+	sys2(SYS_prctl, PR_SET_PDEATHSIG, 0);
+	/* A forks B; B sets SIGKILL for its parent's death and says so; A
+	 * ends; B, killed, closes its pipe without writing (alive, it writes
+	 * after two seconds). */
+	int out[2], ready[2];
+	sys2(SYS_pipe2, out, 0);
+	sys2(SYS_pipe2, ready, 0);
+	i64 a = lx_fork();
+	if (a == 0) {
+		i64 b = lx_fork();
+		if (b == 0) {
+			sys1(SYS_close, out[0]);
+			sys1(SYS_close, ready[0]);
+			sys2(SYS_prctl, PR_SET_PDEATHSIG, 9);
+			sys3(SYS_write, ready[1], "s", 1);
+			sleep_ms(2000);
+			sys3(SYS_write, out[1], "alive", 5);
+			lx_exit(0);
+		}
+		char c;
+		sys3(SYS_read, ready[0], &c, 1);
+		lx_exit(0);
+	}
+	sys1(SYS_close, out[1]);
+	sys1(SYS_close, ready[1]);
+	wait_for(a, 0);
+	char got[8];
+	say_ret("its child, after its parent ended: read of its pipe", sys3(SYS_read, out[0], got, sizeof got));
 
 	/* An option no kernel has. */
 	say_ret("prctl(12345)", sys2(SYS_prctl, 12345, 0));

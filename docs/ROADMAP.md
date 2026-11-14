@@ -3672,30 +3672,36 @@ the next breakthroughs).
    LTS instead (GTK 3, native Wayland; WORKFLOW "Linux roots from Ubuntu
    26.04"), the Linux roots with it: glibc 2.43, libffi, libwayland-client,
    weston and the "gtk3" and "x11" roots are resolute's (traced on 26.04),
-   and `lx_dyn`, `lx_simple_shm`, `lx_xterm` and `lx_gtk_x11` pass on them;
-   `lx_gtk`, `lx_gtk_pie`, `lx_xdesktop` and `linux_menu` fail on what is
-   listed below, and `lx_gimp_batch` times out: its "gimp" root is still
-   24.04's 2.10, now beside 26.04's libraries (its script for 3.2,
-   `user/lx/gimp/batch3.scm`, deterministic on 26.04: `file-png-export`
-   with every optional chunk off). What 26.04 needs that gala lacks, each
-   test first. Done: the ioctls every descriptor answers (`lx_fdioctl`),
-   capget and capset (`lx_caps`), timerfd (`lx_timerfd`), descriptor
-   arguments' upper halves ignored (`lx_fdbits`: glycin's int fds),
-   PR_SET_NO_NEW_PRIVS and PR_GET_AUXV (`lx_prctl`: bubblewrap,
-   uutils' `sleep`, which now runs). Next: GTK 3 loads images through
-   glycin, whose loader runs as a process (`glycin-svg`) after bubblewrap
-   fails; bubblewrap must fail where Linux's does (a `clone` with
-   CLONE_NEWUSER: EPERM), which needs a /proc: /proc/sys/kernel/overflowuid
-   and overflowgid, /proc/sys/user/max_user_namespaces, /proc/self/ns/user
-   and cgroup (gala has only /proc/self/exe, special-cased: a procfs of
-   generated files is the design to make, which Chromium's /proc files
-   want too); then seccomp's probes (GET_ACTION_AVAIL, GET_NOTIF_SIZES; a
-   filter mode's flags checked: EFAULT for a NULL program), sigaltstack,
-   xterm's utempter setfsuid and setfsgid. Linux system calls are traced
-   with `events=syscall` (`lx syscall`). Then the transcripts 26.04 answers
-   otherwise (gtk_test's stderr: glycin's "running without sandbox"),
-   and THIRD_PARTY's rows for the new versions. Open: a Linux process keeps its name across execve
-   (the log says `sh (pid N)` for gimp-console), and rseq is ENOSYS
+   and every `lx_` scenario but two passes on them, `lx_gtk` among them
+   (GTK 3's images through glycin: bubblewrap fails as on an unprivileged
+   Linux without user namespaces and glycin runs its loaders unsandboxed,
+   its warning in the scenarios' own transcripts, recorded on 26.04).
+   `lx_xdesktop` times out: the screen check passes, but the `exit` typed
+   into its xterm never reaches the xterm's shell (the keys reach
+   Xwayland, and twm and xterm each read an X event per key, but xterm
+   writes nothing to its pty; pointing at the xterm first does not
+   change it); `linux_menu` waits for its session's end the same way;
+   `lx_gimp_batch` fails: its "gimp" root is still 24.04's 2.10, now
+   beside 26.04's libraries (its script for 3.2, `user/lx/gimp/batch3.scm`,
+   deterministic on 26.04: `file-png-export` with every optional chunk
+   off). What 26.04 needed that gala lacked, each test first: the ioctls
+   every descriptor answers (`lx_fdioctl`), capget and capset
+   (`lx_caps`), timerfd (`lx_timerfd`), descriptor arguments' upper halves
+   ignored (`lx_fdbits`: glycin's int fds), PR_SET_NO_NEW_PRIVS,
+   PR_GET_AUXV and PR_SET_PDEATHSIG (`lx_prctl`: bubblewrap, uutils'
+   `sleep`, glycin's loaders), /proc's first part and unshare, a namespace
+   refused as Linux refuses it at max_user_namespaces 0 (`lx_procfs`),
+   sigaltstack (`lx_altstack`: Rust's runtime), and an epoll_wait seeing
+   what another thread ADDs or MODs meanwhile (`lx_epoll`: glycin's
+   loader connection, armed from one thread while another waits). Next:
+   `lx_xdesktop`'s keys; seccomp's probes (GET_ACTION_AVAIL,
+   GET_NOTIF_SIZES; a filter mode's flags checked: EFAULT for a NULL
+   program); xterm's setfsuid and setfsgid (ENOSYS now); GIMP 3.2's root
+   and `lx_gimp_batch` on `batch3.scm`, then its window over native
+   Wayland; THIRD_PARTY's rows for the new versions. Linux system calls
+   are traced with `events=syscall` (`lx syscall`). Open: a Linux process
+   keeps its name across execve (the log says `sh (pid N)` for
+   gimp-console), and rseq is ENOSYS
    (glibc carries on without it).
 
 **Done when** (each step): its test and scenario pass, and the Linux

@@ -468,7 +468,13 @@ fn spawn_inner(start: Start<'_>) -> Result<KArc<Process>, ExecError> {
         process::forget_bare(&process);
         return Err(ExecError::OutOfMemory);
     };
-    *lx.auxv.lock() = p.initial.auxv_bytes();
+    let aux = p.initial.auxv_bytes();
+    if root == ramfs::ROOT
+        && let Ok(exe_path) = super::file::path_of(root, exe)
+    {
+        super::procfs::image(process.id, &exe_path, &aux);
+    }
+    *lx.auxv.lock() = aux;
     for (n, fd) in fds {
         if lx.install_at(*n, fd.clone(), false).is_err() {
             state::ended(process.id, crate::nt::status::NtStatus::NO_MEMORY);
@@ -730,7 +736,14 @@ pub fn execve(
     }
     *call.lx.brk.lock() = state::Brk { start: p.plan.brk, current: p.plan.brk };
     *call.lx.exe.lock() = exe;
-    *call.lx.auxv.lock() = p.initial.auxv_bytes();
+    call.lx.set_altstack(call.tid, state::DISABLED_STACK);
+    let aux = p.initial.auxv_bytes();
+    if call.lx.root == ramfs::ROOT
+        && let Ok(exe_path) = super::file::path_of(call.lx.root, exe)
+    {
+        super::procfs::image(call.process.id, &exe_path, &aux);
+    }
+    *call.lx.auxv.lock() = aux;
     call.lx.set_comm(call.tid, comm);
     // The task manager's command line: the new argv.
     let mut line: Vec<u8> = Vec::new();

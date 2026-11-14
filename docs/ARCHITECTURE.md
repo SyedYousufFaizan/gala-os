@@ -11769,7 +11769,26 @@ The running parts (milestone 1; `lxrun=`):
   devices are; glibc's ld.so reads it for `$ORIGIN`): the path of the
   program the process runs (`LxProcess::exe`, its node: execve sets it,
   to the interpreter for a `#!` script; a fork's child has its
-  parent's); other /proc paths are ENOENT (ledgered for readlink).
+  parent's).
+- **/proc, its first part** (`lx::procfs`; procfs_test, `lx_procfs`): a
+  volume the kernel keeps in the shared file system, mounted over
+  `/proc` for processes rooted at the shared tree as `/run` is
+  (`lx::file`'s mounts), so open, stat, readlink, getdents and O_PATH
+  work on it as on any directory: `sys/kernel/overflowuid` and
+  `overflowgid` (65534), `sys/user/max_user_namespaces` (0), and per
+  process (made at its first image, removed at its end) `<pid>/ns/<kind>`
+  links named as Linux's initial namespaces (`user:[4026531837]`: one set
+  for all), `exe` (set at each execve) and `auxv` (the pairs up to
+  AT_NULL); `self` is the caller's pid in the walk and for readlink.
+  What changes as a process runs (maps, stat, status, fd) is not there
+  yet (files generated when opened, proc_test's, are the design to make).
+- **Namespaces are refused** (`procfs::namespace_refusal`; procfs_test):
+  gala makes none. clone, clone3 and unshare asking for a user namespace
+  get ENOSPC (Linux's answer at max_user_namespaces 0); another without
+  CAP_SYS_ADMIN (any uid but 0) EPERM; uid 0's EINVAL, ledgered.
+  bubblewrap then fails as on such a Linux, and glycin (GTK 3's image
+  loader on Ubuntu 26.04) runs its loaders unsandboxed, warning so on
+  stderr as Linux's does.
 - **Process attributes** (`lx::prctl`; prctl_test, `lx_prctl`): prctl's
   PR_SET_NAME and PR_GET_NAME are the calling thread's name
   (`state::Comm` in `LxThread`, Linux's "comm": up to 15 bytes and a
@@ -11815,8 +11834,12 @@ The running parts (milestone 1; `lxrun=`):
 - **prctl's no-new-privileges and auxiliary vector** (`lx::prctl`;
   prctl_test): PR_SET_NO_NEW_PRIVS (only 1) and PR_GET_NO_NEW_PRIVS, a flag
   kept by children and across execve; PR_GET_AUXV, the image's auxiliary
-  vector saved at exec (`LxProcess::auxv`, from the initial stack),
-  copied as far as it fits, its size returned.
+  vector saved at exec (`LxProcess::auxv`, from the initial stack) as
+  Linux's 448-byte saved_auxv (zeros after AT_NULL), copied as far as it
+  fits, that size returned; PR_SET_PDEATHSIG and PR_GET_PDEATHSIG, the
+  signal a process gets when its parent ends (sent by `state::ended` to
+  each child still running; cleared in a fork's child, kept across
+  execve: glycin's loaders die with the program that started them).
 - **sysinfo and sched_getaffinity** (`lx::sysinfo`; sysinfo_test,
   `lx_sysinfo`): sysinfo counts in bytes (`mem_unit` 1): RAM is the frame
   allocator's managed frames and free ones (NT's NumberOfPhysicalPages),
@@ -11936,7 +11959,11 @@ The running parts (milestone 1; `lxrun=`):
   the description's last close removes it from every set
   (`Fd::watchers`, `Epoll::forget`); closing the epoll fd empties its
   set. Ready entries come out in the order they were added; struct
-  epoll_event is the packed 12 bytes.
+  epoll_event is the packed 12 bytes. A waiter waits on the set's own
+  queue (`Epoll::waiters`) beside its objects'; ADD and MOD wake it, so a
+  wait begun before them (another thread's) looks again and watches the
+  new entry (epoll_test's "the set changed while a thread waits": glycin
+  arms its loader connection from one thread while another waits).
 - **eventfd** (`lx::eventfd`; eventfd_test, `lx_eventfd`): eventfd and
   eventfd2 (EFD_SEMAPHORE, EFD_NONBLOCK, EFD_CLOEXEC; another flag
   EINVAL), a 64-bit counter as `Object::EventFd`: a read (8 bytes at
@@ -12090,8 +12117,16 @@ The running parts (milestone 1; `lxrun=`):
     comes back at once if no handler runs: `Signals::suspend`,
     `frame_mask`, `restore_saved_mask`); SA_RESTART also restarts readv,
     pread64/pwrite64, accept/accept4, recvfrom and sendto.
+  - sigaltstack (altstack_test, `lx_altstack`): each thread's alternate
+    stack (`LxThread::altstack`; disabled at first and after execve, a
+    fork's child's its creator's), set with Linux's checks (EPERM while
+    on it, EINVAL for other flags, ENOMEM below MINSIGSTKSZ). An
+    SA_ONSTACK handler gets its frame at its top unless the thread is on
+    it already; the frame's uc_stack records it (SS_ONSTACK when the
+    interrupted code was on it), SS_AUTODISARM disarms it while the
+    handler runs, rt_sigreturn sets it back from uc_stack. Rust's runtime
+    sets one up in every thread (Ubuntu 26.04's glycin loaders, uutils).
   - Not yet: rt_sigqueueinfo,
-    sigaltstack (SA_ONSTACK is ledgered and the current stack used),
     CPU faults as signals (an exception still ends the process with its
     NT status, read as SIGSEGV etc.), delivery to a thread running user
     code (only at a system call's return), stop/continue, UC_FP_XSTATE's
@@ -12178,7 +12213,7 @@ The running parts (milestone 1; `lxrun=`):
   address, bitset, thread), so a hang shows who waits where. Ledger:
   `linux clone flags missing` (and vfork's CLONE_VM, unsupported thread
   flag sets), `linux signal action missing`
-  (Stop), `linux signal option missing` (SA_ONSTACK), `linux option
+  (Stop), `linux option
   missing` (wait4's and kill's process groups, open flags, an unlink or
   rename an NT program's open refuses, names the file system cannot
   hold, socket families and types, socket options, CPU-time clocks and
@@ -12187,7 +12222,7 @@ The running parts (milestone 1; `lxrun=`):
   mremap's MREMAP_DONTUNMAP and old length 0, madvise advice not taken,
   a resource limit set but not enforced, another process's limits, the
   shrinking of a mapped file,
-  /proc paths other than /proc/self/exe, no random generator), `linux
+  a namespace asked for by uid 0, no random generator), `linux
   syscall stub` (ioctl, wait4's rusage); a page mremap could not move
   logs why (and `out of memory`).
 - **Invariants**: a Linux process is never handed over (carry refuses "a

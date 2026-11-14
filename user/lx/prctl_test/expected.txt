@@ -33,6 +33,14 @@ PR_GET_AUXV(16 bytes): the same size = yes
   the first pair copied = yes
 PR_GET_AUXV(arg4 1) = -22 (EINVAL)
 PR_GET_AUXV(bad pointer) = -14 (EFAULT)
+PR_GET_PDEATHSIG at start = 0
+  signal = 0
+PR_SET_PDEATHSIG(SIGKILL) = 0
+  PR_GET_PDEATHSIG = 9
+PR_SET_PDEATHSIG(65) = -22 (EINVAL)
+PR_GET_PDEATHSIG(bad pointer) = -14 (EFAULT)
+a child's PR_GET_PDEATHSIG (its exit status): exited 0
+its child, after its parent ended: read of its pipe = 0
 prctl(12345) = -22 (EINVAL)
 getresuid = 0
 real, effective, saved uid are getuid's = yes

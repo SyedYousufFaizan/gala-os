@@ -3284,6 +3284,10 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("lx_pty_pie", "user/lx/bin/pty_test-pie", "lx"),
     ("lx_eventfd", "user/lx/bin/eventfd_test", "lx"),
     ("lx_eventfd_pie", "user/lx/bin/eventfd_test-pie", "lx"),
+    ("lx_procfs", "user/lx/bin/procfs_test", "lx"),
+    ("lx_procfs_pie", "user/lx/bin/procfs_test-pie", "lx"),
+    ("lx_altstack", "user/lx/bin/altstack_test", "lx"),
+    ("lx_altstack_pie", "user/lx/bin/altstack_test-pie", "lx"),
     ("lx_fdbits", "user/lx/bin/fdbits_test", "lx"),
     ("lx_fdbits_pie", "user/lx/bin/fdbits_test-pie", "lx"),
     ("lx_timerfd", "user/lx/bin/timerfd_test", "lx"),
@@ -12192,6 +12196,40 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit lxrun=/lx/eventfd_test-pie lxargs=./eventfd_test",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["personality linux", "run: end /lx/eventfd_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/procfs_test (LD: bubblewrap, for Ubuntu 26.04's glycin):
+        // /proc's first part, its sys files, /proc/self and its ns links,
+        // exe and auxv, and a user namespace refused; its transcript must
+        // be its expected.txt (real Linux's).
+        name: "lx_procfs",
+        cmdline: "qemu_exit lxrun=/lx/procfs_test lxargs=./procfs_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/procfs_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/procfs_test as a static-pie.
+        name: "lx_procfs_pie",
+        cmdline: "qemu_exit lxrun=/lx/procfs_test-pie lxargs=./procfs_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/procfs_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/altstack_test (LD: Rust's runtime in Ubuntu 26.04's
+        // glycin loaders and uutils): sigaltstack and SA_ONSTACK handlers
+        // on the alternate stack; its transcript must be its expected.txt
+        // (real Linux's).
+        name: "lx_altstack",
+        cmdline: "qemu_exit lxrun=/lx/altstack_test lxargs=./altstack_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/altstack_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/altstack_test as a static-pie.
+        name: "lx_altstack_pie",
+        cmdline: "qemu_exit lxrun=/lx/altstack_test-pie lxargs=./altstack_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/altstack_test-pie", BOOT_OK_MARKER],
     },
     Scenario {
         // user/lx/fdbits_test (LD: Ubuntu 26.04's glycin): a descriptor
