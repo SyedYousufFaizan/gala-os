@@ -16522,8 +16522,20 @@ const GTK_SCREEN: ScreenCheck = ScreenCheck {
 const GIMP_SCREEN: ScreenCheck = ScreenCheck {
     marker: "desktop: shown window 'GNU Image Manipulation Program'",
     steps: &[
-        ScreenStep { after: "desktop: shown window 'Welcome to GIMP", input: &[], pixels: &[] },
+        // GIMP's window and the dialog drawn (screen0.png).
+        ScreenStep {
+            after: "desktop: shown window 'Welcome to GIMP",
+            input: &[],
+            pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
+        },
         ScreenStep { after: "", input: &["sendkey esc"], pixels: &[] },
+        // The image window alone (screen2.png), then Ctrl+Q once the
+        // focus is back on it.
+        ScreenStep {
+            after: "window 'Welcome to GIMP 3.2.2' left the screen",
+            input: &[],
+            pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
+        },
         ScreenStep { after: "", input: &["sendkey ctrl-q"], pixels: &[] },
     ],
 };
