@@ -4960,6 +4960,7 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("gimp_batch", "user/lx/gimp/batch.scm", "lx/gimp"),
     ("gimp_batch", "user/lx/gimp/gimprc", "lx/gimp"),
     ("gimp_batch", "user/lx/gimp/in.png", "lx/gimp"),
+    ("gimp_batch", "user/lx/gimp/gui.sh", "lx/gimp"),
     ("lx_busybox", "target/prebuilt/busybox-linux/busybox", "lx"),
     ("lx_busybox", "user/lx/busybox/shell.sh", "lx"),
     ("lx_httpd", "target/prebuilt/busybox-linux/busybox", "lx"),
@@ -14126,16 +14127,18 @@ const SCENARIOS: &[Scenario] = &[
     Scenario {
         // GIMP's window (LD step 9): Ubuntu 26.04's GIMP 3.2 (LINUX_ROOTS
         // "gimp" with "gtk3" and "x11") over gala's Wayland server, opening
-        // user/lx/gimp/in.png. The screen check (GIMP_SCREEN) sees the
-        // image window, then quits GIMP with Ctrl+Q.
+        // user/lx/gimp/in.png (user/lx/gimp/gui.sh; its transcript, GIMP's
+        // exit status, is user/lx/sh/lx_gimp.txt). The screen check
+        // (GIMP_SCREEN) sees its window and its welcome dialog, closes the
+        // dialog and quits GIMP with Ctrl+Q.
         name: "lx_gimp",
-        cmdline: "qemu_exit presenter=test wayland=on events=wayland lxrun=/usr/bin/gimp-3.2 lxargs=gimp-3.2%20-n%20-s%20-f%20/lx/gimp/in.png lxenv=XDG_RUNTIME_DIR=/run/user/1000%20WAYLAND_DISPLAY=wayland-0%20HOME=/Users/gala%20PATH=/usr/bin:/bin",
+        cmdline: "qemu_exit presenter=test wayland=on events=wayland lxrun=/bin/sh lxargs=sh%20/lx/gimp/gui.sh lxenv=XDG_RUNTIME_DIR=/run/user/1000%20WAYLAND_DISPLAY=wayland-0%20HOME=/Users/gala%20PATH=/usr/bin:/bin",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             "personality linux",
             "desktop: shown window",
             "xtask: screen ok",
-            "run: end /usr/bin/gimp-3.2",
+            "run: end /bin/sh",
             BOOT_OK_MARKER,
         ],
     },
