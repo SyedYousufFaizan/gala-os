@@ -4678,9 +4678,58 @@ fn user_build_for(target: &str) -> Command {
     cmd
 }
 
+/// The Debian package that provides a program the tests run on the host
+/// beside the VM. `docker/test.Dockerfile` installs all of them and CI's
+/// apt line names the same packages, so this table is also the list of
+/// what a host needs to run the suite outside Docker.
+fn host_package(program: &str) -> Option<&'static str> {
+    Some(match program {
+        "7z" => "p7zip-full",
+        "unzip" => "unzip",
+        "psql" => "postgresql-client",
+        "ssh" | "sftp" | "scp" => "openssh-client",
+        "msiextract" | "msiinfo" | "msibuild" => "msitools",
+        "musl-gcc" => "musl-tools",
+        "weston" => "weston",
+        "Xvfb" => "xvfb",
+        "xorriso" => "xorriso",
+        "update-mime-database" => "shared-mime-info",
+        _ => return None,
+    })
+}
+
+/// What to say about a program the host has not got: the package that
+/// provides it, and that `docker-test`'s image carries it.
+fn missing_program(program: &str) -> String {
+    let mut s = format!("the host has no {program}");
+    if let Some(package) = host_package(program) {
+        s.push_str(&format!(" (apt install {package})"));
+    }
+    s.push_str("; `cargo xtask docker-test` runs the tests in an image that carries it");
+    s
+}
+
+/// A failure to start `cmd`. `std::io`'s own message for a program that
+/// is not on PATH is "No such file or directory", which reads as a
+/// missing input file rather than as a host without the tool, so a
+/// missing program says which package has it instead.
+fn spawn_error(cmd: &Command, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        let program = cmd.get_program().to_string_lossy().into_owned();
+        return format!("{} (the command was {cmd:?})", missing_program(&program));
+    }
+    format!("failed to spawn {cmd:?}: {e}")
+}
+
+/// Whether `program` is a file in one of PATH's directories.
+fn on_path(program: &str) -> bool {
+    env::var_os("PATH")
+        .is_some_and(|path| env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
 /// Runs `cmd`, showing its output only if it fails.
 fn run_quiet(cmd: &mut Command) -> Result {
-    let out = cmd.output().map_err(|e| format!("failed to spawn {cmd:?}: {e}"))?;
+    let out = cmd.output().map_err(|e| spawn_error(cmd, &e))?;
     if out.status.success() {
         return Ok(());
     }
@@ -4689,7 +4738,7 @@ fn run_quiet(cmd: &mut Command) -> Result {
 }
 
 fn run_cmd(cmd: &mut Command) -> Result {
-    let status = cmd.status().map_err(|e| format!("failed to spawn {cmd:?}: {e}"))?;
+    let status = cmd.status().map_err(|e| spawn_error(cmd, &e))?;
     if status.success() { Ok(()) } else { Err(format!("{cmd:?} failed: {status}")) }
 }
 
@@ -5405,8 +5454,7 @@ fn fetch_prebuilt(path: &str) -> Result {
         for exclude in p.excludes {
             cmd.arg(format!("-x!{exclude}"));
         }
-        run_cmd(&mut cmd)
-            .map_err(|e| format!("{e} (7z is in p7zip-full: apt install p7zip-full)"))?;
+        run_cmd(&mut cmd)?;
     } else {
         let mut cmd = Command::new("unzip");
         cmd.args(["-q", "-o"]).arg(&zip).args(p.members).arg("-d").arg(&dir);
@@ -13469,27 +13517,30 @@ fn run_vm_once(
         {
             let serve_log = iso.with_extension("serve.log");
             let monitor = socket.clone();
-            client = Some(thread::spawn(move || match kind {
-                NetClient::Echo => net_client(port),
-                NetClient::Http(page) => http_client(port, page),
-                NetClient::Nginx => nginx_client(port),
-                NetClient::Tls => tls_client(port),
-                NetClient::Contains(parts) => contains_client(port, parts),
-                NetClient::Outbound => Ok(()),
-                NetClient::Ssh => ssh_client(port, false),
-                NetClient::SshPassword => ssh_client(port, true),
-                NetClient::SshServer => ssh_server_client(port),
-                NetClient::SshShell => ssh_shell_client(port),
-                NetClient::Sftp => sftp_client(port),
-                NetClient::Scp => scp_client(port),
-                NetClient::SshForward => ssh_forward_client(port),
-                NetClient::SshInner => ssh_inner_client(port),
-                NetClient::Psql => psql_client(port),
-                NetClient::Ftp => ftp_client(port),
-                NetClient::WebDriver => webdriver_client(port),
-                NetClient::Wpt => wpt::client(port, &serve_log, &monitor),
-                NetClient::HandoverNet => handover_net_client(port),
-                NetClient::Udp => udp_client(port),
+            client = Some(thread::spawn(move || {
+                missing_client_program(&kind)?;
+                match kind {
+                    NetClient::Echo => net_client(port),
+                    NetClient::Http(page) => http_client(port, page),
+                    NetClient::Nginx => nginx_client(port),
+                    NetClient::Tls => tls_client(port),
+                    NetClient::Contains(parts) => contains_client(port, parts),
+                    NetClient::Outbound => Ok(()),
+                    NetClient::Ssh => ssh_client(port, false),
+                    NetClient::SshPassword => ssh_client(port, true),
+                    NetClient::SshServer => ssh_server_client(port),
+                    NetClient::SshShell => ssh_shell_client(port),
+                    NetClient::Sftp => sftp_client(port),
+                    NetClient::Scp => scp_client(port),
+                    NetClient::SshForward => ssh_forward_client(port),
+                    NetClient::SshInner => ssh_inner_client(port),
+                    NetClient::Psql => psql_client(port),
+                    NetClient::Ftp => ftp_client(port),
+                    NetClient::WebDriver => webdriver_client(port),
+                    NetClient::Wpt => wpt::client(port, &serve_log, &monitor),
+                    NetClient::HandoverNet => handover_net_client(port),
+                    NetClient::Udp => udp_client(port),
+                }
             }));
         }
         // A scenario that ends in the bootloader (R8: Limine refusing a
@@ -17009,6 +17060,35 @@ fn nginx_client(port: u16) -> Result {
 /// listening yet (curl's connect, TLS-handshake and empty-reply errors).
 /// What `ssh_client` asks sshd's session to print.
 const SSH_ECHO: &str = "gala-ssh-ok";
+
+/// The host program a net client runs, if it runs one.
+fn client_program(kind: &NetClient) -> Option<&'static str> {
+    match kind {
+        NetClient::Psql => Some("psql"),
+        NetClient::Ssh
+        | NetClient::SshPassword
+        | NetClient::SshServer
+        | NetClient::SshShell
+        | NetClient::SshForward
+        | NetClient::SshInner => Some("ssh"),
+        NetClient::Sftp => Some("sftp"),
+        NetClient::Scp => Some("scp"),
+        _ => None,
+    }
+}
+
+/// Refuses a client whose host program the host has not got. These
+/// clients run under `timeout`, which reports a program it cannot start
+/// as its own exit 127 ("failed to execute process"), and that reads in
+/// the log as a client that failed rather than as a host without the
+/// tool -- after a boot where the guest did its part.
+fn missing_client_program(kind: &NetClient) -> Result {
+    let Some(program) = client_program(kind) else { return Ok(()) };
+    if on_path(program) {
+        return Ok(());
+    }
+    Err(missing_program(program))
+}
 
 /// The host side of `sshd_login`: the host's ssh with the test key
 /// user/sshd/client_ed25519 (galatest's authorized key) logs on as
