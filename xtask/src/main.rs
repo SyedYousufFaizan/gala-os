@@ -3284,6 +3284,14 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("lx_pty_pie", "user/lx/bin/pty_test-pie", "lx"),
     ("lx_eventfd", "user/lx/bin/eventfd_test", "lx"),
     ("lx_eventfd_pie", "user/lx/bin/eventfd_test-pie", "lx"),
+    ("lx_fdbits", "user/lx/bin/fdbits_test", "lx"),
+    ("lx_fdbits_pie", "user/lx/bin/fdbits_test-pie", "lx"),
+    ("lx_timerfd", "user/lx/bin/timerfd_test", "lx"),
+    ("lx_timerfd_pie", "user/lx/bin/timerfd_test-pie", "lx"),
+    ("lx_caps", "user/lx/bin/caps_test", "lx"),
+    ("lx_caps_pie", "user/lx/bin/caps_test-pie", "lx"),
+    ("lx_fdioctl", "user/lx/bin/fdioctl_test", "lx"),
+    ("lx_fdioctl_pie", "user/lx/bin/fdioctl_test-pie", "lx"),
     ("lx_shm", "user/lx/bin/shm_test", "lx"),
     ("lx_shm_pie", "user/lx/bin/shm_test-pie", "lx"),
     ("lx_sysinfo", "user/lx/bin/sysinfo_test", "lx"),
@@ -12184,6 +12192,75 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit lxrun=/lx/eventfd_test-pie lxargs=./eventfd_test",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["personality linux", "run: end /lx/eventfd_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/fdbits_test (LD: Ubuntu 26.04's glycin): a descriptor
+        // argument's upper 32 bits are not looked at (Linux's int and
+        // unsigned int fds); its transcript must be its expected.txt (real
+        // Linux's).
+        name: "lx_fdbits",
+        cmdline: "qemu_exit lxrun=/lx/fdbits_test lxargs=./fdbits_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/fdbits_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/fdbits_test as a static-pie.
+        name: "lx_fdbits_pie",
+        cmdline: "qemu_exit lxrun=/lx/fdbits_test-pie lxargs=./fdbits_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/fdbits_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/timerfd_test (LD: Ubuntu 26.04's glycin waits with one in
+        // epoll): timerfds on the monotonic, real-time and boot clocks, a
+        // blocking read, poll, epoll, interval and absolute timers and the
+        // errors, timing only as lower bounds; its transcript must be its
+        // expected.txt (real Linux's).
+        name: "lx_timerfd",
+        cmdline: "qemu_exit lxrun=/lx/timerfd_test lxargs=./timerfd_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/timerfd_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/timerfd_test as a static-pie.
+        name: "lx_timerfd_pie",
+        cmdline: "qemu_exit lxrun=/lx/timerfd_test-pie lxargs=./timerfd_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/timerfd_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/caps_test (LD: Ubuntu 26.04's glycin): capget and capset,
+        // the relations that hold for root and a user, the version
+        // handshake and the errors; its transcript must be its expected.txt
+        // (real Linux's).
+        name: "lx_caps",
+        cmdline: "qemu_exit lxrun=/lx/caps_test lxargs=./caps_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/caps_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/caps_test as a static-pie.
+        name: "lx_caps_pie",
+        cmdline: "qemu_exit lxrun=/lx/caps_test-pie lxargs=./caps_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/caps_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/fdioctl_test (LD: Ubuntu 26.04's glycin, Rust's std): the
+        // ioctls every descriptor answers (FIOCLEX, FIONCLEX, FIONBIO) and a
+        // pipe's FIONREAD; its transcript must be its expected.txt (real
+        // Linux's).
+        name: "lx_fdioctl",
+        cmdline: "qemu_exit lxrun=/lx/fdioctl_test lxargs=./fdioctl_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/fdioctl_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/fdioctl_test as a static-pie.
+        name: "lx_fdioctl_pie",
+        cmdline: "qemu_exit lxrun=/lx/fdioctl_test-pie lxargs=./fdioctl_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/fdioctl_test-pie", BOOT_OK_MARKER],
     },
     Scenario {
         // user/lx/shm_test (LD step 9: GIMP's tiles to its plug-ins, X's

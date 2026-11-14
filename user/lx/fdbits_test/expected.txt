@@ -1,0 +1,18 @@
+write = 3
+read = 3
+fcntl(F_GETFD) = 0
+ioctl(FIONBIO) = 0
+  O_NONBLOCK set = yes
+fstat = 0
+dup: a new descriptor = yes
+dup2(to 20) = 20
+close(20) = 0
+close(20) again = -9 (EBADF)
+openat(AT_FDCWD) = yes
+lseek = 0
+unlinkat(AT_FDCWD) = 0
+epoll_ctl(both descriptors) = 0
+close = 0
+close(the same) again = -9 (EBADF)
+fdbits_test: ok
+-- exit status 0

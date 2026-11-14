@@ -77,6 +77,13 @@ pub fn readiness(object: &Object) -> u16 {
                 0
             }
         }
+        Object::TimerFd(t) => {
+            if t.readable() {
+                POLLIN | POLLRDNORM
+            } else {
+                0
+            }
+        }
         Object::EventFd(e) => {
             let (readable, writable) = e.ready();
             let mut ev = 0;
@@ -104,6 +111,7 @@ pub fn events_count(object: &Object) -> u64 {
         Object::Unix(u) => u.core.arrivals(),
         Object::Epoll(e) => u64::from(e.has_ready()),
         Object::EventFd(e) => e.changes(),
+        Object::TimerFd(t) => t.changes(),
         Object::Pty(end) => super::pty::changes(end),
         Object::Console(_) | Object::File(_) | Object::Device(_) | Object::Nt(_) => 0,
     }
@@ -148,10 +156,11 @@ impl Watch {
                     self.polled = true;
                 }
             }
-            Object::Unix(_) | Object::EventFd(_) => {
+            Object::Unix(_) | Object::EventFd(_) | Object::TimerFd(_) => {
                 let w = match object {
                     Object::Unix(u) => &u.core.waiters,
                     Object::EventFd(e) => &e.waiters,
+                    Object::TimerFd(t) => &t.waiters,
                     _ => return,
                 };
                 if self.sockets.iter().any(|q| KArc::ptr_eq(q, w)) {

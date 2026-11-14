@@ -468,6 +468,7 @@ fn spawn_inner(start: Start<'_>) -> Result<KArc<Process>, ExecError> {
         process::forget_bare(&process);
         return Err(ExecError::OutOfMemory);
     };
+    *lx.auxv.lock() = p.initial.auxv_bytes();
     for (n, fd) in fds {
         if lx.install_at(*n, fd.clone(), false).is_err() {
             state::ended(process.id, crate::nt::status::NtStatus::NO_MEMORY);
@@ -729,6 +730,7 @@ pub fn execve(
     }
     *call.lx.brk.lock() = state::Brk { start: p.plan.brk, current: p.plan.brk };
     *call.lx.exe.lock() = exe;
+    *call.lx.auxv.lock() = p.initial.auxv_bytes();
     call.lx.set_comm(call.tid, comm);
     // The task manager's command line: the new argv.
     let mut line: Vec<u8> = Vec::new();

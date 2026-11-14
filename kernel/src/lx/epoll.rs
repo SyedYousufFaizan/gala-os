@@ -283,6 +283,7 @@ pub fn epoll_ctl(call: &Call<'_>, epfd: u64, op: u64, fd: u64, event: u64) -> Re
         | Object::Socket(_)
         | Object::Unix(_)
         | Object::EventFd(_)
+        | Object::TimerFd(_)
         | Object::Console(_)
         | Object::Pty(_)
         | Object::Nt(_) => {}

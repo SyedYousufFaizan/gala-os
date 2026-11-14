@@ -14,6 +14,13 @@
 //!   last capability by that EINVAL). The process holds none of them
 //!   (it is the one unprivileged user), which is what its capability
 //!   sets, not the bounding set, say.
+//! - PR_SET_NO_NEW_PRIVS (only 1, the other arguments 0) and
+//!   PR_GET_NO_NEW_PRIVS: the process's flag (`LxProcess::no_new_privs`),
+//!   kept by its children and across execve, never cleared; gala has no
+//!   set-user-id programs for it to hold back (bubblewrap sets it first).
+//! - PR_GET_AUXV: the image's auxiliary vector as its initial stack has it
+//!   (`LxProcess::auxv`, Linux's saved_auxv): as much as fits copied, its
+//!   whole size returned (rustix reads it so: uutils' coreutils).
 //! - Any other option is EINVAL, as Linux answers an unknown one, and is
 //!   counted in the ledger (`"what":"linux option missing"`, service
 //!   `prctl`, detail the option) so the next ones are chosen from data.
@@ -28,11 +35,42 @@ use crate::nt::ledger;
 const PR_SET_NAME: u64 = 15;
 const PR_GET_NAME: u64 = 16;
 const PR_CAPBSET_READ: u64 = 23;
+const PR_SET_NO_NEW_PRIVS: u64 = 38;
+const PR_GET_NO_NEW_PRIVS: u64 = 39;
+const PR_GET_AUXV: u64 = 0x4155_5856;
 /// The last capability (capability.h's CAP_LAST_CAP: CAP_CHECKPOINT_RESTORE).
 const CAP_LAST_CAP: u64 = 40;
 
-pub fn prctl(call: &Call<'_>, option: u64, arg2: u64) -> Result {
+pub fn prctl(call: &Call<'_>, option: u64, args: [u64; 4]) -> Result {
+    let [arg2, arg3, arg4, arg5] = args;
+    use core::sync::atomic::Ordering::Relaxed;
     match option {
+        // Once set, kept (no way back), by children too.
+        PR_SET_NO_NEW_PRIVS => {
+            if arg2 != 1 || arg3 | arg4 | arg5 != 0 {
+                return Err(EINVAL);
+            }
+            call.lx.no_new_privs.store(true, Relaxed);
+            Ok(0)
+        }
+        PR_GET_NO_NEW_PRIVS => {
+            if arg2 | arg3 | arg4 | arg5 != 0 {
+                return Err(EINVAL);
+            }
+            Ok(u64::from(call.lx.no_new_privs.load(Relaxed)))
+        }
+        // The auxiliary vector's size; as much of it as fits copied.
+        PR_GET_AUXV => {
+            if arg4 | arg5 != 0 {
+                return Err(EINVAL);
+            }
+            let auxv = call.lx.auxv.lock();
+            let n = (arg3 as usize).min(auxv.len());
+            if n > 0 {
+                call.process.write(arg2, &auxv[..n]).map_err(|_| EFAULT)?;
+            }
+            Ok(auxv.len() as u64)
+        }
         PR_SET_NAME => {
             // Up to 15 bytes or a NUL, a byte at a time: the string may end
             // just before an unmapped page.

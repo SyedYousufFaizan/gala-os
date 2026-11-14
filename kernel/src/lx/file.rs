@@ -987,7 +987,7 @@ fn stat_other(object: &Object, me: (u32, u32)) -> Stat {
         Object::PipeRead(_) | Object::PipeWrite(_) => (abi::S_IFIFO | 0o600, 0),
         Object::Socket(_) | Object::Unix(_) => (abi::S_IFSOCK | 0o777, 0),
         // An anonymous inode: no file type, 0600.
-        Object::Epoll(_) | Object::EventFd(_) => (0o600, 0),
+        Object::Epoll(_) | Object::EventFd(_) | Object::TimerFd(_) => (0o600, 0),
         Object::Nt(n) if n.kind == super::ntio::Kind::Pipe => (abi::S_IFIFO | 0o600, 0),
         Object::Nt(n) if n.kind == super::ntio::Kind::File => (abi::S_IFREG | 0o644, 0),
         Object::Pty(end) if end.master => return DeviceKind::Ptmx.stat(),
@@ -1059,7 +1059,7 @@ pub fn fstatfs(call: &Call<'_>, fd: u64, buf: u64) -> Result {
         | Object::Pty(_) => TMPFS_MAGIC,
         Object::PipeRead(_) | Object::PipeWrite(_) => PIPEFS_MAGIC,
         Object::Socket(_) | Object::Unix(_) => SOCKFS_MAGIC,
-        Object::Epoll(_) | Object::EventFd(_) => ANON_INODE_FS_MAGIC,
+        Object::Epoll(_) | Object::EventFd(_) | Object::TimerFd(_) => ANON_INODE_FS_MAGIC,
     };
     put_statfs(call, buf, magic)
 }

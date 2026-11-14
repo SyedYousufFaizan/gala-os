@@ -11787,6 +11787,36 @@ The running parts (milestone 1; `lxrun=`):
   anonymous inode their pseudo file systems' magics, without blocks.
   fontconfig asks whether its cache may be mapped, libselinux whether
   /sys/fs/selinux is there, GLib a file's file system.
+- **Descriptor arguments are their low 32 bits** (`state::slot`;
+  fdbits_test): Linux takes descriptors as int or unsigned int, and the
+  x86-64 C ABI leaves an int's upper register half undefined, so the
+  descriptor table, dup2/dup3 and fcntl's F_DUPFD minimum look at the low
+  half only (a dirfd's AT_FDCWD is compared as an int the same way).
+- **ioctls every descriptor answers** (`dispatch::generic_ioctl`;
+  fdioctl_test): FIOCLEX and FIONCLEX (the descriptor's close-on-exec),
+  FIONBIO (O_NONBLOCK on the open file description: a dup sees it), before
+  any object's own requests; a pipe's FIONREAD (the bytes it holds).
+- **Capabilities** (`lx::caps`; caps_test): capget and capset with
+  Linux's version handshake (v1 one structure, v2 and v3 two; an unknown
+  version answered with v3 written back and EINVAL, 0 without data). The
+  sets follow the uid (uid 0 all up to CAP_LAST_CAP 40, others none: no
+  file capabilities); capset accepts the sets held, refuses raising them
+  and other processes (EPERM), and a root process dropping some is not
+  kept (ledgered).
+- **timerfd** (`lx::timerfd`, `Object::TimerFd`; timerfd_test): the next
+  expiry on its clock (real-time, or monotonic for CLOCK_MONOTONIC and
+  CLOCK_BOOTTIME), an interval and the expirations not read, counted from
+  the clock whenever looked at (`Setting::settle`: none lost, none early);
+  a read gives them (blocking until the next, EAGAIN with O_NONBLOCK),
+  poll and epoll see it readable while some wait; a kernel thread
+  (`timerfd`) sleeps until the earliest armed expiry and wakes the waiters
+  then. The alarm clocks need uid 0 (CAP_WAKE_ALARM); CANCEL_ON_SET is
+  taken and not acted on (ledgered).
+- **prctl's no-new-privileges and auxiliary vector** (`lx::prctl`;
+  prctl_test): PR_SET_NO_NEW_PRIVS (only 1) and PR_GET_NO_NEW_PRIVS, a flag
+  kept by children and across execve; PR_GET_AUXV, the image's auxiliary
+  vector saved at exec (`LxProcess::auxv`, from the initial stack),
+  copied as far as it fits, its size returned.
 - **sysinfo and sched_getaffinity** (`lx::sysinfo`; sysinfo_test,
   `lx_sysinfo`): sysinfo counts in bytes (`mem_unit` 1): RAM is the frame
   allocator's managed frames and free ones (NT's NumberOfPhysicalPages),

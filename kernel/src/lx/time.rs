@@ -37,7 +37,7 @@ const TIMER_ABSTIME: u64 = 1;
 const NS: u64 = 1_000_000_000;
 
 /// A clock's reading in nanoseconds, or the errno for its id.
-fn now_ns(clock: u64) -> core::result::Result<u64, u16> {
+pub fn now_ns(clock: u64) -> core::result::Result<u64, u16> {
     // clockid_t is an int.
     let clock = u64::from(clock as u32);
     match clock {
@@ -74,7 +74,7 @@ fn unix_ns(nt: u64) -> u64 {
     nt.saturating_sub(EPOCH) * 100
 }
 
-fn timespec(ns: u64) -> [u8; 16] {
+pub fn timespec(ns: u64) -> [u8; 16] {
     let mut b = [0u8; 16];
     b[..8].copy_from_slice(&((ns / NS) as i64).to_le_bytes());
     b[8..].copy_from_slice(&((ns % NS) as i64).to_le_bytes());
@@ -82,7 +82,7 @@ fn timespec(ns: u64) -> [u8; 16] {
 }
 
 /// Reads a `struct timespec`: EFAULT, or EINVAL out of range.
-fn read_timespec(call: &Call<'_>, addr: u64) -> core::result::Result<Timespec, u16> {
+pub fn read_timespec(call: &Call<'_>, addr: u64) -> core::result::Result<Timespec, u16> {
     let sec = call.process.read_u64(addr).map_err(|_| EFAULT)? as i64;
     let nsec = call.process.read_u64(addr + 8).map_err(|_| EFAULT)? as i64;
     if sec < 0 || !(0..NS as i64).contains(&nsec) {

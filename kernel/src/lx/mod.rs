@@ -55,6 +55,7 @@
 //!   token, console and standard handles), counted and ended.
 //! - [`ntio`]: Linux fds on the Windows side's pipes, consoles and files.
 
+pub mod caps;
 pub mod dispatch;
 pub mod distro;
 pub mod elf;
@@ -92,6 +93,7 @@ pub mod sysinfo;
 pub mod threads;
 pub mod time;
 pub mod timer;
+pub mod timerfd;
 pub mod unix;
 pub mod wait;
 

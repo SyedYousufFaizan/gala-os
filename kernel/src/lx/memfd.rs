@@ -129,6 +129,7 @@ fn sealable(f: &Fd, adding: bool) -> core::result::Result<ramfs::NodeId, u16> {
         | Object::Unix(_)
         | Object::Epoll(_)
         | Object::EventFd(_)
+        | Object::TimerFd(_)
         | Object::Pty(_)
         | Object::Nt(_) => (None, true),
     };

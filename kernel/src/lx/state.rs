@@ -149,6 +149,8 @@ pub enum Object {
     Unix(KArc<super::unix::UnixSocket>),
     /// An eventfd's counter (`lx::eventfd`).
     EventFd(KArc<super::eventfd::EventFd>),
+    /// A timerfd's expiries (`lx::timerfd`).
+    TimerFd(KArc<super::timerfd::TimerFd>),
     /// A Windows-side object: a standard handle of the NT program that
     /// started the process (`lx::ntio`, `lx::distro`).
     Nt(KArc<super::ntio::NtFile>),
@@ -189,6 +191,7 @@ impl Drop for Fd {
             | Object::Device(_)
             | Object::Socket(_)
             | Object::EventFd(_)
+            | Object::TimerFd(_)
             | Object::Pty(_)
             | Object::Nt(_) => {}
         }
@@ -218,6 +221,7 @@ impl Fd {
             | Object::Unix(_)
             | Object::Epoll(_)
             | Object::EventFd(_)
+            | Object::TimerFd(_)
             | Object::Pty(_)
             | Object::Nt(_) => {}
         }
@@ -339,6 +343,12 @@ pub struct LxProcess {
     /// Its resource limits (getrlimit(2), `lx::resource`): a fork's child
     /// has its parent's, execve keeps them.
     pub rlimits: IrqMutex<super::resource::Limits>,
+    /// PR_SET_NO_NEW_PRIVS: set once, kept by its children and across
+    /// execve (gala has no set-user-id programs it would hold back).
+    pub no_new_privs: core::sync::atomic::AtomicBool,
+    /// The image's auxiliary vector, as its initial stack has it (pairs
+    /// up to AT_NULL's): PR_GET_AUXV's answer, as Linux's saved_auxv.
+    pub auxv: IrqMutex<Vec<u8>>,
     /// ITIMER_REAL (`lx::timer`; alarm, setitimer).
     pub alarm: IrqMutex<Option<super::timer::Alarm>>,
     /// A vfork child's hold on its parent (`lx::fork`): released when it
@@ -390,6 +400,8 @@ pub fn create(
         umask: IrqMutex::new(0o022),
         exe: IrqMutex::new(exe),
         rlimits: IrqMutex::new(super::resource::Limits::default()),
+        no_new_privs: core::sync::atomic::AtomicBool::new(false),
+        auxv: IrqMutex::new(Vec::new()),
         vfork: IrqMutex::new(Vfork { released: true, waiter: None }),
         alarm: IrqMutex::new(None),
         lines: IrqMutex::new([Vec::new(), Vec::new()]),
@@ -420,6 +432,12 @@ pub fn fork(parent: &LxProcess, pid: u64, vfork: bool) -> Result<KArc<LxProcess>
     let umask = *parent.umask.lock();
     let exe = *parent.exe.lock();
     let rlimits = parent.rlimits.lock().clone();
+    let auxv = {
+        let a = parent.auxv.lock();
+        let mut v = Vec::new();
+        v.try_extend_from_slice(&a)?;
+        v
+    };
     let state = KArc::try_new(LxProcess {
         pid,
         main_tid: AtomicU64::new(0),
@@ -437,6 +455,10 @@ pub fn fork(parent: &LxProcess, pid: u64, vfork: bool) -> Result<KArc<LxProcess>
         umask: IrqMutex::new(umask),
         exe: IrqMutex::new(exe),
         rlimits: IrqMutex::new(rlimits),
+        no_new_privs: core::sync::atomic::AtomicBool::new(
+            parent.no_new_privs.load(core::sync::atomic::Ordering::Relaxed),
+        ),
+        auxv: IrqMutex::new(auxv),
         vfork: IrqMutex::new(Vfork { released: !vfork, waiter: None }),
         // A child starts with no timer (setitimer(2)).
         alarm: IrqMutex::new(None),
@@ -487,6 +509,15 @@ pub fn each(mut f: impl FnMut(&LxProcess)) {
     for p in TABLE.lock().iter() {
         f(p);
     }
+}
+
+/// A descriptor argument's slot: its low 32 bits. Linux's system calls
+/// take descriptors as int or unsigned int, and the x86-64 C ABI leaves
+/// an int argument's upper register half undefined, so programs may pass
+/// garbage there (Ubuntu 26.04's glycin did; fdbits_test). -1 stays an
+/// invalid slot (0xffff_ffff).
+pub fn slot(fd: u64) -> u64 {
+    u64::from(fd as u32)
 }
 
 pub fn get(pid: u64) -> Option<KArc<LxProcess>> {
@@ -718,7 +749,7 @@ impl LxProcess {
     /// The open file description of `fd`.
     pub fn fd(&self, fd: u64) -> Option<KArc<Fd>> {
         let fds = self.fds.lock();
-        usize::try_from(fd)
+        usize::try_from(slot(fd))
             .ok()
             .and_then(|i| fds.get(i))
             .and_then(|s| s.as_ref())
@@ -728,7 +759,7 @@ impl LxProcess {
     /// `fd`'s close-on-exec flag; None if it is not open.
     pub fn cloexec(&self, fd: u64) -> Option<bool> {
         let fds = self.fds.lock();
-        usize::try_from(fd)
+        usize::try_from(slot(fd))
             .ok()
             .and_then(|i| fds.get(i))
             .and_then(|s| s.as_ref())
@@ -738,7 +769,7 @@ impl LxProcess {
     /// Sets `fd`'s close-on-exec flag; false if it is not open.
     pub fn set_cloexec(&self, fd: u64, on: bool) -> bool {
         let mut fds = self.fds.lock();
-        match usize::try_from(fd).ok().and_then(|i| fds.get_mut(i)).and_then(|s| s.as_mut()) {
+        match usize::try_from(slot(fd)).ok().and_then(|i| fds.get_mut(i)).and_then(|s| s.as_mut()) {
             Some(s) => {
                 s.cloexec = on;
                 true
@@ -755,7 +786,8 @@ impl LxProcess {
     /// Puts `fd` in the lowest free slot at or above `min` (F_DUPFD);
     /// EMFILE when there is none, EINVAL for `min` beyond the limit.
     pub fn install_from(&self, fd: KArc<Fd>, cloexec: bool, min: u64) -> Result<u64, u16> {
-        let min = usize::try_from(min).ok().filter(|&m| m < MAX_FDS).ok_or(super::errno::EINVAL)?;
+        let min =
+            usize::try_from(slot(min)).ok().filter(|&m| m < MAX_FDS).ok_or(super::errno::EINVAL)?;
         let mut fds = self.fds.lock();
         let slot = Some(Slot { fd, cloexec });
         if let Some(i) = (min..fds.len()).find(|&i| fds[i].is_none()) {
@@ -776,8 +808,10 @@ impl LxProcess {
     /// Puts `fd` at slot `target` (dup2, dup3), closing what was there;
     /// EBADF for a slot beyond the limit.
     pub fn install_at(&self, target: u64, fd: KArc<Fd>, cloexec: bool) -> Result<(), u16> {
-        let at =
-            usize::try_from(target).ok().filter(|&t| t < MAX_FDS).ok_or(super::errno::EBADF)?;
+        let at = usize::try_from(slot(target))
+            .ok()
+            .filter(|&t| t < MAX_FDS)
+            .ok_or(super::errno::EBADF)?;
         let old = {
             let mut fds = self.fds.lock();
             while fds.len() <= at {
@@ -825,7 +859,7 @@ impl LxProcess {
     pub fn close(&self, fd: u64) -> bool {
         let taken = {
             let mut fds = self.fds.lock();
-            usize::try_from(fd).ok().and_then(|i| fds.get_mut(i)).and_then(Option::take)
+            usize::try_from(slot(fd)).ok().and_then(|i| fds.get_mut(i)).and_then(Option::take)
         };
         // Dropped outside the table's lock (a pipe end counts down).
         taken.is_some()
@@ -866,6 +900,14 @@ pub fn dump() {
             let Some(Slot { fd, .. }) = slot else { continue };
             match &fd.object {
                 Object::Epoll(e) => super::epoll::dump(p.pid, i, e),
+                Object::TimerFd(t) => {
+                    let (clock, next, interval, ticks) = t.describe();
+                    crate::info!(
+                        "lx: pid {} fd {i}: timerfd (clock {clock}, next {next:?} ns, interval {interval} ns, {ticks} expirations), {} waiting",
+                        p.pid,
+                        t.waiters.len()
+                    );
+                }
                 Object::EventFd(e) => {
                     let (count, semaphore) = e.describe();
                     crate::info!(
