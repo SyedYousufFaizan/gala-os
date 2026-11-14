@@ -3979,12 +3979,22 @@ formats.
 
 ### Lock-order checking (lockdep)
 
-Debug kernels, host tests and gala-um panic with `lockdep: X taken while
-holding Y, but Y was taken while holding X before` on the first
-lock-order inversion (ARCHITECTURE "Built in early"), and with `lockdep:
-releasing X turns interrupts on while Y is still held` when IrqMutex
-guards drop out of order.
+Debug kernels, host tests and gala-um panic with `lockdep: X taken by
+thread N while holding Y (taken by thread M), but Y was taken while
+holding X before` on the first lock-order inversion (ARCHITECTURE "Built
+in early"), and with `lockdep: releasing X turns interrupts on while Y
+is still held (locks released out of order); Y was taken by thread M,
+and X is released by thread N` when IrqMutex guards drop out of order.
 
+- **Read the two threads first** in the out-of-order message. The held
+  locks belong to the CPU, not to the thread, so when M and N differ the
+  bug is not where the panic is: thread M left Y held across a wait, a
+  yield or its end, and thread N is merely the next thread to run on
+  that CPU and release a lock. Look for Y's guard living across a
+  `sched::wait`, `yield_now`, `sleep_ms` or a blocking call in M, not in
+  the code the panic points at. Thread numbers are the log's own
+  (`14`, or `14.2` once a thread record has been reused).
+- A class name longer than 96 bytes is shown cut, with `..`.
 - A class is the protected type, so give a lock over a plain type
   (`u32`, `Option<id>`, `()`) a name with `IrqMutex::named("module.field",
   value)`, or unrelated locks of that type share a class and report
