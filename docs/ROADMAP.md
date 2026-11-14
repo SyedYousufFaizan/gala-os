@@ -3661,11 +3661,19 @@ the next breakthroughs).
    its data and a PNG through its file-png plug-in, blurs and inverts it
    with GEGL from script-fu (each plug-in a process, tiles handed over in
    a System V segment) and saves a PNG whose SHA-256 is the one GIMP
-   writes on Ubuntu 26.04, its whole transcript Ubuntu's. Next: its
-   window (`gimp` over Wayland with a screen check: the image opened, a
-   filter from the menu, File > Export), which needs GTK's theme and
-   icon files and fonts in the root; then all of its plug-ins (about 130
-   processes queried at a first start). The Linux roots moved to Ubuntu
+   writes on Ubuntu 26.04, its whole transcript Ubuntu's. Its window
+   (`lx_gimp`, `user/lx/gimp/gui.sh`): GIMP 3.2 over gala's Wayland
+   server, its window and its welcome dialog shown (screendumps
+   `test-lx_gimp.screen0.png` and `screen2.png`), the dialog closed with
+   Escape and GIMP quit with Ctrl+Q, exit status 0; what it needed:
+   `/proc/<pid>/fd` links (GLib names an icon file by its link for
+   glycin), the GSettings schemas compiled at assembly, GIMP's whole icon
+   theme (GTK aborts on a missing icon). Its transcript (the exit status)
+   is written, not recorded on Linux yet. Next: the image itself on the
+   canvas (the screen check quits before `in.png` shows), a filter from
+   the menu and File > Export with the saved file compared with Linux's;
+   then all of its plug-ins (about 130 processes queried at a first
+   start); its welcome dialog stays white (not drawn yet). The Linux roots moved to Ubuntu
    26.04 LTS with it (WORKFLOW "Linux roots from Ubuntu 26.04"): glibc
    2.43, libffi, libwayland-client, weston and the "gtk3", "x11" and
    "gimp" roots are resolute's (traced on 26.04), and every `lx_`

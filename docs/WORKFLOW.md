@@ -2267,6 +2267,13 @@ A root is what its workload opened on real 26.04, traced:
   `<dir>/` entries. A start queries every plug-in in the plug-ins and
   extensions directories (each a process): the root has only those the
   scenario uses (script-fu and file-png).
+- Scenario `lx_gimp` (about 180 s of run time): `sh /lx/gimp/gui.sh`
+  starts `gimp-3.2` on in.png over the session's Wayland display, its
+  output in `$HOME/gimp.log`; GIMP_SCREEN dumps the screen when the
+  welcome dialog shows (`target/debug/test-lx_gimp.screen0.png`) and once
+  it is closed (`screen2.png`), then Ctrl+Q. A screen step dumps only
+  when it has pixels to check (a `Varied` over the screen will do);
+  `XTASK_SHOTS` is QEMU's screen, black for a `presenter=test` desktop.
 - Reading a run: `XTASK_EVENTS=ipc` shows GIMP's segment (`lx shm`:
   gimp-console gets, attaches and removes it; each plug-in attaches and
   detaches; it is destroyed at the last detach), `XTASK_EVENTS=syscall`
