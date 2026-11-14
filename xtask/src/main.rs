@@ -16515,13 +16515,15 @@ const GTK_SCREEN: ScreenCheck = ScreenCheck {
     ],
 };
 
-/// GIMP 3.2's window (`lx_gimp`): once a window of GIMP's is shown, its
-/// picture; then Ctrl+Q quits GIMP (the imported image is unchanged, so
-/// it asks nothing).
+/// GIMP 3.2's window (`lx_gimp`): GIMP's window, then its "Welcome to
+/// GIMP" dialog (a first start), which has the focus: its picture, then
+/// Escape closes it and Ctrl+Q quits GIMP (the imported image is
+/// unchanged, so it asks nothing).
 const GIMP_SCREEN: ScreenCheck = ScreenCheck {
-    marker: "desktop: shown window",
+    marker: "desktop: shown window 'GNU Image Manipulation Program'",
     steps: &[
-        ScreenStep { after: "", input: &[], pixels: &[] },
+        ScreenStep { after: "desktop: shown window 'Welcome to GIMP", input: &[], pixels: &[] },
+        ScreenStep { after: "", input: &["sendkey esc"], pixels: &[] },
         ScreenStep { after: "", input: &["sendkey ctrl-q"], pixels: &[] },
     ],
 };
