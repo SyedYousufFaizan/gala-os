@@ -11780,8 +11780,16 @@ The running parts (milestone 1; `lxrun=`):
   links named as Linux's initial namespaces (`user:[4026531837]`: one set
   for all), `exe` (set at each execve) and `auxv` (the pairs up to
   AT_NULL); `self` is the caller's pid in the walk and for readlink.
-  What changes as a process runs (maps, stat, status, fd) is not there
-  yet (files generated when opened, proc_test's, are the design to make).
+  readlink of `/proc/<pid>/fd/<n>` (and `self`'s) answers from that
+  process's descriptor table (`file::fd_link`): a file's path as it sees
+  it, `pipe:[N]`, `socket:[N]`, `anon_inode:[eventfd]` and the like, a
+  device's path; ENOENT for a descriptor not open. GLib names an open
+  file so before handing it to a glycin loader (GTK's icons). Limits:
+  the `fd` directories are not listed or opened (readlink only), and
+  N is fstat's inode number, 1 for every pipe and socket. What changes
+  as a process runs (maps, stat, status, the fd directory) is not there
+  yet (files generated when opened, proc_test's, are the design to
+  make).
 - **Namespaces are refused** (`procfs::namespace_refusal`; procfs_test):
   gala makes none. clone, clone3 and unshare asking for a user namespace
   get ENOSPC (Linux's answer at max_user_namespaces 0); another without
@@ -12976,7 +12984,11 @@ real Linux does not print, or a ledger line):
   at assembly as dpkg and its triggers would: the MIME database's
   `mime.cache` (`update-mime-database` from shared-mime-info's XML;
   gdk-pixbuf picks a loader by MIME type through GIO, so without it GTK
-  aborts on its own PNG icons). The user database is not the root's:
+  aborts on its own PNG icons) and the GSettings schemas'
+  `gschemas.compiled` (`glib-compile-schemas` from the root's schema
+  XML: GTK's; GIMP stops without it). A directory a program looks for
+  with nothing used beneath it is a `<dir>/` entry (each GIMP plug-in
+  checks for `/usr/share/locale`). The user database is not the root's:
   the kernel makes `/etc/passwd` and `/etc/group` from gala's accounts
   ("The lx module", Linux identity); the user's home is their profile
   (`/Users/gala`), where fontconfig keeps its cache.

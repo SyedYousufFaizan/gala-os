@@ -1898,13 +1898,75 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
         name: "gimp",
         debs: &[
             Deb {
+                pool: "main/a/adwaita-icon-theme/adwaita-icon-theme_50.0-1_all.deb",
+                sha256: "db9f11a94f993de589e7d8879664cb371eb8aefc8a2bce100d923951e4ef30c8",
+                files: &[
+                    "usr/share/icons/Adwaita/16x16/devices/",
+                    "usr/share/icons/Adwaita/symbolic/actions/edit-find-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/devices/drive-harddisk-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/places/user-desktop-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/places/user-home-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/places/user-trash-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/ui/pan-down-symbolic.svg",
+                ],
+            },
+            Deb {
+                pool: "main/f/fonts-urw-base35/fonts-urw-base35_20200910-8build1_all.deb",
+                sha256: "be59254289c670d5c6580ce381995292aa05c9dd4bc5fa65b9dbaa527b55adda",
+                files: &[
+                    "etc/fonts/conf.d/61-urw-bookman.conf",
+                    "etc/fonts/conf.d/61-urw-c059.conf",
+                    "etc/fonts/conf.d/61-urw-d050000l.conf",
+                    "etc/fonts/conf.d/61-urw-fallback-backwards.conf",
+                    "etc/fonts/conf.d/61-urw-fallback-generics.conf",
+                    "etc/fonts/conf.d/61-urw-gothic.conf",
+                    "etc/fonts/conf.d/61-urw-nimbus-mono-ps.conf",
+                    "etc/fonts/conf.d/61-urw-nimbus-roman.conf",
+                    "etc/fonts/conf.d/61-urw-nimbus-sans.conf",
+                    "etc/fonts/conf.d/61-urw-p052.conf",
+                    "etc/fonts/conf.d/61-urw-standard-symbols-ps.conf",
+                    "etc/fonts/conf.d/61-urw-z003.conf",
+                    "usr/share/fontconfig/conf.avail/urw-bookman.conf",
+                    "usr/share/fontconfig/conf.avail/urw-c059.conf",
+                    "usr/share/fontconfig/conf.avail/urw-d050000l.conf",
+                    "usr/share/fontconfig/conf.avail/urw-fallback-backwards.conf",
+                    "usr/share/fontconfig/conf.avail/urw-fallback-generics.conf",
+                    "usr/share/fontconfig/conf.avail/urw-gothic.conf",
+                    "usr/share/fontconfig/conf.avail/urw-nimbus-mono-ps.conf",
+                    "usr/share/fontconfig/conf.avail/urw-nimbus-roman.conf",
+                    "usr/share/fontconfig/conf.avail/urw-nimbus-sans.conf",
+                    "usr/share/fontconfig/conf.avail/urw-p052.conf",
+                    "usr/share/fontconfig/conf.avail/urw-standard-symbols-ps.conf",
+                    "usr/share/fontconfig/conf.avail/urw-z003.conf",
+                    "usr/share/fonts/X11/",
+                    "usr/share/fonts/X11/Type1/",
+                    "usr/share/fonts/opentype/urw-base35/NimbusMonoPS-Regular.otf",
+                    "usr/share/fonts/opentype/urw-base35/NimbusSans-Bold.otf",
+                    "usr/share/fonts/opentype/urw-base35/NimbusSans-Italic.otf",
+                    "usr/share/fonts/opentype/urw-base35/NimbusSans-Regular.otf",
+                    "usr/share/fonts/type1/",
+                    "usr/share/fonts/type1/urw-base35/",
+                ],
+            },
+            Deb {
                 pool: "universe/g/gimp/gimp_3.2.2-1_amd64.deb",
                 sha256: "b7e75b9cb6554048adae11ea658b7fd07ed04dc3913460ff108e8bc6b2742519",
                 files: &[
+                    "usr/bin/gimp-3.2",
                     "usr/bin/gimp-console-3.2",
                     "usr/lib/x86_64-linux-gnu/gimp/3.0/environ/default.env",
                     "usr/lib/x86_64-linux-gnu/gimp/3.0/extensions/",
                     "usr/lib/x86_64-linux-gnu/gimp/3.0/interpreters/default.interp",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libcolor-selector-cmyk.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libcolor-selector-water.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libcolor-selector-wheel.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libcontroller-linux-input.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libcontroller-midi.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libdisplay-filter-aces-rrt.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libdisplay-filter-clip-warning.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libdisplay-filter-color-blind.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libdisplay-filter-gamma.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libdisplay-filter-high-contrast.so",
                     "usr/lib/x86_64-linux-gnu/gimp/3.0/plug-ins/file-png/file-png",
                     "usr/lib/x86_64-linux-gnu/gimp/3.0/plug-ins/script-fu/script-fu",
                 ],
@@ -1913,8 +1975,12 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "universe/g/gimp/gimp-data_3.2.2-1_all.deb",
                 sha256: "f771973a2427be5e2cfaf033e48a5373880046e55707f0f62ab01329ee189372",
                 files: &[
+                    "etc/gimp/3.0/controllerrc",
+                    "etc/gimp/3.0/gimp.css",
                     "etc/gimp/3.0/gimprc",
+                    "etc/gimp/3.0/sessionrc",
                     "etc/gimp/3.0/templaterc",
+                    "etc/gimp/3.0/toolrc",
                     "etc/gimp/3.0/unitrc",
                     "usr/share/gimp/3.0/brushes/Basic/1-pixel.vbr",
                     "usr/share/gimp/3.0/brushes/Basic/Block-01.vbr",
@@ -2068,6 +2134,93 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                     "usr/share/gimp/3.0/gradients/gimp-obsolete-files/Mexican_flag_smooth.ggr",
                     "usr/share/gimp/3.0/gradients/gimp-obsolete-files/Romanian_flag.ggr",
                     "usr/share/gimp/3.0/gradients/gimp-obsolete-files/Romanian_flag_smooth.ggr",
+                    "usr/share/gimp/3.0/icons/Default/64x64/apps/",
+                    "usr/share/gimp/3.0/icons/Default/index.theme",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-new-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-open-recent-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-open-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-revert-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-save-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-delete-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-redo-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-undo-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/folder-new-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-anchor-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channels-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-close-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-default-colors-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-device-status-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-proof-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-duplicate-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-dynamics-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-effects-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gegl-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-images-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layer-mask-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layer-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layers-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-linked-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-multi-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-menu-left-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-menu-right-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-merge-down-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-navigation-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-path-stroke-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-paths-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pattern-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-theme-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-quick-mask-off-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-reset-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-replace-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-to-path-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-shred-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-swap-colors-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-brightness-contrast-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-bucket-fill-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-clone-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-color-picker-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-crop-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-curves-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-eraser-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-free-select-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-fuzzy-select-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-levels-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-move-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-offset-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-options-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-paintbrush-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-path-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-rect-select-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-smudge-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-text-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-threshold-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-unified-transform-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-warp-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-zoom-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-undo-history-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-user-manual-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-visible-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-zoom-follow-window-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-down-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-top-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-up-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-cancel-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-edit-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-select-font-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/list-add-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/list-remove-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/object-flip-horizontal-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/object-flip-vertical-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/view-refresh-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/logo/unisize/gimp-wilber-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Legacy/index.theme",
+                    "usr/share/gimp/3.0/icons/hicolor/index.theme",
+                    "usr/share/gimp/3.0/icons/hicolor/scalable/actions/switch-off-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/hicolor/scalable/actions/switch-on-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/hicolor/scalable/status/",
+                    "usr/share/gimp/3.0/images/gimp-splash.png",
+                    "usr/share/gimp/3.0/menus/image-menu.ui",
                     "usr/share/gimp/3.0/palettes/Bears.gpl",
                     "usr/share/gimp/3.0/palettes/Bgold.gpl",
                     "usr/share/gimp/3.0/palettes/Blues.gpl",
@@ -2216,6 +2369,59 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                     "usr/share/gimp/3.0/scripts/weave.scm",
                     "usr/share/gimp/3.0/scripts/xach-effect.scm",
                     "usr/share/gimp/3.0/tags/gimp-tags-default.xml",
+                    "usr/share/gimp/3.0/themes/Default/common-dark.css",
+                    "usr/share/gimp/3.0/themes/Default/common.css",
+                    "usr/share/gimp/3.0/themes/Default/gimp-dark.css",
+                    "usr/share/gimp/3.0/themes/Default/gimp-gray.css",
+                    "usr/share/gimp/3.0/themes/Default/gimp-light.css",
+                    "usr/share/gimp/3.0/themes/Default/ui/separator-handle-h-dark.svg",
+                    "usr/share/gimp/3.0/themes/Default/ui/separator-handle-v-dark.svg",
+                    "usr/share/gimp/3.0/themes/System/gimp.css",
+                    "usr/share/gimp/3.0/tool-presets/Crop/16_10.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/16_9.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/3_2-Landscape.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/3_2-Portrait.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/4_3-Landscape.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/4_3-Portrait.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/Square.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Crop-16-9.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Crop-Composition.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/FX-Confetti.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/FX-Radial-Softlight.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Fill-Paper.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Glow-Lights.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Smooth-Clone.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Vignette.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Airbrush-Color-From-Gradient.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Airbrush.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Basic-Knife.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Basic-Round-Detail.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Basic-Round.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Bristles.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Eraser-Hard.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Noise.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Paintbrush-Color-From-Gradient.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Pencil-Color-From-Gradient.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Smudge-Rough.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Smudge-Soft.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Soft-Oil.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Splatters.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Structure.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Vegetal.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Selection/Circle-200px.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Selection/Feathered-Selection.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Blue-Pen.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Eraser-Soft.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Ink-Smooth.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Ink-Thin.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Pencil-Soft.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Pencil.gtp",
+                    "usr/share/icons/hicolor/16x16/apps/gimp.png",
+                    "usr/share/icons/hicolor/256x256/apps/gimp.png",
+                    "usr/share/icons/hicolor/32x32/apps/gimp.png",
+                    "usr/share/icons/hicolor/48x48/apps/gimp.png",
+                    "usr/share/icons/hicolor/64x64/apps/gimp.png",
+                    "usr/share/icons/hicolor/scalable/apps/gimp.svg",
                     "usr/share/locale/",
                 ],
             },
@@ -2289,6 +2495,16 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/p/pango1.0/gir1.2-pango-1.0_1.57.0-1_amd64.deb",
                 sha256: "799885145fe5982478fc53ce0206072a7dd402d6e42f5f7a951a78e9e49bcb84",
                 files: &["usr/lib/x86_64-linux-gnu/girepository-1.0/Pango-1.0.typelib"],
+            },
+            Deb {
+                pool: "main/g/glycin/glycin-loaders_2.1.1+ds-0ubuntu1_amd64.deb",
+                sha256: "2b94910793dddd6cc6cc689bea65c526e3c3e3dfd2125f4464c239fc6e5856d4",
+                files: &["usr/libexec/glycin-loaders/2+/glycin-image-rs"],
+            },
+            Deb {
+                pool: "main/h/hicolor-icon-theme/hicolor-icon-theme_0.18-2build1_all.deb",
+                sha256: "d05726c4a4dc15079ed2bd6ef633e7d6dca4c4be20296148b1c558dbd5a6c570",
+                files: &["usr/share/icons/hicolor/scalable/actions/"],
             },
             Deb {
                 pool: "main/a/acl/libacl1_2.3.2-2_amd64.deb",
@@ -2426,6 +2642,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 files: &[
                     "usr/lib/x86_64-linux-gnu/gconv/gconv-modules.cache",
                     "usr/lib/x86_64-linux-gnu/libmvec.so.1",
+                    "usr/lib64/",
                 ],
             },
             Deb {
@@ -2644,6 +2861,29 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 files: &[
                     "usr/lib/x86_64-linux-gnu/libgpgmepp.so.7",
                     "usr/lib/x86_64-linux-gnu/libgpgmepp.so.7.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/g/ghostscript/libgs-common_10.06.0~dfsg-3ubuntu1_all.deb",
+                sha256: "be7c90d171aff0597b35ebdb2eefd5a4a8e50a444bcb81ad43c2d120387d3cfb",
+                files: &["usr/share/color/icc/"],
+            },
+            Deb {
+                pool: "main/g/gtk+3.0/libgtk-3-common_3.24.52-0ubuntu1_all.deb",
+                sha256: "bd402f87b106a975272fb12cdeb49d26ff6521e4c909b37b4b091797bf2a732d",
+                files: &[
+                    "usr/share/glib-2.0/schemas/org.gtk.Settings.ColorChooser.gschema.xml",
+                    "usr/share/glib-2.0/schemas/org.gtk.Settings.Debug.gschema.xml",
+                    "usr/share/glib-2.0/schemas/org.gtk.Settings.EmojiChooser.gschema.xml",
+                    "usr/share/glib-2.0/schemas/org.gtk.Settings.FileChooser.gschema.xml",
+                ],
+            },
+            Deb {
+                pool: "main/libg/libgudev/libgudev-1.0-0_238-7build1_amd64.deb",
+                sha256: "fdf0708cb0fbc95c553e3379cf77f6b1c9bb485cf3244c6246c31c7312467c81",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgudev-1.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgudev-1.0.so.0.3.0",
                 ],
             },
             Deb {
@@ -2991,6 +3231,14 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 ],
             },
             Deb {
+                pool: "main/s/systemd/libudev1_259.5-0ubuntu3_amd64.deb",
+                sha256: "c8acd1fcb6b4041be7697692f47289d3e147462fcb5c1df722848a3096e1cbd3",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libudev.so.1",
+                    "usr/lib/x86_64-linux-gnu/libudev.so.1.7.12",
+                ],
+            },
+            Deb {
                 pool: "universe/s/suitesparse/libumfpack6_7.12.2+dfsg-1ubuntu1_amd64.deb",
                 sha256: "6da9ad4e038b4f332e11713d54fa49fb9546593e3ae7261121cfb29e43cac947",
                 files: &[
@@ -3055,9 +3303,37 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 ],
             },
             Deb {
+                pool: "main/p/poppler-data/poppler-data_0.4.12-1build1_all.deb",
+                sha256: "6d2d873d2a77a76ea2a156c15a5ae798fe3711d8736cd2ff3872f53d57567e0e",
+                files: &[
+                    "usr/share/fonts/cMap/",
+                    "usr/share/fonts/cmap/",
+                    "usr/share/poppler/cMap/Adobe-CNS1/",
+                    "usr/share/poppler/cMap/Adobe-GB1/",
+                    "usr/share/poppler/cMap/Adobe-Japan1/",
+                    "usr/share/poppler/cMap/Adobe-Japan2/",
+                    "usr/share/poppler/cMap/Adobe-Korea1/",
+                ],
+            },
+            Deb {
+                pool: "main/p/python3.14/python3.14_3.14.4-1_amd64.deb",
+                sha256: "243b02ca4ce4008daad2cda307b21e1f39cda04b2e46a087ea6fc41592c2690a",
+                files: &["usr/share/pixmaps/"],
+            },
+            Deb {
                 pool: "main/t/tzdata/tzdata_2026a-3ubuntu1_all.deb",
                 sha256: "88bfe1faddda7b905746429af8ee26ac5ace881c8fb9a994de8b54572445e728",
                 files: &["etc/localtime=usr/share/zoneinfo/Etc/UTC", "usr/share/zoneinfo/Etc/UTC"],
+            },
+            Deb {
+                pool: "main/x/xfonts-encodings/xfonts-encodings_1.0.5-0ubuntu3_all.deb",
+                sha256: "1d0610635e1fe757c8df0ec2c2cef511203c7e7bf81bbff332031c8bf87b1847",
+                files: &["usr/share/fonts/X11/encodings/", "usr/share/fonts/X11/encodings/large/"],
+            },
+            Deb {
+                pool: "main/x/xfonts-utils/xfonts-utils_7.7+7build1_amd64.deb",
+                sha256: "97e8c7ce05e09ea5b766c99f4d77e20cb70db61396c2e83bb43715c6e2f0ac1e",
+                files: &["usr/share/fonts/X11/util/"],
             },
         ],
     },
@@ -7378,6 +7654,7 @@ fn fetch_linux_root(r: &LinuxRoot, path: &str) -> Result {
         fs::remove_dir_all(&tree).map_err(|e| format!("cleaning {tree:?}: {e}"))?;
     }
     update_mime_database(&dir)?;
+    compile_gsettings_schemas(&dir)?;
     write(&done, &format!("{} packages\n", r.debs.len()))?;
     if !root().join(path).exists() {
         return Err(format!("{path} is not in the Linux root {:?} (LINUX_ROOTS)", r.name));
@@ -7407,6 +7684,31 @@ fn update_mime_database(dir: &Path) -> Result {
         let path = entry.path();
         let gone = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
         gone.map_err(|e| format!("removing {path:?}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// What GLib's installation does for the GSettings schemas (its dpkg
+/// trigger): `gschemas.compiled` made from `usr/share/glib-2.0/schemas`'s
+/// XML by the host's `glib-compile-schemas` (libglib2.0-bin; the compiled
+/// format is GLib's GVariant database, read the same by 26.04's GLib).
+/// Only the compiled file is kept: GLib reads nothing else. Without it a
+/// GSettings user stops ("No GSettings schemas are installed": GIMP's
+/// window). Nothing to do for a root without schemas.
+fn compile_gsettings_schemas(dir: &Path) -> Result {
+    let schemas = dir.join("usr/share/glib-2.0/schemas");
+    if !schemas.exists() {
+        return Ok(());
+    }
+    run_quiet(Command::new("glib-compile-schemas").arg(&schemas))
+        .map_err(|e| format!("{e} (glib-compile-schemas is in libglib2.0-bin)"))?;
+    for entry in fs::read_dir(&schemas).map_err(|e| format!("reading {schemas:?}: {e}"))?.flatten()
+    {
+        if entry.file_name() == "gschemas.compiled" {
+            continue;
+        }
+        let path = entry.path();
+        fs::remove_file(&path).map_err(|e| format!("removing {path:?}: {e}"))?;
     }
     Ok(())
 }
@@ -13174,6 +13476,22 @@ const SCENARIOS: &[Scenario] = &[
         ],
     },
     Scenario {
+        // GIMP's window (LD step 9): Ubuntu 26.04's GIMP 3.2 (LINUX_ROOTS
+        // "gimp" with "gtk3" and "x11") over gala's Wayland server, opening
+        // user/lx/gimp/in.png. The screen check (GIMP_SCREEN) sees the
+        // image window, then quits GIMP with Ctrl+Q.
+        name: "lx_gimp",
+        cmdline: "qemu_exit presenter=test wayland=on events=wayland lxrun=/usr/bin/gimp-3.2 lxargs=gimp-3.2%20-n%20-s%20-f%20/lx/gimp/in.png lxenv=XDG_RUNTIME_DIR=/run/user/1000%20WAYLAND_DISPLAY=wayland-0%20HOME=/Users/gala%20PATH=/usr/bin:/bin",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "personality linux",
+            "desktop: shown window",
+            "xtask: screen ok",
+            "run: end /usr/bin/gimp-3.2",
+            BOOT_OK_MARKER,
+        ],
+    },
+    Scenario {
         // X11 through rootless Xwayland (LD step 5): xterm 390 on display
         // :0, which the Wayland server holds (`xwayland=on`); its connect
         // starts Ubuntu's Xwayland (LINUX_ROOTS "x11"), whose window
@@ -13746,6 +14064,12 @@ const MODULE_SETS: &[(&str, &str)] = &[
     ("lx_gimp_batch", "gtk3"),
     ("lx_gimp_batch", "wayland_client"),
     ("lx_gimp_batch", "glibc"),
+    ("lx_gimp", "gimp_batch"),
+    ("lx_gimp", "gimp"),
+    ("lx_gimp", "x11"),
+    ("lx_gimp", "gtk3"),
+    ("lx_gimp", "wayland_client"),
+    ("lx_gimp", "glibc"),
     ("lx_xdesktop", "xdesktop"),
     ("lx_xdesktop", "x11"),
     ("lx_xdesktop", "gtk3"),
@@ -16191,6 +16515,17 @@ const GTK_SCREEN: ScreenCheck = ScreenCheck {
     ],
 };
 
+/// GIMP 3.2's window (`lx_gimp`): once a window of GIMP's is shown, its
+/// picture; then Ctrl+Q quits GIMP (the imported image is unchanged, so
+/// it asks nothing).
+const GIMP_SCREEN: ScreenCheck = ScreenCheck {
+    marker: "desktop: shown window",
+    steps: &[
+        ScreenStep { after: "", input: &[], pixels: &[] },
+        ScreenStep { after: "", input: &["sendkey ctrl-q"], pixels: &[] },
+    ],
+};
+
 /// user/lx/gtk_test under X11 (`lx_gtk_x11`, `--input`): its X window
 /// framed by shasha at (64, 48), the client area (320 x 200) from (65,
 /// 81): GTK's background, its label and its button. A click on the button
@@ -17378,6 +17713,7 @@ const SCREEN_SCENARIOS: &[(&str, ScreenCheck)] = &[
     ("lx_wl_input", WL_INPUT_SCREEN),
     ("lx_simple_shm", SIMPLE_SHM_SCREEN),
     ("lx_gtk", GTK_SCREEN),
+    ("lx_gimp", GIMP_SCREEN),
     ("lx_gtk_x11", GTK_X11_SCREEN),
     ("lx_xterm", XTERM_SCREEN),
     ("lx_xdesktop", XDESKTOP_SCREEN),

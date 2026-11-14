@@ -18,6 +18,12 @@ readlink(/proc/self/ns/nothing) = -2 (ENOENT)
 -- /proc/self/exe and auxv
 readlink(/proc/self/exe) is absolute = yes
 /proc/self/auxv is PR_GET_AUXV's vector up to AT_NULL = yes
+-- /proc/self/fd links (GLib names an open file by its link)
+a directory's: getcwd() = yes
+  through /proc/<pid>, the same = yes
+a pipe's: pipe:[N] = yes
+an eventfd's = 20 "anon_inode:[eventfd]"
+readlink(/proc/self/fd/999) (not open) = -2 (ENOENT)
 -- opening /proc
 open(/proc, O_PATH|O_DIRECTORY) = yes
 fstatat(it, sys/kernel/overflowuid) = 0

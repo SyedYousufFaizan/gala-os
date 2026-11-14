@@ -2014,6 +2014,14 @@ pub fn readlinkat(call: &Call<'_>, dirfd: u64, path: u64, buf: u64, size: u64) -
         call.process.write(buf, &text[..n.min(20)]).map_err(|_| EFAULT)?;
         return Ok(n as u64);
     }
+    if let Some((pid, n)) = proc_fd(&bytes, call.process.id)
+        && call.lx.root == ramfs::ROOT
+    {
+        let link = fd_link(call, pid, n)?;
+        let k = link.len().min(size as usize);
+        call.process.write(buf, &link[..k]).map_err(|_| EFAULT)?;
+        return Ok(k as u64);
+    }
     if bytes == PROC_SELF_EXE {
         let exe = path_of(call.lx.root, *call.lx.exe.lock())?;
         let n = exe.len().min(size as usize);
@@ -2031,6 +2039,73 @@ pub fn readlinkat(call: &Call<'_>, dirfd: u64, path: u64, buf: u64, size: u64) -
     })?;
     call.process.write(buf, &target).map_err(|_| EFAULT)?;
     Ok(target.len() as u64)
+}
+
+/// `/proc/self/fd/<n>` or `/proc/<pid>/fd/<n>` (`me`: the caller's pid):
+/// the pid and the descriptor number.
+fn proc_fd(path: &[u8], me: u64) -> Option<(u64, u64)> {
+    let rest = path.strip_prefix(b"/proc/")?;
+    let (who, rest) = rest.split_at(rest.iter().position(|&c| c == b'/')?);
+    let n = rest.strip_prefix(b"/fd/")?;
+    let number = |s: &[u8]| -> Option<u64> {
+        if s.is_empty() || s.len() > 19 || !s.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        Some(s.iter().fold(0u64, |v, &c| v * 10 + u64::from(c - b'0')))
+    };
+    let pid = if who == b"self" { me } else { number(who)? };
+    Some((pid, number(n)?))
+}
+
+/// What `/proc/<pid>/fd/<n>` links to (proc(5); procfs_test): a file's or
+/// directory's path as that process sees it, `pipe:[N]` and `socket:[N]`
+/// (N: the inode number fstat gives, 1 for every pipe and socket in
+/// gala), an anonymous inode's `anon_inode:[<kind>]`, a device's path.
+/// ENOENT for no such process or descriptor. GLib names an open file by
+/// it (glycin gets the icon files' names so).
+fn fd_link(call: &Call<'_>, pid: u64, n: u64) -> core::result::Result<Vec<u8>, u16> {
+    let lx =
+        if pid == call.process.id { None } else { Some(super::state::get(pid).ok_or(ENOENT)?) };
+    let owner = lx.as_deref().unwrap_or(&call.lx);
+    let f = owner.fd(n).ok_or(ENOENT)?;
+    let fixed: &[u8] = match &f.object {
+        Object::File(file) => return path_of(owner.root, file.node),
+        Object::PipeRead(_) | Object::PipeWrite(_) => b"pipe:[1]",
+        Object::Nt(nt) if nt.kind == super::ntio::Kind::Pipe => b"pipe:[1]",
+        Object::Socket(_) | Object::Unix(_) => b"socket:[1]",
+        Object::Epoll(_) => b"anon_inode:[eventpoll]",
+        Object::EventFd(_) => b"anon_inode:[eventfd]",
+        Object::TimerFd(_) => b"anon_inode:[timerfd]",
+        Object::Device(d) => match d.kind {
+            DeviceKind::Ptmx => b"/dev/ptmx",
+            DeviceKind::Tty => b"/dev/tty",
+            kind => DEVICES.iter().find(|(_, k)| *k == kind).map_or(b"/dev/null", |(p, _)| *p),
+        },
+        Object::Pty(end) if end.master => b"/dev/ptmx",
+        Object::Pty(end) => {
+            let mut v = Vec::new();
+            v.try_extend_from_slice(b"/dev/pts/").map_err(|_| ENOMEM)?;
+            let mut d = [0u8; 10];
+            let mut k = d.len();
+            let mut x = end.pty.number;
+            loop {
+                k -= 1;
+                d[k] = b'0' + (x % 10) as u8;
+                x /= 10;
+                if x == 0 {
+                    break;
+                }
+            }
+            v.try_extend_from_slice(&d[k..]).map_err(|_| ENOMEM)?;
+            return Ok(v);
+        }
+        // The console a Linux program was started on, and an NT
+        // program's other standard handles: a terminal, as fstat says.
+        Object::Console(_) | Object::Nt(_) => b"/dev/pts/0",
+    };
+    let mut v = Vec::new();
+    v.try_extend_from_slice(fixed).map_err(|_| ENOMEM)?;
+    Ok(v)
 }
 
 /// ftruncate (`fd`) and truncate (`path`).
@@ -2309,6 +2384,16 @@ pub fn directory_of(path: &str) -> NodeId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proc_fd_paths() {
+        assert_eq!(proc_fd(b"/proc/self/fd/7", 40), Some((40, 7)));
+        assert_eq!(proc_fd(b"/proc/52/fd/13", 40), Some((52, 13)));
+        assert_eq!(proc_fd(b"/proc/self/fd/", 40), None);
+        assert_eq!(proc_fd(b"/proc/self/fd/7/x", 40), None);
+        assert_eq!(proc_fd(b"/proc/self/ns/user", 40), None);
+        assert_eq!(proc_fd(b"/proc/x1/fd/3", 40), None);
+    }
     use crate::fs::ramfs::{ROOT, RamFs};
 
     fn w(s: &str) -> Vec<u16> {

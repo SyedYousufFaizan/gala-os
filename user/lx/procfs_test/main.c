@@ -67,6 +67,19 @@ static int decimal(const char *s, i64 n)
 	return 1;
 }
 
+/* Writes v in decimal at s, NUL-terminated. */
+static void put_dec_to(char *s, i64 v)
+{
+	char t[24];
+	int n = 0;
+	do
+		t[n++] = '0' + v % 10;
+	while ((v /= 10) > 0);
+	while (n)
+		*s++ = t[--n];
+	*s = 0;
+}
+
 int main(void)
 {
 	lx_init();
@@ -92,7 +105,7 @@ int main(void)
 	say_text("-- /proc/self/ns");
 	const char *ns[] = { "cgroup", "ipc", "mnt", "net", "pid", "user", "uts" };
 	for (unsigned i = 0; i < sizeof ns / sizeof *ns; i++) {
-		char path[64] = "/proc/self/ns/", other[64] = "/proc/";
+		char path[160] = "/proc/self/ns/", other[160] = "/proc/";
 		lx_memcpy(path + 14, ns[i], lx_strlen(ns[i]) + 1);
 		put(ns[i]);
 		put(": a link ");
@@ -126,6 +139,33 @@ int main(void)
 	 * the file the pairs up to AT_NULL's. */
 	say_bool("/proc/self/auxv is PR_GET_AUXV's vector up to AT_NULL",
 		 n > 0 && n <= size && n % 16 == 0 && lx_memeq(buf, aux, n) && aux[n / 8 - 2] == 0);
+
+	say_text("-- /proc/self/fd links (GLib names an open file by its link)");
+	i64 dot = sys2(SYS_open, ".", O_RDONLY | O_DIRECTORY);
+	char cwd[128], path[160] = "/proc/self/fd/", other[160] = "/proc/";
+	i64 c = sys2(SYS_getcwd, cwd, sizeof cwd);
+	put_dec_to(path + 14, dot);
+	n = link_of(path, a);
+	say_bool("a directory's: getcwd()", c > 1 && n == c - 1 && lx_memeq(a, cwd, n));
+	i64 k = link_of("/proc/self", other + 6);
+	lx_memcpy(other + 6 + k, "/fd/", 4);
+	put_dec_to(other + 10 + k, dot);
+	i64 m = link_of(other, b);
+	say_bool("  through /proc/<pid>, the same", m == n && lx_memeq(a, b, n));
+	int q[2];
+	sys2(SYS_pipe2, q, 0);
+	put_dec_to(path + 14, q[0]);
+	n = link_of(path, a);
+	say_bool("a pipe's: pipe:[N]", n > 7 && lx_memeq(a, "pipe:[", 6) && a[n - 1] == ']' && decimal(a + 6, n - 7));
+	i64 e = sys2(SYS_eventfd2, 0, 0);
+	put_dec_to(path + 14, e);
+	n = link_of(path, a);
+	say_read("an eventfd's", n, a);
+	say_ret("readlink(/proc/self/fd/999) (not open)", link_of("/proc/self/fd/999", a));
+	sys1(SYS_close, e);
+	sys1(SYS_close, q[0]);
+	sys1(SYS_close, q[1]);
+	sys1(SYS_close, dot);
 
 	say_text("-- opening /proc");
 	i64 d = sys2(SYS_open, "/proc", O_PATH | O_DIRECTORY);
