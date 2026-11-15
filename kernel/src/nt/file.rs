@@ -1296,6 +1296,29 @@ const FILE_DEVICE_DISK: u32 = 7;
 const FILE_DEVICE_IS_MOUNTED: u32 = 0x20;
 const FILE_CASE_PRESERVED_NAMES: u32 = 0x2;
 const FILE_UNICODE_ON_DISK: u32 = 0x4;
+/// Every file carries a security descriptor the volume keeps (SECURITY.md).
+const FILE_PERSISTENT_ACLS: u32 = 0x8;
+/// FSCTL_SET_REPARSE_POINT and opens with FILE_OPEN_REPARSE_POINT.
+const FILE_SUPPORTS_REPARSE_POINTS: u32 = 0x80;
+/// FILE_DISPOSITION_POSIX_SEMANTICS and FILE_RENAME_POSIX_SEMANTICS.
+const FILE_SUPPORTS_POSIX_UNLINK_RENAME: u32 = 0x400;
+/// FileLinkInformation (`ramfs::RamFs::links`).
+const FILE_SUPPORTS_HARD_LINKS: u32 = 0x40_0000;
+
+/// What FILE_FS_ATTRIBUTE_INFORMATION reports: a feature of the volume's
+/// that is not reported is one programs do not use, however well it works
+/// -- Office's installer asks for the volume's features, makes no hard
+/// link when they do not include them, and leaves the files that should
+/// have been links empty. Only features that are there are reported;
+/// NTFS has these and more (sparse files, named streams, object IDs,
+/// open by file ID, a USN journal, quotas, compression, encryption,
+/// transactions, case-sensitive search per open), which gala has not.
+const VOLUME_ATTRIBUTES: u32 = FILE_CASE_PRESERVED_NAMES
+    | FILE_UNICODE_ON_DISK
+    | FILE_PERSISTENT_ACLS
+    | FILE_SUPPORTS_REPARSE_POINTS
+    | FILE_SUPPORTS_POSIX_UNLINK_RENAME
+    | FILE_SUPPORTS_HARD_LINKS;
 pub const VOLUME_SERIAL: u32 = 0x6a1a_0001;
 const SECTORS_PER_CLUSTER: u32 = 8;
 const BYTES_PER_SECTOR: u32 = 512;
@@ -1358,8 +1381,7 @@ pub fn volume_information(class: u32) -> Result<(Vec<u8>, usize), NtStatus> {
         }
         FILE_FS_ATTRIBUTE_INFORMATION => {
             grow(&mut b, 12 + 2 * FS_NAME.len())?;
-            let attributes = FILE_CASE_PRESERVED_NAMES | FILE_UNICODE_ON_DISK;
-            put(&mut b, 0, &attributes.to_le_bytes());
+            put(&mut b, 0, &VOLUME_ATTRIBUTES.to_le_bytes());
             put(&mut b, 4, &255u32.to_le_bytes()); // MaximumComponentNameLength
             put(&mut b, 8, &((2 * FS_NAME.len()) as u32).to_le_bytes());
             for (i, &c) in FS_NAME.iter().enumerate() {
@@ -1400,6 +1422,24 @@ mod tests {
         );
         assert_eq!(mode_of(FILE_NON_DIRECTORY_FILE | FILE_DIRECTORY_FILE), 0);
         assert_eq!(mode_of(FILE_DELETE_ON_CLOSE | 0x0002), FILE_DELETE_ON_CLOSE | 0x0002);
+    }
+
+    #[test]
+    fn the_volume_reports_the_features_it_has_and_no_others() {
+        // Hard links are the one Office's installer asks about
+        // (`user/volume_test`): without the bit it makes none.
+        assert_eq!(VOLUME_ATTRIBUTES & FILE_SUPPORTS_HARD_LINKS, FILE_SUPPORTS_HARD_LINKS);
+        assert_eq!(VOLUME_ATTRIBUTES & FILE_SUPPORTS_REPARSE_POINTS, FILE_SUPPORTS_REPARSE_POINTS);
+        assert_eq!(VOLUME_ATTRIBUTES & FILE_PERSISTENT_ACLS, FILE_PERSISTENT_ACLS);
+        // Features gala has not: sparse files, named streams, object IDs,
+        // open by file ID, a USN journal, quotas, compression, encryption,
+        // transactions, case-sensitive search per open.
+        for absent in [
+            0x1u32, 0x10, 0x20, 0x40, 0x1_0000, 0x2_0000, 0x4_0000, 0x20_0000, 0x100_0000,
+            0x200_0000,
+        ] {
+            assert_eq!(VOLUME_ATTRIBUTES & absent, 0, "{absent:#x}");
+        }
     }
 
     #[test]

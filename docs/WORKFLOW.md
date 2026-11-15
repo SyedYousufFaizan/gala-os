@@ -152,6 +152,18 @@ cargo xtask export-tests    # refresh user/bin (CI compares)
   case unimplemented, call `nt::ledger::record(service, what, detail)`
   there (in DLLs: `unsupported(b"dll!Name(case)", detail)`), so real
   programs that need it show up in `target/report/ledger.md`.
+- **What gala has, it reports**: a program asks what the system can do
+  before it uses it, and takes the answer. A feature that works but is
+  not in the answer is a feature no program reaches: gala's volume
+  implemented hard links while
+  FILE_FS_ATTRIBUTE_INFORMATION left out FILE_SUPPORTS_HARD_LINKS, so
+  Office's installer made none and left the files that should have been
+  links empty, which cost Word its start (`file::VOLUME_ATTRIBUTES`,
+  `user/volume_test`). When you add a feature, add it to what reports
+  the system's features (the volume's flags, a device's
+  characteristics, GetVersionEx, IsProcessorFeaturePresent, an
+  interface's capability bits), and nowhere claim one that is not
+  there.
 - **Constants come from headers**: values typed in by hand go wrong
   silently (a wrong STATUS_OBJECT_NAME_EXISTS once matched a test that
   agreed with it). With mingw-w64 installed (`apt install
@@ -2075,6 +2087,30 @@ a cache on the host:
   (`office_install`'s first half hour: the transport, ranges, the
   service's staging of what it fetched) is not exercised, so run
   `office_install` now and then for the whole path.
+
+### Word and Excel on gala's own install (ROADMAP OF)
+
+`office_word` and `office_excel` (MANUAL) start the apps from the
+install `office_install_local` made, with no file from anywhere else:
+Word makes a document from a template of that install
+(`WINWORD.EXE /t...\QuickStyles\Default.dotx`), Excel opens the blank
+workbook it put in its shell-new folder (`EXCEL12.XLSX`, what
+Explorer's "New > Microsoft Excel Worksheet" copies). Both run through
+`consolerun.exe`, so their windows are on the console's desktop
+(`XTASK_SHOTS=60,120,...` for screendumps), and both boot through UEFI
+for the framebuffer.
+
+- **Their disk is a copy of the install's.** `new_disk` copies
+  `target/debug/test-office_install_local.disk.img` (`INSTALL_DISK`), so
+  an app's run cannot spoil an install that takes an hour; without that
+  image the run says so and stops. `XTASK_REUSE_DISK=1` boots the copy
+  the last run kept instead of making another (what to iterate with).
+- The copy is about 8 GB on the host, on top of the install's own. With
+  the install's image in `/dev/shm` ("Office's fast path"), link the
+  copy there too.
+- The apps' processes start on the whole 64-bit system
+  (`FULL_SYSTEM_SCENARIOS`) and the install's own files; what they still
+  lack is in the ledger (ROADMAP OF's load list ranks it).
 
 ### Linux test programs (user/lx, ROADMAP LX)
 
