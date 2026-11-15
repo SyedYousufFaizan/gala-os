@@ -5,14 +5,17 @@
 //! on by one period at each tick, so the period does not drift with the
 //! handler's latency).
 //!
-//! Limits: one CPU (`start_periodic_here`, the other CPUs' ticks, comes
-//! with SMP); entered at EL2 with VHE the CNTV registers would be EL2's
+//! Every CPU has its own virtual timer (a PPI is private): the boot CPU's
+//! keeps time (`start_periodic`), an AP's only preempts
+//! (`start_periodic_here`), both calling the same handler.
+//!
+//! Limits: entered at EL2 with VHE the CNTV registers would be EL2's
 //! virtual timer (PPI 28), not handled; no RTC is read yet (the PL031).
 
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use super::{interrupts, unported};
+use super::interrupts;
 use crate::boot::BootInfo;
 use crate::sync::IrqMutex;
 
@@ -23,8 +26,13 @@ const CTL_ENABLE: u64 = 1;
 
 /// Counter ticks per timer tick (0: not started).
 static PERIOD: AtomicU64 = AtomicU64::new(0);
-/// The compare value of the next tick.
-static NEXT: AtomicU64 = AtomicU64::new(0);
+/// Each CPU's next compare value, by CPU index.
+static NEXT: [AtomicU64; super::smp::MAX_CPUS] =
+    [const { AtomicU64::new(0) }; super::smp::MAX_CPUS];
+
+fn next_slot() -> &'static AtomicU64 {
+    &NEXT[(super::percpu::cpu_index() as usize).min(super::smp::MAX_CPUS - 1)]
+}
 static HANDLER: IrqMutex<Option<interrupts::Handler>> = IrqMutex::new(None);
 
 fn counter_frequency() -> u64 {
@@ -56,11 +64,12 @@ fn set_compare(value: u64) {
 fn on_interrupt(frame: &mut interrupts::TrapFrame) {
     let period = PERIOD.load(Ordering::Relaxed);
     let now = super::cpu::cycles();
-    let mut next = NEXT.load(Ordering::Relaxed) + period;
+    let slot = next_slot();
+    let mut next = slot.load(Ordering::Relaxed) + period;
     if next <= now {
         next = now + period;
     }
-    NEXT.store(next, Ordering::Relaxed);
+    slot.store(next, Ordering::Relaxed);
     set_compare(next);
     let handler = *HANDLER.lock();
     if let Some(h) = handler {
@@ -100,12 +109,25 @@ pub fn start_periodic(c: &Calibration, hz: u64, handler: interrupts::Handler) {
     PERIOD.store(period, Ordering::Relaxed);
     super::gic::enable_private(VIRTUAL_TIMER_PPI, on_interrupt);
     let first = super::cpu::cycles() + period;
-    NEXT.store(first, Ordering::Relaxed);
+    next_slot().store(first, Ordering::Relaxed);
     set_compare(first);
 }
 
+/// Starts this CPU's tick (an AP's, after `start_periodic` on the boot
+/// CPU: same period and handler; its PPI was enabled by the GIC's
+/// `init_cpu`).
 pub fn start_periodic_here(_c: &Calibration, _hz: u64) {
-    unported("timer::start_periodic_here")
+    let period = PERIOD.load(Ordering::Relaxed);
+    if period == 0 {
+        crate::warn!(
+            "timer: CPU {}'s tick not started: none on the boot CPU",
+            super::percpu::cpu_index()
+        );
+        return;
+    }
+    let first = super::cpu::cycles() + period;
+    next_slot().store(first, Ordering::Relaxed);
+    set_compare(first);
 }
 
 pub fn eoi() {}

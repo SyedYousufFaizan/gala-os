@@ -173,11 +173,11 @@ ROADMAP AR, under way on QEMU's `virt` machine (GICv3, a PL011, virtio
 over PCIe), booted by UEFI (QEMU's own edk2 build, or AAVMF) and
 Limine's `BOOTAA64.EFI` from the same kind of ISO as x86-64's (Limine's
 EFI image carries both loaders; the ISO holds the aarch64 kernel). The
-kernel boots through its scheduler: scenarios `arm_boot` (to
-`stop_after=sched`, the tick seen running), `arm_sched` (`schedtest`:
-kernel threads switched, woken, joined), `arm_fault_ud` and
-`arm_fault_pagefault` (the vectors' report); the other CPUs
-(`arch::smp`) are the next unported step.
+kernel boots through its other CPUs: scenarios `arm_boot` (to
+`stop_after=smp_done`: both CPUs online, the tick seen running),
+`arm_sched` (`schedtest`: kernel threads switched, woken, joined),
+`arm_fault_ud` and `arm_fault_pagefault` (the vectors' report); the
+drivers (`disk::init` and on: virtio over PCIe) are the next phase.
 
 - **Soft-float**: the kernel is built for
   `aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE: it
@@ -240,11 +240,26 @@ kernel threads switched, woken, joined), `arm_fault_ud` and
   bases). There is no NMI yet: the state dump's handler is kept and the
   log says a dump at a timeout is not taken (the GIC's pseudo-NMI comes
   with the port).
+- **Other CPUs** (`smp.rs`): Limine started them; each waits at EL1 on
+  the bootloader's tables for its `goto_address`. `start_aps` gives each a
+  kernel stack and its index (`extra_argument`) and sends it to the AP
+  entry: FP/SIMD on, the stack as SP_EL1, the kernel's MAIR and TTBR1
+  (the TLB invalidated), then its per-CPU block, vectors and GIC part
+  (`gic::init_cpu`: its redistributor, found by affinity, with the
+  private interrupts already handled), online, and `sched::run_ap`
+  (its tick). IPIs are SGIs (SGI 0 reschedules); a TLB flush everywhere
+  is a broadcast `tlbi vmalle1is`, no IPI. Hardware ids are MPIDR's
+  affinity fields everywhere (Limine's MP response, the MADT's GICC
+  entries, `smp::online_cpus`); the GIC packs them for GICR_TYPER and
+  ICC_SGI1R itself.
 - **Limits**: the UART's and the GIC's addresses are the board's, not read
-  from the firmware (SPCR, MADT or the device tree: the port); one CPU (the others stay
-  in Limine's wait loop); no scheduler or user mode; no RTC read (the
-  PL031); entered at EL2 with VHE the timer would be EL2's (PPI 28); the
-  image is not sealed for BOOTAA64.EFI (R8's enrollment is BOOTX64.EFI's).
+  from the firmware (SPCR, the MADT's GICD/GICR entries or the device
+  tree: the port); CPUs the bootloader did not start are not started
+  (PSCI CPU_ON); SGIs reach an Aff0 below 16 only; no NMI (the GIC's
+  pseudo-NMI: no state dump at a timeout, no `stop_others`); no user
+  mode; no RTC read (the PL031); entered at EL2 with VHE the timer would
+  be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
+  enrollment is BOOTX64.EFI's).
 
 ## Boot
 
@@ -6035,8 +6050,9 @@ processor number; also NtGetCurrentProcessorNumber), then enters
 boot CPU), at most 64.
 
 - `boot::acpi` reads the MADT (RSDP from Limine's RSDP request, XSDT or
-  RSDT; enabled local APIC and x2APIC entries; host-tested parser) into
-  `BootInfo::firmware_cpus`. `start_aps` starts the CPUs Limine
+  RSDT; enabled local APIC and x2APIC entries, and on aarch64 GICC
+  entries' MPIDR; host-tested parser) into `BootInfo::firmware_cpus`, as
+  hardware ids (`boot::MpInfo::hw_id`'s). `start_aps` starts the CPUs Limine
   reported, then every MADT CPU it did not report with the kernel's own
   trampoline (next section).
 - The CPUs Limine started get a second to reach `ap_main`, then (with a

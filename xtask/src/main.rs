@@ -12271,7 +12271,7 @@ const SCENARIOS: &[Scenario] = &[
         // taken and returned from), then the boot ends where the port has
         // got to (`stop_after`) and the kernel exits through semihosting.
         name: "arm_boot",
-        cmdline: "qemu_exit stop_after=sched",
+        cmdline: "qemu_exit stop_after=smp_done",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             "gala-os kernel",
@@ -12280,9 +12280,13 @@ const SCENARIOS: &[Scenario] = &[
             "frames: ",
             "paging: own tables at ",
             "timer: generic timer (virtual channel, PPI 27), counter at ",
-            "gic: GICv3",
+            "gic: CPU 0: GICv3",
             "interrupts enabled, tick ",
-            "boot: stopping after boot phase sched (stop_after), the tick running",
+            "smp: bootloader: 2 CPU(s), BSP MPIDR 0: 0 1",
+            "smp: MADT: 2 enabled CPU(s): 0 1",
+            "gic: CPU 1: GICv3",
+            "smp: 2 CPUs online (2 reported by the bootloader, 2 in the MADT",
+            "boot: stopping after boot phase smp_done (stop_after), the tick running",
         ],
     },
     Scenario {

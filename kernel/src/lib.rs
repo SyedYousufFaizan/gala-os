@@ -945,8 +945,9 @@ fn start_cpus(info: &BootInfo, cmdline: &Cmdline) {
     }
     if let Some(id) = report.first_failed {
         error!(
-            "smp: {} CPU(s) of the MADT's did not start (first: APIC id {id}); running on {n}",
-            report.failed
+            "smp: {} CPU(s) of the MADT's did not start (first: {} {id}); running on {n}",
+            report.failed,
+            arch::smp::HW_ID_NAME
         );
     }
     handover::report_cpus(info, n);
@@ -990,17 +991,17 @@ fn log_processors(info: &BootInfo) {
             for id in fw.ids() {
                 let _ = write!(line, " {id}");
             }
-            let missing = fw
-                .ids()
-                .iter()
-                .filter(|id| !info.processors.iter().any(|p| p.hw_id() == u64::from(**id)));
+            let missing =
+                fw.ids().iter().filter(|id| !info.processors.iter().any(|p| p.hw_id() == **id));
             let mut first = true;
             for id in missing {
-                let _ = write!(
-                    line,
-                    "{} {id}",
-                    if first { "; not started by the bootloader: APIC id" } else { "," }
-                );
+                if first {
+                    let _ =
+                        write!(line, "; not started by the bootloader: {}", arch::smp::HW_ID_NAME);
+                } else {
+                    let _ = write!(line, ",");
+                }
+                let _ = write!(line, " {id}");
                 first = false;
             }
             info!("{}", line.as_str());

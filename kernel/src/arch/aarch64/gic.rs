@@ -7,11 +7,13 @@
 //! kernel's.
 //!
 //! Brought up with its first interrupt source (`timer::start_periodic`):
-//! the distributor (affinity routing, group 1 on), this CPU's
+//! the distributor once (affinity routing, group 1 on), then on each CPU
+//! (`init_cpu`: the boot CPU's then, an AP's at its start) its
 //! redistributor (awake; its private interrupts, SGIs and PPIs, enabled
-//! one by one) and the CPU interface through its system registers
-//! (`ICC_*`: enabled, every priority let through). `dispatch` acknowledges
-//! an IRQ (ICC_IAR1_EL1), runs its handler and ends it (ICC_EOIR1_EL1).
+//! one by one) and its CPU interface through the system registers
+//! (`ICC_*`: enabled, every priority let through). `dispatch`
+//! acknowledges an IRQ (ICC_IAR1_EL1), runs its handler and ends it
+//! (ICC_EOIR1_EL1). SGIs are the CPUs' IPIs (`send_sgi`, ICC_SGI1R_EL1).
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -46,8 +48,16 @@ const SPURIOUS: u64 = 1020;
 /// The private interrupts (SGIs 0-15, PPIs 16-31) handled here.
 const PRIVATE: usize = 32;
 
-/// The redistributor's RD_base for this CPU, virtual (0: not up).
-static RD_BASE: AtomicU64 = AtomicU64::new(0);
+/// The redistributors' region, mapped (0: the distributor is not up).
+static GICR: AtomicU64 = AtomicU64::new(0);
+/// Each CPU's redistributor's RD_base, virtual (0: not up), by CPU index.
+static RD_BASE: [AtomicU64; super::smp::MAX_CPUS] =
+    [const { AtomicU64::new(0) }; super::smp::MAX_CPUS];
+
+fn my_rd() -> u64 {
+    let cpu = super::percpu::cpu_index() as usize;
+    RD_BASE.get(cpu).map_or(0, |r| r.load(Ordering::Acquire))
+}
 static HANDLERS: IrqMutex<[Option<Handler>; PRIVATE]> = IrqMutex::new([None; PRIVATE]);
 
 /// GIC bring-up failed: the boot cannot have interrupts.
@@ -73,34 +83,51 @@ fn read64(addr: u64) -> u64 {
     unsafe { (addr as *const u64).read_volatile() }
 }
 
-/// This CPU's affinity in GICR_TYPER's form: Aff3.Aff2.Aff1.Aff0 in 32 bits.
+/// This CPU's MPIDR affinity (Aff3 at 32, Aff2-Aff0 at 16, 8, 0): its
+/// hardware id, as Limine's MP response and the MADT give it.
 fn affinity() -> u64 {
     let mpidr: u64;
     // SAFETY: reads MPIDR_EL1.
     unsafe {
         core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr, options(nomem, nostack, preserves_flags))
     };
-    (mpidr & 0xff_ffff) | ((mpidr >> 8) & 0xff00_0000)
+    mpidr & 0xff_00ff_ffff
 }
 
-/// Brings the GIC up for this CPU (once).
+/// An MPIDR affinity in GICR_TYPER's form: Aff3.Aff2.Aff1.Aff0 in 32 bits.
+fn packed(affinity: u64) -> u64 {
+    (affinity & 0xff_ffff) | ((affinity >> 8) & 0xff00_0000)
+}
+
+/// Brings the GIC up: the distributor (once), then this CPU's part.
 pub fn init() -> Result<(), GicError> {
-    if RD_BASE.load(Ordering::Acquire) != 0 {
+    if GICR.load(Ordering::Acquire) == 0 {
+        let gicd = super::paging::map_mmio(GICD_PHYS, 0x1_0000).map_err(GicError::Map)?;
+        write32(gicd + GICD_CTLR, GICD_CTLR_ENABLE);
+        for _ in 0..1_000_000 {
+            if read32(gicd + GICD_CTLR) & GICD_CTLR_RWP == 0 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        let gicr = super::paging::map_mmio(GICR_PHYS, GICR_SPAN).map_err(GicError::Map)?;
+        GICR.store(gicr, Ordering::Release);
+    }
+    init_cpu()
+}
+
+/// This CPU's redistributor (found by its affinity: woken, its private
+/// interrupts in group 1) and CPU interface. Once per CPU, after `init`.
+pub fn init_cpu() -> Result<(), GicError> {
+    let cpu = super::percpu::cpu_index() as usize;
+    if my_rd() != 0 {
         return Ok(());
     }
-    let gicd = super::paging::map_mmio(GICD_PHYS, 0x1_0000).map_err(GicError::Map)?;
-    write32(gicd + GICD_CTLR, GICD_CTLR_ENABLE);
-    for _ in 0..1_000_000 {
-        if read32(gicd + GICD_CTLR) & GICD_CTLR_RWP == 0 {
-            break;
-        }
-        core::hint::spin_loop();
-    }
-    let gicr = super::paging::map_mmio(GICR_PHYS, GICR_SPAN).map_err(GicError::Map)?;
-    let me = affinity();
+    let gicr = GICR.load(Ordering::Acquire);
+    let me = packed(affinity());
     let mut rd = None;
     let mut at = gicr;
-    while at < gicr + GICR_SPAN {
+    while gicr != 0 && at < gicr + GICR_SPAN {
         let typer = read64(at + GICR_TYPER);
         if typer >> 32 == me {
             rd = Some(at);
@@ -142,27 +169,67 @@ pub fn init() -> Result<(), GicError> {
             options(nostack, preserves_flags)
         )
     };
-    RD_BASE.store(rd, Ordering::Release);
+    if let Some(slot) = RD_BASE.get(cpu) {
+        slot.store(rd, Ordering::Release);
+    }
+    // Private interrupts already handled (the reschedule SGI, the timer)
+    // are enabled here too.
+    let handlers = *HANDLERS.lock();
+    for (intid, h) in handlers.iter().enumerate() {
+        if h.is_some() {
+            enable_here(rd, intid as u32);
+        }
+    }
     crate::info!(
-        "gic: GICv3, distributor at {GICD_PHYS:#x}, this CPU's redistributor (affinity {me:#x}) at {:#x}",
+        "gic: CPU {cpu}: GICv3 redistributor (affinity {me:#x}) at {:#x}, distributor at {GICD_PHYS:#x}",
         GICR_PHYS + (rd - gicr)
     );
     Ok(())
 }
 
-/// Enables private interrupt `intid` (an SGI or PPI) on this CPU, at the
-/// middle priority, with `handler`.
-pub fn enable_private(intid: u32, handler: Handler) {
-    let rd = RD_BASE.load(Ordering::Acquire);
-    let i = intid as usize;
-    if rd == 0 || i >= PRIVATE {
-        crate::warn!("gic: interrupt {intid} not enabled (GIC up: {})", rd != 0);
-        return;
-    }
-    HANDLERS.lock()[i] = Some(handler);
+fn enable_here(rd: u64, intid: u32) {
     // SAFETY: one byte of GICR_IPRIORITYR per interrupt.
     unsafe { ((rd + GICR_IPRIORITYR + u64::from(intid)) as *mut u8).write_volatile(0x80) };
     write32(rd + GICR_ISENABLER0, 1 << intid);
+}
+
+/// Sends SGI `intid` (0-15) to the CPU with MPIDR affinity `target`
+/// through ICC_SGI1R_EL1: Aff3, Aff2, Aff1 and the target list's bit for
+/// Aff0 (below 16, as on QEMU `virt`).
+pub fn send_sgi(intid: u32, target: u64) {
+    let aff0 = target & 0xff;
+    if aff0 >= 16 || intid >= 16 {
+        crate::warn!("gic: SGI {intid} to affinity {target:#x} not sent (Aff0 above 15)");
+        return;
+    }
+    let value = ((target >> 32) & 0xff) << 48
+        | ((target >> 16) & 0xff) << 32
+        | u64::from(intid) << 24
+        | ((target >> 8) & 0xff) << 16
+        | 1 << aff0;
+    // SAFETY: ICC_SGI1R_EL1 generates the SGI; nothing else changes.
+    unsafe {
+        core::arch::asm!("dsb ishst", "msr S3_0_C12_C11_5, {}", "isb", in(reg) value, options(nostack, preserves_flags))
+    };
+}
+
+/// This CPU's MPIDR affinity in `affinity`'s form (its hardware id).
+pub fn my_affinity() -> u64 {
+    affinity()
+}
+
+/// Enables private interrupt `intid` (an SGI or PPI) on this CPU, at the
+/// middle priority, with `handler` (the same on every CPU: the others
+/// enable it when they start, `init_cpu`).
+pub fn enable_private(intid: u32, handler: Handler) {
+    let rd = my_rd();
+    let i = intid as usize;
+    if rd == 0 || i >= PRIVATE {
+        crate::warn!("gic: interrupt {intid} not enabled (GIC up here: {})", rd != 0);
+        return;
+    }
+    HANDLERS.lock()[i] = Some(handler);
+    enable_here(rd, intid);
 }
 
 /// Handles one IRQ (the IRQ vector's): acknowledged, its handler run with

@@ -49,7 +49,7 @@ fn block() -> &'static Block {
 }
 
 /// Points TPIDR_EL1 at block `index` on this CPU.
-fn install(index: u32) {
+pub(super) fn install(index: u32) {
     let b = &BLOCKS[index as usize];
     b.index.store(index, Ordering::Relaxed);
     let at = core::ptr::from_ref(b).expose_provenance() as u64;
