@@ -298,6 +298,9 @@ pub struct Window<X> {
     pub client: Vec<u32>,
     /// The title (UTF-16).
     pub title: Vec<u16>,
+    /// Its program's name (the executable's file name, UTF-16; empty if
+    /// unknown): a taskbar tile's initial when the title has none.
+    pub program: Vec<u16>,
     /// A frameless popup (STYLE_POPUP: a menu, a drop-down list, a
     /// tooltip): all client area, above the framed windows, not on the
     /// taskbar, never active.
@@ -599,6 +602,7 @@ impl<X: Default> State<X> {
             docked: false,
             client,
             title: name,
+            program: Vec::new(),
             icon: Vec::new(),
             small_icon: Vec::new(),
             unsnapped: None,
@@ -748,6 +752,16 @@ impl<X: Default> State<X> {
         self.add_damage(old);
         self.add_damage(new);
         Ok(new)
+    }
+
+    /// Window `id`'s program name (`program_name`): set once it is made.
+    pub fn set_program(&mut self, id: u32, owner: u64, name: &[u16]) -> Result<(), NtStatus> {
+        let mut v = Vec::new();
+        v.try_extend_from_slice(name).map_err(|_| NtStatus::NO_MEMORY)?;
+        let win = self.find(id, owner)?;
+        win.program = v;
+        self.listing_changed = true;
+        Ok(())
     }
 
     /// A window's new title (the caption and the taskbar show it).

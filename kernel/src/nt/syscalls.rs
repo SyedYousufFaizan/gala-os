@@ -1700,10 +1700,12 @@ fn gala_window_create(call: &mut Call<'_>) -> NtStatus {
         *t = u16::from_le_bytes([bytes[2 * i], bytes[2 * i + 1]]);
     }
     let owner = call.process.id;
-    let id = tri!(super::desktop::with(&call.process.desk.shell, |d| Ok((
-        d.create(owner, x, y, w, h, &title[..title_len], style)?,
-        None
-    ))));
+    let (program, k) = super::desktop::program_name(owner);
+    let id = tri!(super::desktop::with(&call.process.desk.shell, |d| {
+        let id = d.create(owner, x, y, w, h, &title[..title_len], style)?;
+        d.set_program(id, owner, &program[..k])?;
+        Ok((id, None))
+    }));
     tri!(call.write_u32(out, id));
     NtStatus::SUCCESS
 }
