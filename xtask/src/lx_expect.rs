@@ -53,7 +53,7 @@ pub const ENV: &[(&str, &str)] = &[("A", "1"), ("EMPTY", ""), ("LONGER_NAME", "s
 /// lx-expect starts weston's headless backend for them on a socket of
 /// their own and adds `XDG_RUNTIME_DIR` (its directory) and
 /// `WAYLAND_DISPLAY` (this name) to [`ENV`].
-const WAYLAND_TESTS: &[&str] = &["wl_test", "wl_popup_test", "gtk_test"];
+const WAYLAND_TESTS: &[&str] = &["wl_test", "wl_popup_test", "wl_maximize_test", "gtk_test"];
 const WAYLAND_DISPLAY: &str = "wayland-gala";
 
 /// The Wayland programs that need a seat (GTK 3 asks for the keyboard of

@@ -7774,6 +7774,8 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("lx_unix", "user/lx/bin/unix_test", "lx"),
     ("lx_unix_pie", "user/lx/bin/unix_test-pie", "lx"),
     ("lx_wl", "user/lx/bin/wl_test", "lx"),
+    ("lx_wl_maximize", "user/lx/bin/wl_maximize_test", "lx"),
+    ("lx_wl_maximize_pie", "user/lx/bin/wl_maximize_test-pie", "lx"),
     ("lx_wl_pie", "user/lx/bin/wl_test-pie", "lx"),
     ("lx_wl_input", "user/lx/bin/wl_input_test", "lx"),
     ("lx_wl_input_pie", "user/lx/bin/wl_input_test-pie", "lx"),
@@ -17057,6 +17059,23 @@ const SCENARIOS: &[Scenario] = &[
             "run: end /lx/wl_test",
             BOOT_OK_MARKER,
         ],
+    },
+    Scenario {
+        // user/lx/wl_maximize_test (LD: Inkscape): a toplevel that asks
+        // to be maximized before its first commit gets a configure with
+        // the maximized state and the work area's size; its transcript
+        // must be its expected.txt (weston's headless backend's).
+        name: "lx_wl_maximize",
+        cmdline: "qemu_exit wayland=on events=wayland lxrun=/lx/wl_maximize_test lxargs=./wl_maximize_test lxenv=XDG_RUNTIME_DIR=/run/user/1000%20WAYLAND_DISPLAY=wayland-0",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/wl_maximize_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/wl_maximize_test as a static-pie.
+        name: "lx_wl_maximize_pie",
+        cmdline: "qemu_exit wayland=on events=wayland lxrun=/lx/wl_maximize_test-pie lxargs=./wl_maximize_test lxenv=XDG_RUNTIME_DIR=/run/user/1000%20WAYLAND_DISPLAY=wayland-0",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/wl_maximize_test-pie", BOOT_OK_MARKER],
     },
     Scenario {
         // user/lx/wl_test as a static-pie, with every request and event

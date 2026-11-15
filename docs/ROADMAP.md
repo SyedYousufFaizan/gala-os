@@ -3764,8 +3764,9 @@ the next breakthroughs).
    "inkscape"), first in batch mode (`lx_inkscape_batch`: in.svg rendered
    to a PNG Ubuntu's byte for byte; WORKFLOW "Inkscape") and its window
    (`lx_inkscape`: in.svg drawn on the canvas, Ctrl+Q, exit status 0).
-   Next: its window opens short on gala (full size on weston): why; then
-   an edit and an export compared with Ubuntu's. Linux system calls
+   It asks to be maximized before its first commit (as weston grants:
+   `lx_wl_maximize`). Next: an edit and an export compared with
+   Ubuntu's. Linux system calls
    are traced with `events=syscall` (`lx syscall`). Open: rseq is ENOSYS
    (glibc carries on without it).
 

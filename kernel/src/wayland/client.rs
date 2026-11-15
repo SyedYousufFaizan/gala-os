@@ -581,6 +581,10 @@ struct Toplevel {
     /// (0x0, the client's choice, until the desktop sizes the window), its
     /// states, and where the window goes.
     sizing: Sizing,
+    /// set_maximized before its window exists: the desktop maximizes the
+    /// window once it is made (xdg-shell lets a client ask before its
+    /// first commit; Inkscape does).
+    maximize_when_mapped: bool,
 }
 
 /// A toplevel's size and states as the desktop set them (maximize, Snap,
@@ -2003,6 +2007,13 @@ impl<F> Client<F> {
                 s.decorated = decorated;
                 let w = host.window_create(&title[..n], view.2, view.3, decorated);
                 host.note(Note::Mapped { surface: sid, window: w });
+                // Asked to be maximized before it had a window.
+                let maximize = self
+                    .toplevel(t)
+                    .is_some_and(|top| core::mem::take(&mut top.maximize_when_mapped));
+                if let (Some(w), true) = (w, maximize) {
+                    host.window_act(w, Act::Maximize);
+                }
                 w
             }
         };
@@ -3051,6 +3062,7 @@ impl<F> Client<F> {
                     title: Vec::new(),
                     app_id: Vec::new(),
                     sizing: Sizing::default(),
+                    maximize_when_mapped: false,
                 };
                 self.insert(host, *id, XDG_TOPLEVEL, r.version, Kind::Toplevel(t))?;
                 if let Some(xs) = self.xdg(x) {
@@ -3189,6 +3201,25 @@ impl<F> Client<F> {
                 };
                 match self.surface(surface).and_then(|s| s.window) {
                     Some(w) => host.window_act(w, act),
+                    // Before its window: maximized in the configures from
+                    // now on (the work area's size), the window maximized
+                    // once made (`show`); unset_maximized takes it back.
+                    None if act != Act::Minimize => {
+                        let decorated = self.mode(t) == MODE_SERVER_SIDE;
+                        let (work_w, work_h) = host.work_area();
+                        let size = host.surface_size(work_w, work_h, decorated);
+                        if let Some(top) = self.toplevel(t) {
+                            let max = act == Act::Maximize;
+                            top.maximize_when_mapped = max;
+                            top.sizing = Sizing {
+                                size: if max { size } else { (0, 0) },
+                                maximized: max,
+                                target: max.then_some((0, 0)),
+                                ..Sizing::default()
+                            };
+                        }
+                        self.reconfigure(host, t)?;
+                    }
                     None => {
                         host.note(Note::Ignored { interface: r.iface.name, request: r.sig.name })
                     }
