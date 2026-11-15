@@ -2703,13 +2703,13 @@ fn ring(step: i64, r: i64) -> i64 {
 
 /// A program's tile colours from its title (a stable hue).
 /// A taskbar tile's initial and the name it is from (its colours'
-/// too): the title's first character if a letter or digit, else the
-/// program's first letter or digit, capitalized ("[in] (imported)" is
+/// too), capitalized: the title's first character if a letter or digit
+/// ("in.svg - Inkscape": "I"), else the program's first letter or digit ("[in] (imported)" is
 /// GIMP's title with an image open: `gimp-3.2` gives "G"), else '?'.
 pub fn tile_initial<'a>(title: &'a [u16], program: &'a [u16]) -> (char, &'a [u16]) {
     let first = char::decode_utf16(title.iter().copied()).next().and_then(|c| c.ok());
     if let Some(c) = first.filter(|c| c.is_alphanumeric()) {
-        return (c, title);
+        return (c.to_uppercase().next().unwrap_or(c), title);
     }
     let named = char::decode_utf16(program.iter().copied())
         .filter_map(|c| c.ok())

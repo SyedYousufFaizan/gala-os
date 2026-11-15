@@ -3762,8 +3762,10 @@ the next breakthroughs).
    `lx_gtk_x11` with `XTASK_EVENTS=syscall`); the cause is not found yet.
 10. Inkscape (the owner): Ubuntu 26.04's Inkscape 1.4.3 (LINUX_ROOTS
    "inkscape"), first in batch mode (`lx_inkscape_batch`: in.svg rendered
-   to a PNG Ubuntu's byte for byte; WORKFLOW "Inkscape"); next its window
-   over Wayland with a screen check. Linux system calls
+   to a PNG Ubuntu's byte for byte; WORKFLOW "Inkscape") and its window
+   (`lx_inkscape`: in.svg drawn on the canvas, Ctrl+Q, exit status 0).
+   Next: its window opens short on gala (full size on weston): why; then
+   an edit and an export compared with Ubuntu's. Linux system calls
    are traced with `events=syscall` (`lx syscall`). Open: rseq is ENOSYS
    (glibc carries on without it).
 

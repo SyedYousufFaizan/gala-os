@@ -2399,8 +2399,15 @@ A root is what its workload opened on real 26.04, traced:
   1000: `chroot --userspec=1000:1000 <dir> env -i HOME=<an empty home>
   PATH=/usr/bin:/bin BB= DIR=<a copy of user/lx/inkscape> sh <that
   copy>/batch.sh`, then `-- exit status 0`.
-- The root "inkscape" is that run's `strace -f -y` (`plan.py`, `rows.py`
-  excluding the "gtk3", "x11" and "glibc" roots' files). Inkscape finds
+- Scenario `lx_inkscape`: `sh /lx/inkscape/gui.sh` opens a copy of
+  in.svg over the session's Wayland display (its output in
+  `$HOME/inkscape.log`); INKSCAPE_SCREEN checks the drawing's yellow on
+  the canvas (`test-lx_inkscape.screen0.png`) and quits with Ctrl+Q. Its
+  transcript (the exit status) is recorded on Ubuntu 26.04 with the same
+  key, as GIMP's (weston on Xvfb, xdotool).
+- The root "inkscape" is those runs' `strace -f -y` (`plan.py`, `rows.py`
+  excluding the "gtk3", "x11" and "glibc" roots' files), with GTK's
+  schemas and Inkscape's whole hicolor icon theme. Inkscape finds
   its own libraries through `$ORIGIN/..`: plan.py normalizes such paths.
 
 ### The WSL facade's tests (user/wsl_test, ROADMAP CT)
