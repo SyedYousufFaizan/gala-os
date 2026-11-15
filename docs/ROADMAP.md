@@ -202,8 +202,8 @@ has a section under "Open items".
 | LX | Linux personality | in progress | seams 2, 3, 6 and milestone 1 done, seam 4's Linux side (links, case-sensitive directories, modes kept); static busybox runs (milestone 2), TCP sockets, threads, futex, epoll; file mappings, glibc's dynamic programs (LD step 1); seam 5's first core object, AF_UNIX sockets, and memfd (LD step 2) |
 | CT | Linux containers: Docker Desktop and Podman over a WSL facade | planned | spec recordings first; needs LX beyond milestone 5 |
 | LD | Desktop Linux applications | in progress | step 1: dynamically linked glibc programs run through ld.so (`lx_dyn`); step 2: memfd and AF_UNIX sockets with SCM_RIGHTS (`lx_memfd`, `lx_unix`), the Wayland wire format (`wl_abi`) and the first in-kernel Wayland server (wl_compositor, wl_shm, xdg_wm_base, wl_output; toplevels as desktop windows: `lx_wl`), wl_seat input and window control (`lx_wl_input`), weston-simple-shm (`lx_simple_shm`), popups (`lx_wl_popup`); step 3: the first GTK program, its window drawn and clicked (`lx_gtk`, GTK 3 on a Linux root of Ubuntu's packages); step 5: X11 programs through rootless Xwayland, gala its window manager, xterm on a pty (`lx_xterm`), GTK under X11 (`lx_gtk_x11`); step 6's first part: a distribution's desktop in one window (`lx_xdesktop`); step 7: Linux distributions in the start menu (`linux_menu`); step 9: GIMP 3.2 in batch mode, its saved file Ubuntu 26.04's byte for byte (`lx_gimp_batch`; System V shared memory: `lx_shm`; sysinfo: `lx_sysinfo`), and on the desktop: its window, in.png opened, Colors > Invert and File > Export, the exported file Ubuntu 26.04's byte for byte (`lx_gimp`); next: all of GIMP's plug-ins |
-| AR | ARM64 port | planned | the kernel's aarch64 `arch` on QEMU `virt`, then ARM64 Windows and Linux user mode |
-| XT | 64-bit Windows programs on ARM64 | planned | dynamic binary translation of x64 code; after AR |
+| AR | ARM64 port | in progress | the aarch64 kernel boots on QEMU `virt` to its frame allocator (`arm_boot`), its exceptions reported (`arm_fault_*`); next its page tables, timer and GIC, then ARM64 Windows and Linux user mode |
+| XT | 64-bit Windows programs on ARM64 | planned | dynamic binary translation of x64 code, then 32-bit x86 (WOW64 on ARM; Office's x86 installer); after AR |
 | AN | Android applications | planned | binder, ART, SwiftShader graphics; x86_64 images first |
 
 ### Desktop, sessions and remote access
@@ -3939,13 +3939,27 @@ rather than at R2's rate-limited development URL.
 on the seams item PT prepared: native ARM64 Windows programs
 (`aarch64-pc-windows-msvc` PE images) and ARM64 Linux programs.
 
+**Done so far** (design: ARCHITECTURE "The aarch64 port"):
+- The tooling: `cargo xtask qemu` builds the aarch64 emulator beside
+  x86-64's (QEMU's own edk2 firmware with it); `AARCH64_SCENARIOS` boot
+  the aarch64 kernel from the same kind of ISO on `virt`
+  (`Boot::UefiAarch64`), their verdicts as x86-64's (exit through
+  semihosting with the same statuses).
+- The kernel boots to its frame allocator (`arm_boot`, with
+  `stop_after=frames`): the entry (FP/SIMD on, the boot stack on SP_EL1),
+  the exception vectors (`arm_fault_ud`, `arm_fault_pagefault` with
+  `early_fault=`), the PL011 console through a device page added to the
+  bootloader's tables, the processors by MPIDR from Limine's MP response.
+
 **Next**:
-1. The kernel's `arch` for aarch64: boot through Limine's aarch64
-   protocol on UEFI, the exception vectors, the GIC, the generic timer,
-   VMSAv8 page tables behind `arch` (`mm::paging`'s format moves there),
-   the context switch, PSCI for the other CPUs, the PL011 UART. Test
-   first: the boot scenario `hello` reaching its kernel line under
-   `qemu-system-aarch64`.
+1. The kernel's `arch` for aarch64, in boot order, each phase's
+   `stop_after` moving `arm_boot` on: VMSAv8 page tables behind `arch`
+   (`mm::paging`'s format moves there; the device pages move into them),
+   the generic timer and the GIC (its distributor and redistributors;
+   IRQs through the vectors), the per-CPU block (TPIDR_EL1) and the
+   context switch, PSCI for the other CPUs; the UART's address from the
+   firmware (SPCR or the device tree). Then `hello` reaching its kernel
+   line, which needs step 2's ntdll and the ABI.
 2. User mode: Windows' ARM64 ABI (`nt::abi::arm64`: CONTEXT, the system
    call convention, unwinding) and gala's DLLs built for ARM64; Linux's
    aarch64 ABI (`lx::machine::aarch64`, its system call table).
@@ -3974,6 +3988,15 @@ when it first runs, and cached. After AR runs native programs.
    and the system call boundary translated (the NT layer stays native),
    or gala's system DLLs native with translated code calling into them
    (Windows' documented ARM64EC/ARM64X design).
+4. 32-bit x86 programs on ARM64 (WOW64 on ARM): the same translator
+   with a 32-bit x86 front end (its encoding, a 32-bit address space,
+   x87 as the main FPU). On x86-64 gala WOW64 enters 32-bit code
+   natively (compatibility mode); ARM64 has no such mode, so only the
+   CPU layer changes: WOW64's NT part (`nt/wow64.rs`, already built for
+   every architecture) and the 32-bit system DLLs (x86 code, translated
+   like the program) stay as they are. The end-to-end target: Office's
+   installer, whose `setup.exe` is 32-bit x86 (Microsoft ships that
+   bootstrapper as x86 for ARM64 Windows too).
 
 Open-source translators (FEX-Emu, Box64; MIT) may be read, and anything
 borrowed is recorded in THIRD_PARTY; the clean-room rule is about

@@ -107,11 +107,23 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     // Lock-order checking (debug builds) needs to know the CPU: from here.
     sync::lockdep::enable();
     arch::init_boot_traps();
+    // `early_fault=<ud|pagefault|stackoverflow>`: the exception path's test
+    // before anything else is up (the architecture's vectors; `fault=` is
+    // the same on a scheduler thread, later).
+    if let Some(name) = cmdline.value("early_fault") {
+        match Fault::from_name(name) {
+            Some(fault) => {
+                info!("provoking fault {fault:?} (early)");
+                arch::interrupts::provoke(fault);
+            }
+            None => panic!("unknown fault {name:?}"),
+        }
+    }
 
     log_boot_info(&info);
     handover::report(&info);
     let summary = log_memory_map(&info);
-    arch::bootphase::mark("memory_map");
+    phase(&cmdline, "memory_map");
     // `noscreen`: serial only (boot tests read the serial log; drawing text
     // is slow under emulation).
     if let Some(fb) = info.framebuffer.take().filter(|_| !cmdline.flag("noscreen")) {
@@ -133,7 +145,7 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     if let Err(e) = mm::init(&info) {
         panic!("frame allocator: {e:?}");
     }
-    arch::bootphase::mark("frames");
+    phase(&cmdline, "frames");
     let (free, total) = mm::frame_stats();
     info!(
         "frames: {} free of {} tracked ({} MiB free)",
@@ -142,23 +154,23 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
         free * mm::PAGE_SIZE / (1024 * 1024)
     );
     init_paging(&info);
-    arch::bootphase::mark("paging");
+    phase(&cmdline, "paging");
     init_timer(&info, cmdline.flag("calstall"), cmdline.flag("calwrong"));
-    arch::bootphase::mark(arch::bootphase::TIMER);
+    phase(&cmdline, arch::bootphase::TIMER);
     // A state dump on an NMI (xtask asks for one when a boot test times out).
     statedump::init();
     handover::check_marker(&info);
     if let Err(e) = sched::init() {
         panic!("scheduler: {e:?}");
     }
-    arch::bootphase::mark("sched");
+    phase(&cmdline, "sched");
     // The frames' owner counts (a fork's copy-on-write pages), from the heap.
     mm::init_sharing();
     info!("sched: boot thread {} running, idle thread started", sched::current());
     arch::smp::init_bsp();
-    arch::bootphase::mark("smp_start");
+    phase(&cmdline, "smp_start");
     start_cpus(&info, &cmdline);
-    arch::bootphase::mark("smp_done");
+    phase(&cmdline, "smp_done");
     disk::init();
     // `display=virtio`: the screen is virtio-gpu (default `fb`: the
     // bootloader's framebuffer); `gputrace` logs every command and
@@ -177,10 +189,10 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     }
     nt::init();
     net::init();
-    arch::bootphase::mark("drivers");
+    phase(&cmdline, "drivers");
     // R8: the signed manifest, checked before anything else is loaded.
     trust::boot(&info);
-    arch::bootphase::mark("manifest");
+    phase(&cmdline, "manifest");
     if handover::wanted(&cmdline)
         && let Some(file) = handover::next_image(&info, &cmdline)
     {
@@ -601,6 +613,23 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
 /// thread that halted in a loop instead stayed "in the kernel without
 /// blocking" forever: the flight recorder's watchdog reported it every
 /// 20 s and its reports pushed every real event out of the ring.)
+/// Marks boot phase `name` (`arch::bootphase`). With `stop_after=<name>`
+/// on the command line the boot ends there: logged, then QEMU exits with
+/// success under `qemu_exit` (else the CPU halts). For scenarios that
+/// check a boot up to one phase (the aarch64 port's `arm_boot`, while the
+/// phases after it are not ported) and for quick checks of early boot.
+/// Not `stop`: nothing it flushes or ends exists this early.
+fn phase(cmdline: &Cmdline, name: &str) {
+    arch::bootphase::mark(name);
+    if cmdline.value("stop_after") == Some(name) {
+        info!("boot: stopping after boot phase {name} (stop_after)");
+        if QEMU_EXIT.load(Ordering::Relaxed) {
+            qemu::exit(QemuExitCode::Success);
+        }
+        arch::cpu::halt_forever();
+    }
+}
+
 fn stop(code: QemuExitCode) -> ! {
     // What C: has pending goes to the disk before the machine stops.
     nt::persist::flush(nt::persist::Cause::Shutdown);
@@ -717,8 +746,8 @@ fn log_boot_info(info: &BootInfo) {
         info!("bootloader: {name} {version}");
     }
     match info.firmware {
-        Some(FirmwareType::Efi64) => info!("firmware: UEFI x86_64"),
-        Some(other) => warn!("firmware: {other:?} (only UEFI x86_64 is supported)"),
+        Some(FirmwareType::Efi64) => info!("firmware: UEFI {}", arch::NAME),
+        Some(other) => warn!("firmware: {other:?} (only UEFI {} is supported)", arch::NAME),
         None => warn!("firmware: unknown"),
     }
     info!("cmdline: {:?}", info.cmdline);
@@ -866,13 +895,14 @@ fn log_processors(info: &BootInfo) {
     let mut line = heapless_line();
     let _ = write!(
         line,
-        "smp: {}: {} CPU(s), BSP APIC id {}:",
+        "smp: {}: {} CPU(s), BSP {} {}:",
         if info.handover.is_some() { "parked by the previous kernel" } else { "bootloader" },
         info.processors.len(),
-        info.processors.bsp_lapic_id
+        arch::smp::HW_ID_NAME,
+        info.processors.bsp_id
     );
     for p in info.processors.iter() {
-        let _ = write!(line, " {}", p.lapic_id);
+        let _ = write!(line, " {}", p.hw_id());
     }
     info!("{}", line.as_str());
     match arch::smp::shelter_state() {
@@ -897,8 +927,10 @@ fn log_processors(info: &BootInfo) {
             for id in fw.ids() {
                 let _ = write!(line, " {id}");
             }
-            let missing =
-                fw.ids().iter().filter(|id| !info.processors.iter().any(|p| p.lapic_id == **id));
+            let missing = fw
+                .ids()
+                .iter()
+                .filter(|id| !info.processors.iter().any(|p| p.hw_id() == u64::from(**id)));
             let mut first = true;
             for id in missing {
                 let _ = write!(
@@ -1520,7 +1552,14 @@ fn await_program(
     handover_requests: Option<&nt::object::ObjectRef>,
     free_before: u64,
 ) {
-    let space = {
+    // The address space, held from here: the process gives its own
+    // reference up at its exit (`nt::process::finish`), so this is the
+    // one the teardown check below watches go.
+    let Some(space) = process.space_now() else {
+        warn!("run: {} has no address space", process.name);
+        return;
+    };
+    {
         // Wait for the whole process (all threads) to end.
         match nt::object::KObject::new(nt::object::ObjectBody::Process(process.clone())) {
             Ok(object) => {
@@ -1586,8 +1625,7 @@ fn await_program(
         if wait_all {
             wait_for_the_rest();
         }
-        process.space.clone()
-    };
+    }
     // Only `space` may hold the address space now.
     drop(process);
     // Teardown check: once the exiting threads are reaped, ours must be the

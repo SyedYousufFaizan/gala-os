@@ -411,6 +411,15 @@ impl Vad {
         ((reserved, committed), self.peaks)
     }
 
+    /// Forgets every reservation, as an exited process's address space
+    /// does (`process::release_space`). The peaks stay, so VM_COUNTERS
+    /// still answers for the process that was; the commit charge is given
+    /// back separately (`charge::ended`).
+    pub fn clear(&mut self) {
+        self.allocs = Vec::new();
+        self.private_commit = 0;
+    }
+
     /// (reservations, regions): how many allocations, and how many runs
     /// of pages with one state in them (what a walk with
     /// NtQueryVirtualMemory visits, besides the free gaps).

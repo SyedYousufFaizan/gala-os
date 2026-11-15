@@ -36,6 +36,19 @@ pub struct KernelAddress {
     pub virtual_base: u64,
 }
 
+/// The bootloader's HHDM offset and the kernel's load address, read
+/// straight from Limine's responses: for what must run before
+/// [`collect`] (aarch64's console maps its UART into the bootloader's
+/// page tables with them). None after a kernel handover, or without them.
+pub fn early_addresses() -> Option<(u64, KernelAddress)> {
+    let hhdm = REQUESTS.hhdm.response()?.offset;
+    let kernel = REQUESTS.executable_address.response()?;
+    Some((
+        hhdm,
+        KernelAddress { physical_base: kernel.physical_base, virtual_base: kernel.virtual_base },
+    ))
+}
+
 impl FirmwareType {
     /// Limine's firmware type number.
     pub fn to_limine(self) -> u64 {
@@ -266,7 +279,9 @@ pub struct BootInfo {
 /// The processors the bootloader (or the previous kernel) found, all
 /// parked until started.
 pub struct Processors {
-    pub bsp_lapic_id: u32,
+    /// The bootstrap processor's hardware id (`MpInfo::hw_id`: x86-64's
+    /// local APIC id, aarch64's MPIDR affinity).
+    pub bsp_id: u64,
     cpus: CpuList,
 }
 
@@ -400,7 +415,10 @@ fn collect_handover(entry: HandoverEntry) -> Result<BootInfo, BootError> {
         framebuffer,
         modules,
         boot_unix_time: platform.boot_unix_time.checked_sub(1).map(|t| t as i64),
-        processors: Processors { bsp_lapic_id: cpus.bsp_lapic_id, cpus: CpuList::Parked(parked) },
+        processors: Processors {
+            bsp_id: u64::from(cpus.bsp_lapic_id),
+            cpus: CpuList::Parked(parked),
+        },
         firmware_cpus: None,
         clock_tables: acpi::ClockTables::default(),
         framebuffer_facts,
@@ -510,14 +528,14 @@ pub fn collect(handover: Option<HandoverEntry>) -> Result<BootInfo, BootError> {
         }
     });
 
-    let (bsp_lapic_id, cpus) = REQUESTS.mp.request.response().map_or((0, &[][..]), |r| {
+    let (bsp_id, cpus) = REQUESTS.mp.request.response().map_or((0, &[][..]), |r| {
         let cpus = if r.cpus.is_null() {
             &[][..]
         } else {
             // SAFETY: an array of `cpu_count` info pointers, per the protocol.
             unsafe { core::slice::from_raw_parts(r.cpus, r.cpu_count as usize) }
         };
-        (r.bsp_lapic_id, cpus)
+        (r.bsp_id(), cpus)
     });
 
     Ok(BootInfo {
@@ -531,7 +549,7 @@ pub fn collect(handover: Option<HandoverEntry>) -> Result<BootInfo, BootError> {
         framebuffer,
         modules: BootModules::Limine(modules),
         boot_unix_time: REQUESTS.date_at_boot.response().map(|r| r.timestamp),
-        processors: Processors { bsp_lapic_id, cpus: CpuList::Limine(cpus) },
+        processors: Processors { bsp_id, cpus: CpuList::Limine(cpus) },
         firmware_cpus: Some(acpi::read_madt(
             hhdm_offset,
             REQUESTS.rsdp.response().map_or(0, |r| r.address),

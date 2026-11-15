@@ -673,8 +673,8 @@ fn move_to(
     for v in moved {
         let _ = views.try_push(v);
     }
-    {
-        let mut space = process.space.lock();
+    if let Some(space_of) = process.space_now() {
+        let mut space = space_of.lock();
         let mut next = space.next_mapped(old, end);
         while let Some(page) = next {
             if space.move_page(page, shift(page)).is_err() {
@@ -755,14 +755,17 @@ pub fn madvise(process: &Process, addr: u64, len: u64, advice: u64) -> Result<u6
         }
     }
     // The frames go (a section's stay with it); the next touch maps a
-    // zero page or the file's page again.
-    let mut space = process.space.lock();
-    let mut next = space.next_mapped(addr, end);
-    while let Some(page) = next {
-        space.unmap_page(page);
-        next = space.next_mapped(page + PAGE, end);
+    // zero page or the file's page again. An exited process has no space
+    // and no pages left to drop (`process::release_space`).
+    if let Some(space_of) = process.space_now() {
+        let mut space = space_of.lock();
+        let mut next = space.next_mapped(addr, end);
+        while let Some(page) = next {
+            space.unmap_page(page);
+            next = space.next_mapped(page + PAGE, end);
+        }
+        drop(space);
     }
-    drop(space);
     charge::sync(process, vad.private_commit());
     Ok(0)
 }

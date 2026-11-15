@@ -1324,8 +1324,15 @@ fn copy_virtual_memory(call: &mut Call<'_>, write: bool) -> NtStatus {
         (arg!(call, 1), arg!(call, 2), arg!(call, 3), arg!(call, 4));
     let mut chunk = [0u8; 4096];
     let mut done = 0u64;
-    let mut status = NtStatus::SUCCESS;
-    while done < size {
+    // A process that has exited has given its address space up
+    // (process::release_space), so nothing can be copied: Windows'
+    // ReadProcessMemory through a handle held past the exit fails with
+    // ERROR_PARTIAL_COPY having copied nothing (measured on 11 26100),
+    // which is this status, not the STATUS_ACCESS_VIOLATION of an
+    // unreadable address in a process that is still there.
+    let gone = target.space_now().is_none();
+    let mut status = if gone { NtStatus::PARTIAL_COPY } else { NtStatus::SUCCESS };
+    while !gone && done < size {
         let n = (size - done).min(4096) as usize;
         let ok = if write {
             call.process.read(buffer + done, &mut chunk[..n]).is_ok()
@@ -1452,6 +1459,10 @@ const MBI_SIZE: usize = 48;
 fn nt_query_virtual_memory(call: &mut Call<'_>) -> NtStatus {
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     let target = tri!(call.dup_process(arg!(call, 0), PROCESS_QUERY_LIMITED_INFORMATION));
+    // Nothing to describe once the exit has released the address space
+    // (process::release_space): Windows' VirtualQueryEx through such a
+    // handle fails with ERROR_ACCESS_DENIED, which this status is.
+    tri!(target.live_space());
     let (addr, class, buffer, length, ret_ptr) =
         (arg!(call, 1), arg!(call, 2), arg!(call, 3), arg!(call, 4), arg!(call, 5));
     // The class is a ULONG: only the low 32 bits are defined.
