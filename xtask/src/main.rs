@@ -3606,6 +3606,7 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("office_install", "x86/ncrypt.dll", "Windows/SysWOW64"),
     ("office_install", "x86/msi.dll", "Windows/SysWOW64"),
     ("office_install", "x86/msxml6.dll", "Windows/SysWOW64"),
+    ("office_install", "x86/webservices.dll", "Windows/SysWOW64"),
     ("office_install", "x86/normaliz.dll", "Windows/SysWOW64"),
     ("office_install", "x86/powrprof.dll", "Windows/SysWOW64"),
     ("office_install", "x86/wldp.dll", "Windows/SysWOW64"),

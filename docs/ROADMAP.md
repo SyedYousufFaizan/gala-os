@@ -2235,13 +2235,16 @@ need gala's.
      point cannot be taken at all. Done: gala's webservices.dll, x64 and
      x86 (ARCHITECTURE "Other DLLs", webservices) -- the 15 functions
      setup.exe delay-loads are the XML reader subset alone (heaps, error
-     objects, a reader over a buffer of text, WsReadToStartElement,
-     WsReadStartElement and WsReadType; no channel, no service proxy, no
-     security binding), reading the document node by node with
-     `gala_xml`'s `Scan` so that a malformed one fails at the read that
-     reaches it, as Windows' reader does; test first in
-     `webservices_test` and `wow64_webservices_test`, every answer
-     measured on this machine's Windows 11 build 26200 in both widths.
+     objects, a reader over a buffer of text with its settings and its
+     position, WsReadToStartElement, WsReadStartElement,
+     WsReadEndElement and WsReadType under both element mappings; no
+     channel, no service proxy, no security binding), reading the
+     document node by node with `gala_xml`'s `Scan` so that a malformed
+     one fails at the read that reaches it, as Windows' reader does, and
+     reading one node ahead as Windows' reader does, which is what its
+     ROW and COLUMN show; test first in `webservices_test` and
+     `wow64_webservices_test`, every answer measured on this machine's
+     Windows 11 build 26200 in both widths.
      Where a run with egress gets to after the configuration service is
      what the next one from boot says. Seen
      too, not fatal so far: `slc.dll` a missing DLL (loaded by name at
