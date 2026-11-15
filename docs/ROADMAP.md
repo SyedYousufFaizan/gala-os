@@ -2228,11 +2228,22 @@ need gala's.
      integrator dies and then setting its failure event. Everything
      from APPLYCONFIGURATION on is measured with the guest's egress
      blocked (`restrict=y`, by hand and not checked in), because
-     setup.exe with egress reaches the configuration service and dies
-     3 s in at webservices.dll, below. That is the order the two
-     blockers have to be taken in: webservices first, since without it
-     no run that behaves like a real install gets as far as the
-     integrator, and a snapshot of that point cannot be taken at all. Seen
+     setup.exe with egress reaches the configuration service 3 s in and
+     reads its answer with webservices.dll. That is why webservices came
+     first of the two blockers: without it no run that behaves like a
+     real install gets as far as the integrator, and a snapshot of that
+     point cannot be taken at all. Done: gala's webservices.dll, x64 and
+     x86 (ARCHITECTURE "Other DLLs", webservices) -- the 15 functions
+     setup.exe delay-loads are the XML reader subset alone (heaps, error
+     objects, a reader over a buffer of text, WsReadToStartElement,
+     WsReadStartElement and WsReadType; no channel, no service proxy, no
+     security binding), reading the document node by node with
+     `gala_xml`'s `Scan` so that a malformed one fails at the read that
+     reaches it, as Windows' reader does; test first in
+     `webservices_test` and `wow64_webservices_test`, every answer
+     measured on this machine's Windows 11 build 26200 in both widths.
+     Where a run with egress gets to after the configuration service is
+     what the next one from boot says. Seen
      too, not fatal so far: `slc.dll` a missing DLL (loaded by name at
      run time), Office's product key not decoded by gala's sppc
      (SLInstallProofOfPurchase answers SL_E_INVALID_PRODUCT_KEY; no
@@ -2357,19 +2368,8 @@ need gala's.
      TRUE and STATUS_SUCCESS;
      then the other DLLs
      setup.exe imports that gala has no i686 build of (xmllite,
-     webservices, cabinet, credui, and osppc.dll, which is the system's
-     sppc.dll, gala's being x64 only so far; of these webservices is
-     where a run whose guest has egress stops: setup.exe reaches the
-     configuration service over winhttp and then ends with 0xc06d007e at
-     webservices.dll, whose delay imports in setup.exe are the XML
-     reader/writer subset alone -- WsCreateError, WsCreateHeap,
-     WsCreateReader, WsCreateWriter, WsFillReader, WsFreeError,
-     WsFreeHeap, WsFreeReader, WsFreeWriter, WsGetErrorProperty,
-     WsGetErrorString, WsReadStartElement, WsReadToStartElement,
-     WsReadType and WsSetInput: a pull parser over a buffer, no channel,
-     no service proxy, no security binding. gala's `user/webservices`
-     has a disjoint set of x64 stubs staged for sqllocaldb, so the
-     i686 build and these 15 functions are both still to do) and the
+     cabinet, credui, and osppc.dll, which is the system's sppc.dll,
+     gala's being x64 only so far) and the
      functions its imports lack (shell32's
      SHGetSettings, user32's CheckRadioButton,
      iphlpapi's CreateSortedAddressPairs); BITS (the

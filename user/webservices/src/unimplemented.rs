@@ -5,12 +5,6 @@
 gala_stubs::unimplemented_exports!("webservices.dll":
     WsAddCustomHeader
     WsCall
-    WsCreateError
-    WsCreateHeap
     WsCreateServiceProxy
-    WsGetErrorProperty
-    WsGetErrorString
     WsOpenServiceProxy
-    WsResetError
-    WsResetHeap
 );

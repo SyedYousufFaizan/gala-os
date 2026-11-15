@@ -3136,7 +3136,7 @@ own name).
 | networking | ws2_32 ("ws2_32.dll"), mswsock (forwarders to ws2_32), wsock32 (Winsock 1.1: forwarders to ws2_32 with the standard ordinals), iphlpapi, winhttp, wininet, urlmon, dhcpcsvc, netapi32, mpr, wldap32 |
 | UI | user32, gdi32, comctl32, comdlg32, uxtheme, msimg32, riched20, msftedit, oleacc, uiautomationcore ("Windows on the screen", "UI Automation"), msctf (input scopes, "Other DLLs"), gdiplus (GDI+'s flat API: bitmaps, PNG, solid fills, "Other DLLs"), windows.ui (Windows.UI.ViewManagement.UISettings, "Other DLLs") |
 | COM, shell | ole32, combase (forwarders to ole32), oleaut32, rpcrt4, shell32, shlwapi, xmllite, msxml6, appxdeploymentclient (Windows.Management.Deployment.PackageManager with no packages) |
-| other | winmm, powrprof, version, dbghelp, pdh, setupapi, odbc32, xolehlp, webservices, wintrust, clusapi, resutils, msi (Windows Installer's queries: nothing installed, "Other DLLs"), rstrtmgr (the Restart Manager, "Other DLLs"), wofutil (the Windows Overlay Filter's API: no filter, "Other DLLs"), sppc (the Software Protection Platform's client over gala's license store, "Other DLLs"), wldp (Windows Lockdown Policy: unlocked, no policy in force) |
+| other | winmm, powrprof, version, dbghelp, pdh, setupapi, odbc32, xolehlp, webservices (Windows Web Services' XML reader, "Other DLLs"), wintrust, clusapi, resutils, msi (Windows Installer's queries: nothing installed, "Other DLLs"), rstrtmgr (the Restart Manager, "Other DLLs"), wofutil (the Windows Overlay Filter's API: no filter, "Other DLLs"), sppc (the Software Protection Platform's client over gala's license store, "Other DLLs"), wldp (Windows Lockdown Policy: unlocked, no policy in force) |
 
 Programs in System32 beside the DLLs: `user/conhost` (conhost.exe,
 "Consoles") and `user/cmd` (cmd.exe, "Other DLLs and programs").
@@ -5326,8 +5326,9 @@ of their own, clients of it) is the yardstick.
   comctl32, shell32, ole32 and others); a function is implemented by
   removing its name from the list.
 - **Stub-only DLLs**: pdh, xolehlp, odbc32, authz,
-  webservices, dhcpcsvc and oleacc are nothing but such stubs (wintrust's
-  catalog functions are too: "wintrust: Authenticode").
+  dhcpcsvc and oleacc are nothing but such stubs (wintrust's
+  catalog functions are too: "wintrust: Authenticode", and so is
+  webservices' SOAP side: "Other DLLs").
   comdlg32 (`comdlg32_test`) draws no dialog yet: GetFileTitleW (the
   name without its directory, the size needed when the buffer is
   short; the extension kept), the parameter checks FindTextW,
@@ -9544,8 +9545,9 @@ file's buffer is reserved fallibly (`try_reserve_exact`, an
 package's as `<package>/<file>`), the block, expected and actual
 values, and for XML the element and line.
 
-**XML** (`user/gala_xml`, gala's own, shared with msxml6.dll; host
-tests `cargo test -p gala_xml`): elements, attributes, text, CDATA,
+**XML** (`user/gala_xml`, gala's own, shared with msxml6.dll's DOM
+and webservices.dll's reader; host tests `cargo test -p gala_xml`):
+elements, attributes, text, CDATA,
 comments, PIs (the XML declaration among them), the predefined entities
 and character references, namespaces (declarations kept as attributes
 in the xmlns namespace, as the DOM has them), UTF-8 (with or without
@@ -9555,7 +9557,13 @@ concatenated text. DTDs are refused (no entity expansion), as are
 undeclared prefixes, duplicate attributes and nesting beyond 256;
 errors carry the line and column; iterative, so depth costs no stack.
 Its allocations are infallible (`alloc`'s String and Vec: the input's
-size bounds them).
+size bounds them). Two faces over the same character-level rules, so
+both refuse the same documents: `parse` and `parse_document` read a
+document whole into the tree above, and `Scan` hands out one node at a
+time (`next_event(text)` -> `Event`) for a caller that pulls, as
+WS_XML_READER's does. The text is passed to each call and not held, so
+the scan is an offset into the document and borrows nothing; a caller
+can keep the document and the scan side by side.
 **ZIP64** (`zip.rs`): the zip64 end record, locator and extra field
 (MSIX packages are zip64 with data descriptors; the central directory is
 authoritative); entries of 4 GiB or more are refused (archives are in
@@ -9753,6 +9761,40 @@ stations and desktops a program creates are refused until stage 3).
   a store file that is not a license as `sppc.dll!store: unreadable
   license file`. No 32-bit build, no sppcext.dll (SLActivateProduct)
   and no slc.dll yet: nothing has asked for them.
+- webservices (`user/webservices`, x64 and x86; `webservices_test`,
+  `wow64_webservices_test`): Windows Web Services' XML reader, the part
+  of WWSAPI the Office Deployment Tool's setup.exe delay-loads to read
+  the configuration service's answer. Heaps (WsCreateHeap, WsResetHeap,
+  WsFreeHeap): the memory a read hands back, in blocks of 8-byte words
+  so that each is aligned for what is put in it, and bounded by the size
+  the heap was created with (WS_E_QUOTA_EXCEEDED beyond it). Error
+  objects (WsCreateError, WsResetError, WsFreeError, WsGetErrorProperty,
+  WsGetErrorString): the strings describing a failure, newest first, as
+  Windows leaves them; a buffer that is not the property's own size is
+  E_INVALIDARG and is left untouched, and an index past the last string
+  is E_INVALIDARG with the WS_STRING untouched (both measured). Readers
+  over a buffer of text XML (WsCreateReader, WsSetInput, WsFillReader,
+  WsFreeReader; a buffer input is the whole document, so a fill never
+  waits) and the reads setup.exe makes: WsReadToStartElement (the
+  element by local name and namespace, `found` FALSE with S_OK when it
+  is not there and WS_E_INVALID_FORMAT when the caller passed no
+  `found`), WsReadStartElement, and WsReadType with
+  WS_ELEMENT_TYPE_MAPPING for WS_WSZ_TYPE (a string onto the heap) and
+  WS_UINT32_TYPE (a number; WS_E_NUMERIC_OVERFLOW for one that does not
+  fit). The document is read node by node with gala's XML reader ("XML",
+  `gala_xml`'s `Scan`), so a malformed document fails at the read that
+  reaches it and faults the reader -- every later call on it is
+  WS_E_OBJECT_FAULTED -- as Windows' reader does, and not when the input
+  is set. A writer is an object and nothing more (WsCreateWriter,
+  WsFreeWriter: setup.exe creates one and imports no write function).
+  Limits: the buffer input and the text encoding only; every other
+  WS_TYPE, type mapping, read option, reader property and encoding is
+  recorded in the missing-features ledger with the number it was handed
+  and answered WS_E_NOT_SUPPORTED, so a program that needs more says
+  which. A null namespace matches an element in any namespace, which of
+  the two readings Windows takes not being measured, so it is recorded
+  too. The SOAP side -- channels, service proxies, calls, custom headers
+  -- is stubs for SQL Server LocalDB ("Stub-only DLLs").
 - gdiplus (`user/gdiplus`, x64 and x86; `gdiplus_test`,
   `wow64_gdiplus_test`): GDI+'s flat API, the part ODT's setup.exe
   draws its window with (Display Level Full): GdiplusStartup (versions
