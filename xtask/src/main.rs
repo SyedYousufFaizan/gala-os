@@ -17391,13 +17391,15 @@ const GIMP_SCREEN: ScreenCheck = ScreenCheck {
             input: &["sendkey ret"],
             pixels: &[],
         },
-        // Quit: the image is changed (exported, not saved), so GIMP asks;
-        // Ctrl+D is its "Discard Changes".
+        // Exported: the title names out.ppm once the plug-in is done
+        // (screen13.png). Quit: the image is changed (exported, not
+        // saved), so GIMP asks; Ctrl+D is its "Discard Changes".
         ScreenStep {
-            after: "window 'Export Image as PPM' left the screen",
-            input: &["sendkey ctrl-q"],
-            pixels: &[],
+            after: "desktop: window titled '*[out] (exported)",
+            input: &[],
+            pixels: &[PixelCheck::AnyIn(262, 185, 330, 450, 0x0537d7)],
         },
+        ScreenStep { after: "", input: &["sendkey ctrl-q"], pixels: &[] },
         ScreenStep {
             after: "desktop: shown window 'Quit GIMP'",
             input: &["sendkey ctrl-d"],
