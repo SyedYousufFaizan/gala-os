@@ -623,6 +623,9 @@ of the time, and the HPET still advanced exactly with host time). So:
   no less than 4 GHz: a low calibration makes them longer, never shorter.
 - Invariant: no timeout or delay may be computed from `raw_monotonic_ns`
   alone where ending early is harmful.
+- A sleep of `n` ticks wakes `n + 1` ticks from now (`sched::sleep_ms`):
+  the current tick period is partly over, so `n` ticks from now can be
+  just over `n - 1` periods, and a sleep promises at least its time.
 
 ## Threads and scheduling
 

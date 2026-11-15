@@ -620,14 +620,18 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
 /// `arm_sched`, before anything else starts threads): two kernel threads
 /// yield to each other 100 rounds each, then sleep 10 ms (woken by the
 /// tick) and are joined. Logged `schedtest: ok` only if they took turns
-/// (each round's runner differed from the last's almost every time) and
-/// both ended; else what was seen, as an error.
+/// (each round's runner differed from the last's almost every time), each
+/// slept at least its 10 ms in ticks (one clock: the tick's) and both
+/// ended; else what was seen, as an error.
 fn sched_selftest() {
     use core::sync::atomic::AtomicUsize;
     const ROUNDS: usize = 100;
     static LAST: AtomicUsize = AtomicUsize::new(usize::MAX);
     static TURNS: AtomicUsize = AtomicUsize::new(0);
     static DONE: AtomicUsize = AtomicUsize::new(0);
+    /// The shortest sleep seen, in ticks.
+    static SLEPT: AtomicUsize = AtomicUsize::new(usize::MAX);
+    const SLEEP_TICKS: usize = (10 * time::TICK_HZ / 1000) as usize;
     fn worker(me: usize) {
         for _ in 0..ROUNDS {
             if LAST.swap(me, Ordering::Relaxed) != me {
@@ -635,7 +639,9 @@ fn sched_selftest() {
             }
             sched::yield_now();
         }
+        let before = time::raw_ticks();
         sched::sleep_ms(10);
+        SLEPT.fetch_min((time::raw_ticks() - before) as usize, Ordering::Relaxed);
         DONE.fetch_add(1, Ordering::Relaxed);
     }
     let start = time::raw_monotonic_ns();
@@ -645,13 +651,16 @@ fn sched_selftest() {
     }
     let ms = (time::raw_monotonic_ns() - start) / 1_000_000;
     let (turns, done) = (TURNS.load(Ordering::Relaxed), DONE.load(Ordering::Relaxed));
-    if spawned.iter().all(Result::is_ok) && done == 2 && turns >= ROUNDS && ms >= 10 {
+    let slept = SLEPT.load(Ordering::Relaxed);
+    if spawned.iter().all(Result::is_ok) && done == 2 && turns >= ROUNDS && slept >= SLEEP_TICKS {
         info!(
-            "schedtest: ok: 2 threads took {turns} turns in {ROUNDS} rounds each, slept, joined ({ms} ms)"
+            "schedtest: ok: 2 threads took {turns} turns in {ROUNDS} rounds each, slept {slept} \
+             ticks (asked {SLEEP_TICKS}), joined ({ms} ms)"
         );
     } else {
         error!(
-            "schedtest: failed: spawned {:?}, {done} of 2 ended, {turns} turns in {ROUNDS} rounds each, {ms} ms",
+            "schedtest: failed: spawned {:?}, {done} of 2 ended, {turns} turns in {ROUNDS} rounds \
+             each, shortest sleep {slept} ticks of {SLEEP_TICKS} asked, {ms} ms",
             spawned.map(|r| r.is_ok())
         );
     }
