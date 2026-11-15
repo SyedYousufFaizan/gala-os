@@ -4899,6 +4899,8 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("lx_inotify_pie", "user/lx/bin/inotify_test-pie", "lx"),
     ("lx_fsid", "user/lx/bin/fsid_test", "lx"),
     ("lx_fsid_pie", "user/lx/bin/fsid_test-pie", "lx"),
+    ("lx_seccomp", "user/lx/bin/seccomp_test", "lx"),
+    ("lx_seccomp_pie", "user/lx/bin/seccomp_test-pie", "lx"),
     ("lx_fdbits", "user/lx/bin/fdbits_test", "lx"),
     ("lx_fdbits_pie", "user/lx/bin/fdbits_test-pie", "lx"),
     ("lx_timerfd", "user/lx/bin/timerfd_test", "lx"),
@@ -14020,6 +14022,22 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit lxrun=/lx/fsid_test-pie lxargs=./fsid_test",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["personality linux", "run: end /lx/fsid_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/seccomp_test (LD: sandboxes' filters): the probes, the
+        // checks before a filter is taken, filters at work and strict
+        // mode; its transcript must be its expected.txt (real Linux's).
+        name: "lx_seccomp",
+        cmdline: "qemu_exit lxrun=/lx/seccomp_test lxargs=./seccomp_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/seccomp_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/seccomp_test as a static-pie.
+        name: "lx_seccomp_pie",
+        cmdline: "qemu_exit lxrun=/lx/seccomp_test-pie lxargs=./seccomp_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/seccomp_test-pie", BOOT_OK_MARKER],
     },
     Scenario {
         // user/lx/fdbits_test (LD: Ubuntu 26.04's glycin): a descriptor

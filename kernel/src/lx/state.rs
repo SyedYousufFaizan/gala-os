@@ -296,6 +296,9 @@ pub struct LxThread {
     /// sigaltstack(2): its alternate signal stack (`DISABLED_STACK`: none),
     /// where SA_ONSTACK handlers run (`sigcalls::push_frame`).
     pub altstack: lx_abi::signal::Stack,
+    /// Its seccomp state (`lx::seccomp`): a thread it makes and a fork's
+    /// child get its own; execve keeps it.
+    pub seccomp: super::seccomp::Seccomp,
 }
 
 /// No alternate signal stack (a new thread's, after execve).
@@ -362,6 +365,9 @@ pub struct LxProcess {
     /// PR_SET_NO_NEW_PRIVS: set once, kept by its children and across
     /// execve (gala has no set-user-id programs it would hold back).
     pub no_new_privs: core::sync::atomic::AtomicBool,
+    /// Some thread of it has seccomp state (`lx::seccomp::check` looks
+    /// only then).
+    pub seccomp_used: core::sync::atomic::AtomicBool,
     /// PR_SET_PDEATHSIG: the signal it gets when its parent ends (0:
     /// none); not a fork's child's, kept across execve.
     pub pdeathsig: core::sync::atomic::AtomicU32,
@@ -422,6 +428,7 @@ pub fn create(
         exe: IrqMutex::new(exe),
         rlimits: IrqMutex::new(super::resource::Limits::default()),
         no_new_privs: core::sync::atomic::AtomicBool::new(false),
+        seccomp_used: core::sync::atomic::AtomicBool::new(false),
         pdeathsig: core::sync::atomic::AtomicU32::new(0),
         life: super::pidfd::Life::new()?,
         auxv: IrqMutex::new(Vec::new()),
@@ -480,6 +487,9 @@ pub fn fork(parent: &LxProcess, pid: u64, vfork: bool) -> Result<KArc<LxProcess>
         rlimits: IrqMutex::new(rlimits),
         no_new_privs: core::sync::atomic::AtomicBool::new(
             parent.no_new_privs.load(core::sync::atomic::Ordering::Relaxed),
+        ),
+        seccomp_used: core::sync::atomic::AtomicBool::new(
+            parent.seccomp_used.load(core::sync::atomic::Ordering::Relaxed),
         ),
         auxv: IrqMutex::new(auxv),
         pdeathsig: core::sync::atomic::AtomicU32::new(0),
@@ -709,6 +719,7 @@ impl LxProcess {
             robust_list: 0,
             comm,
             altstack: DISABLED_STACK,
+            seccomp: super::seccomp::Seccomp::default(),
         })?;
         if let Err(e) = self.signals.lock().add_thread(tid, mask) {
             self.threads.lock().retain(|t| t.tid != tid);
@@ -750,6 +761,29 @@ impl LxProcess {
     /// Thread `tid`'s alternate signal stack.
     pub fn altstack(&self, tid: u64) -> lx_abi::signal::Stack {
         self.threads.lock().iter().find(|t| t.tid == tid).map_or(DISABLED_STACK, |t| t.altstack)
+    }
+
+    /// Thread `tid`'s seccomp state.
+    pub fn seccomp(&self, tid: u64) -> super::seccomp::Seccomp {
+        self.threads
+            .lock()
+            .iter()
+            .find(|t| t.tid == tid)
+            .map(|t| t.seccomp.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn set_seccomp(&self, tid: u64, s: super::seccomp::Seccomp) {
+        if let Some(t) = self.threads.lock().iter_mut().find(|t| t.tid == tid) {
+            t.seccomp = s;
+        }
+    }
+
+    /// Every thread's (SECCOMP_FILTER_FLAG_TSYNC).
+    pub fn set_seccomp_all(&self, s: &super::seccomp::Seccomp) {
+        for t in self.threads.lock().iter_mut() {
+            t.seccomp = s.clone();
+        }
     }
 
     pub fn set_altstack(&self, tid: u64, s: lx_abi::signal::Stack) {

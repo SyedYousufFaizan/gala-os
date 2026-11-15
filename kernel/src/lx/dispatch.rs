@@ -91,7 +91,7 @@ pub struct Call<'a> {
 impl Call<'_> {
     /// System call argument `i` (where the architecture's Linux ABI has
     /// it: `machine::syscall_arg`).
-    fn arg(&self, i: usize) -> u64 {
+    pub fn arg(&self, i: usize) -> u64 {
         super::machine::syscall_arg(self.frame, i)
     }
 }
@@ -125,7 +125,11 @@ fn dispatch(frame: &mut SyscallFrame) {
         && crate::events::syscall_pid_wanted(call.process.id);
     let args = if traced { core::array::from_fn(|i| call.arg(i)) } else { [0; 6] };
     let started = if traced { platform::monotonic_ns() } else { 0 };
-    let result = handle(&call, number);
+    // A thread's seccomp filters (or strict mode) answer first.
+    let result = match super::seccomp::check(&call, number) {
+        None => handle(&call, number),
+        Some(answer) => answer,
+    };
     let rax = match result {
         Ok(v) => v,
         Err(e) => errno::to_return(e),
@@ -205,6 +209,7 @@ fn handle(call: &Call<'_>, number: u64) -> Result {
         nr::SETRLIMIT => super::resource::setrlimit(call, a(0), a(1)),
         nr::GETRANDOM => super::resource::getrandom(call, a(0), a(1), a(2)),
         nr::WAIT4 => super::fork::wait4(call, a(0), a(1), a(2), a(3)),
+        nr::SECCOMP => super::seccomp::seccomp(call, a(0), a(1), a(2)),
         nr::WAITID => super::fork::waitid(call, a(0), a(1), a(2), a(3), a(4)),
         nr::INOTIFY_INIT => super::inotify::init1(call, 0),
         nr::INOTIFY_INIT1 => super::inotify::init1(call, a(0)),

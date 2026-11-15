@@ -3749,14 +3749,12 @@ the next breakthroughs).
    (`lx_altstack`: Rust's runtime), and an epoll_wait seeing what another
    thread ADDs or MODs meanwhile (`lx_epoll`: glycin's loader connection,
    armed from one thread while another waits), termios2 (`lx_pty`:
-   glibc 2.43's isatty asks with TCGETS2). Next: seccomp's probes (GET_ACTION_AVAIL,
-   GET_NOTIF_SIZES; a filter mode's flags checked: EFAULT for a NULL
-   program). Done since:
-   pidfds and waitid (`lx_pidfd`: GLib 2.88 watches each child with a
+   glibc 2.43's isatty asks with TCGETS2), pidfds and waitid (`lx_pidfd`: GLib 2.88 watches each child with a
    pidfd and reaps it with waitid(P_PIDFD)), /proc/mounts (`lx_procfs`:
    GIO's mount monitor), inotify (`lx_inotify`: GIO's file monitors),
    setfsuid and setfsgid (`lx_fsid`), a process's name after execve in
-   the log (`lx_gimp_batch`: `process gimp-console-3.2`). Linux system calls
+   the log (`lx_gimp_batch`: `process gimp-console-3.2`), seccomp: strict
+   mode, filters enforced, the probes (`lx_seccomp`). Linux system calls
    are traced with `events=syscall` (`lx syscall`). Open: rseq is ENOSYS
    (glibc carries on without it).
 

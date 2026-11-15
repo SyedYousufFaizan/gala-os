@@ -11922,6 +11922,24 @@ The running parts (milestone 1; `lxrun=`):
   told (ledgered), P_PGID waits for any child (ledgered), siginfo given
   to pidfd_send_signal is unused (ledgered), no PIDFD_THREAD pidfds, no
   pidfd_getfd.
+- **seccomp** (`lx::seccomp`; seccomp_test, `lx_seccomp`): strict mode
+  and filters per thread (`LxThread::seccomp`: a thread it makes and a
+  fork's child get it, execve keeps it), checked in `dispatch` before
+  each call of a process that has some (`LxProcess::seccomp_used`).
+  Filters are classic BPF on the call's `seccomp_data` (nr,
+  AUDIT_ARCH_X86_64, ip, args), checked before they are taken as Linux's
+  seccomp_check_filter and bpf_check_classic check them (EINVAL), each
+  run newest first, the lowest action winning (the newest of equals):
+  ALLOW, LOG; ERRNO (its data); TRAP (SIGSYS to the thread, SYS_SECCOMP
+  with the data, the call's address, number and arch; the call skipped,
+  rax its number; forced to the default end if blocked or ignored);
+  TRACE and USER_NOTIF answer ENOSYS (no tracer, no listener);
+  KILL_THREAD, KILL_PROCESS end with SIGSYS. Strict mode allows read,
+  write, exit and rt_sigreturn, SIGKILL otherwise. A filter needs
+  no_new_privs or uid 0 (EACCES). The probes: GET_ACTION_AVAIL,
+  GET_NOTIF_SIZES (80, 24, 64); prctl's PR_GET_SECCOMP and
+  PR_SET_SECCOMP. Limits: no listener fd (NEW_LISTENER: EINVAL,
+  ledgered); a read of scratch memory before a write is not refused.
 - **A process's name after execve** (`Core::current_name`,
   `name_now`): the new program's file name (the path given: a script's,
   as `comm`), in the log lines (its exit, a missing call, the thread

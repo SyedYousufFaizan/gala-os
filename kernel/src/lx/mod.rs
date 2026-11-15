@@ -78,6 +78,7 @@ pub mod prctl;
 pub mod procfs;
 pub mod pty;
 pub mod resource;
+pub mod seccomp;
 pub mod session;
 pub mod shm;
 pub mod sigcalls;
