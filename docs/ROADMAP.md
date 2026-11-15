@@ -2219,14 +2219,20 @@ need gala's.
      measured) and gala does not: the one place msi's answer is
      deliberately not Windows', a database engine being galapkg's
      business (ROADMAP PK), not msi.dll's.
-     Next: the install's next blocker, from the `office-integrator`
-     snapshot. A failure there fails the install as before: the
+     A failure there fails the install as before: the
      service ends with 17002 and setup.exe with 0x426a (17002,
      "C2RClient returned a failing exit code") -- at 90%
      of the scenario's progress, the uninstall-centennial, migrate and
      fonts tasks done (the fonts task lays down Office's TTFs and TTCs
      and succeeds), the service going quiet for the 30 s in which the
-     integrator dies and then setting its failure event. Seen
+     integrator dies and then setting its failure event. Everything
+     from APPLYCONFIGURATION on is measured with the guest's egress
+     blocked (`restrict=y`, by hand and not checked in), because
+     setup.exe with egress reaches the configuration service and dies
+     3 s in at webservices.dll, below. That is the order the two
+     blockers have to be taken in: webservices first, since without it
+     no run that behaves like a real install gets as far as the
+     integrator, and a snapshot of that point cannot be taken at all. Seen
      too, not fatal so far: `slc.dll` a missing DLL (loaded by name at
      run time), Office's product key not decoded by gala's sppc
      (SLInstallProofOfPurchase answers SL_E_INVALID_PRODUCT_KEY; no
