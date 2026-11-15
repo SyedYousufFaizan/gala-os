@@ -213,7 +213,10 @@ pub fn record(service: &'static str, what: &'static str, detail: u64) {
 /// "stub" is an export that exists only to report itself and then ends
 /// the process (`gala_stubs`); "not implemented" is a gap the caller is
 /// told about and lives with (a method of an interface, a type the
-/// reader cannot read), so only the first ends a program.
+/// reader cannot read), so only the first ends a program. "load failed"
+/// is a DLL the loader found and could not load (its detail the status),
+/// which is what names the DLL behind a process that dies
+/// STATUS_DLL_INIT_FAILED.
 pub fn user_what(code: u32) -> &'static str {
     match code {
         1 => "missing export",
@@ -221,6 +224,7 @@ pub fn user_what(code: u32) -> &'static str {
         3 => "not implemented",
         4 => "missing dll",
         6 => "stub",
+        7 => "load failed",
         _ => "other",
     }
 }

@@ -1305,13 +1305,13 @@ const FILE_SUPPORTS_POSIX_UNLINK_RENAME: u32 = 0x400;
 /// FileLinkInformation (`ramfs::RamFs::links`).
 const FILE_SUPPORTS_HARD_LINKS: u32 = 0x40_0000;
 
-/// What FILE_FS_ATTRIBUTE_INFORMATION reports: a feature of the volume's
-/// that is not reported is one programs do not use, however well it works
-/// -- Office's installer asks for the volume's features, makes no hard
-/// link when they do not include them, and leaves the files that should
-/// have been links empty. Only features that are there are reported;
-/// NTFS has these and more (sparse files, named streams, object IDs,
-/// open by file ID, a USN journal, quotas, compression, encryption,
+/// What FILE_FS_ATTRIBUTE_INFORMATION reports: every feature the volume
+/// has, and no other. A program asks the volume what it can do and takes
+/// the answer, so a feature that works but is not reported is one
+/// programs do not use: gala keeps per-file security descriptors, hard
+/// links, reparse points and POSIX unlink and rename, and says so. NTFS
+/// reports these and more (sparse files, named streams, object IDs, open
+/// by file ID, a USN journal, quotas, compression, encryption,
 /// transactions, case-sensitive search per open), which gala has not.
 const VOLUME_ATTRIBUTES: u32 = FILE_CASE_PRESERVED_NAMES
     | FILE_UNICODE_ON_DISK
@@ -1426,8 +1426,8 @@ mod tests {
 
     #[test]
     fn the_volume_reports_the_features_it_has_and_no_others() {
-        // Hard links are the one Office's installer asks about
-        // (`user/volume_test`): without the bit it makes none.
+        // The features gala has (`user/volume_test` asks for the same
+        // bits, and passes on Windows' NTFS, which has them too).
         assert_eq!(VOLUME_ATTRIBUTES & FILE_SUPPORTS_HARD_LINKS, FILE_SUPPORTS_HARD_LINKS);
         assert_eq!(VOLUME_ATTRIBUTES & FILE_SUPPORTS_REPARSE_POINTS, FILE_SUPPORTS_REPARSE_POINTS);
         assert_eq!(VOLUME_ATTRIBUTES & FILE_PERSISTENT_ACLS, FILE_PERSISTENT_ACLS);

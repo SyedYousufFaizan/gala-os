@@ -22,11 +22,12 @@
 //!   flags of the features the volume has: case preserved, Unicode names
 //!   on disk, persistent ACLs, reparse points, POSIX unlink and rename,
 //!   hard links. A feature the volume does not report is one programs do
-//!   not use, however well it works (Office's installer makes no hard
-//!   links and leaves the files that should be links empty). NTFS reports
-//!   these and more (sparse files, named streams, object IDs, open by file
-//!   ID, a USN journal, quotas, compression, encryption, transactions),
-//!   which gala does not have yet, so the check is of these bits only.
+//!   not use, however well it works: a program asks the volume what it
+//!   can do before it uses it (Office's installer asks here, before it
+//!   stages a file). NTFS reports these and more (sparse files, named
+//!   streams, object IDs, open by file ID, a USN journal, quotas,
+//!   compression, encryption, transactions), which gala does not have
+//!   yet, so the check is of these bits only.
 //! - A file of `<MiB>` (the first argument; 256 by default) written in
 //!   1 MiB pieces in the temporary directory: free space (of that
 //!   directory, given as a non-root path) drops by at least its size less

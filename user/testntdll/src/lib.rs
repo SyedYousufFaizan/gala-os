@@ -1665,10 +1665,12 @@ fn load_module(name: &[u8], search: Search) -> Result<usize, u32> {
     let base = match map_dll(name, search) {
         Ok(base) => base,
         Err(status) => {
-            if status == STATUS_DLL_NOT_FOUND {
-                // Gaps are never silent: the ledger names the DLL.
-                GalaRecordMissing(name.as_ptr(), name.len(), 4, 0);
-            }
+            // Gaps are never silent: the ledger names the DLL, and tells
+            // one that is nowhere from one that is there and unusable (an
+            // empty file, an image of the wrong kind).
+            let (what, detail) =
+                if status == STATUS_DLL_NOT_FOUND { (4, 0) } else { (7, u64::from(status)) };
+            GalaRecordMissing(name.as_ptr(), name.len(), what, detail);
             return Err(status);
         }
     };
@@ -1709,6 +1711,11 @@ fn load_module(name: &[u8], search: Search) -> Result<usize, u32> {
         }
     };
     if let Err(status) = attach() {
+        // Found and still not loaded: an import of its own that did not
+        // bind, a TLS callback, or a DllMain that said no. Without this
+        // the process dies STATUS_DLL_INIT_FAILED and nothing says which
+        // DLL (ROADMAP OF).
+        GalaRecordMissing(name.as_ptr(), name.len(), 7, u64::from(status));
         unload_module(slot);
         return Err(status);
     }

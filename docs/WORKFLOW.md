@@ -154,11 +154,11 @@ cargo xtask export-tests    # refresh user/bin (CI compares)
   programs that need it show up in `target/report/ledger.md`.
 - **What gala has, it reports**: a program asks what the system can do
   before it uses it, and takes the answer. A feature that works but is
-  not in the answer is a feature no program reaches: gala's volume
-  implemented hard links while
-  FILE_FS_ATTRIBUTE_INFORMATION left out FILE_SUPPORTS_HARD_LINKS, so
-  Office's installer made none and left the files that should have been
-  links empty, which cost Word its start (`file::VOLUME_ATTRIBUTES`,
+  not in the answer is a feature no program reaches: gala's volume kept
+  per-file security descriptors, hard links, reparse points and POSIX
+  unlink and rename while FILE_FS_ATTRIBUTE_INFORMATION left all four
+  out, so a program that asks -- Office's installer asks before it
+  stages a file -- could not use any of them (`file::VOLUME_ATTRIBUTES`,
   `user/volume_test`). When you add a feature, add it to what reports
   the system's features (the volume's flags, a device's
   characteristics, GetVersionEx, IsProcessorFeaturePresent, an
@@ -2111,6 +2111,20 @@ for the framebuffer.
 - The apps' processes start on the whole 64-bit system
   (`FULL_SYSTEM_SCENARIOS`) and the install's own files; what they still
   lack is in the ledger (ROADMAP OF's load list ranks it).
+- **A screen check waits for the title Windows gives the window.** The
+  marker of `OFFICE_WORD_SCREEN` and `OFFICE_EXCEL_SCREEN` is the
+  kernel's `desktop: shown window '<title>'` line, with the title
+  measured on Windows (`Document1 - Word`, `EXCEL12.XLSX`); it stops at
+  the name, because Windows appends to it (an unactivated install says
+  so in the caption).
+- **Check the window, not where it is.** A program puts its own window
+  where it likes, so both checks ask only for what a drawn document
+  shows wherever it sits: at least a tenth of the screen exactly white
+  (`PixelCheck::Most`: Word's page, Excel's cells) and the active
+  window's pill on the taskbar. The bare desktop has 0.008% white and
+  nothing near the pill, so this tells a window from an empty desktop.
+  Each check ends with Alt+F4, which closes the app and with it
+  `consolerun`, whose status is the app's.
 
 ### Linux test programs (user/lx, ROADMAP LX)
 

@@ -394,8 +394,11 @@ of a rarer kind says a gap was lost and the caps need revisiting.
 - gala's user-mode DLLs record through ntdll's `GalaRecordMissing`
   (`dll!function` names, 64 characters kept). Its kinds: `missing
   export`, `unsupported`, `not implemented` (a gap the caller is told
-  about and lives with), `missing dll`, `stub` (an export that only
-  reports itself and ends the process, `gala_stubs`) and `other`. Both
+  about and lives with), `missing dll`, `load failed` (a DLL the loader
+  found and could not load, its detail the status: what names the DLL
+  behind a process that dies STATUS_DLL_INIT_FAILED), `stub` (an export
+  that only reports itself and ends the process, `gala_stubs`) and
+  `other`. Both
   `stub` and `not implemented` are also logged as they happen, because a
   run cut short by a snapshot never dumps the ledger; only `stub`'s line
   says the process ended. The Windows Runtime's:

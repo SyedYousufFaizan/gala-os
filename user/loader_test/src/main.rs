@@ -33,7 +33,8 @@
 //! only (found nowhere once LdrRemoveDllDirectory took it out). A path
 //! with `.` and `..` components loads the DLL it resolves to. A
 //! path-qualified load of a DLL whose name another loaded DLL has (from
-//! another directory) maps the file named, a second module. Prints
+//! another directory) maps the file named, a second module. An empty
+//! file is no image and does not load. Prints
 //! `loader_test: ok` or exits with the number of the failing check.
 
 #![no_std]
@@ -44,6 +45,7 @@ use ntrt::*;
 const STATUS_ENTRYPOINT_NOT_FOUND: NtStatus = 0xc000_0139;
 const STATUS_DLL_NOT_FOUND: NtStatus = 0xc000_0135;
 const STATUS_ORDINAL_NOT_FOUND: NtStatus = 0xc000_0138;
+const STATUS_INVALID_FILE_FOR_SECTION: NtStatus = 0xc000_0020;
 const INITIAL_VALUE: u64 = 0x1234_5678_9abc;
 
 #[repr(C)]
@@ -760,6 +762,27 @@ fn run() -> Result<(), u32> {
     c.eq(remove(cookie).into(), STATUS_SUCCESS.into())?;
     let s = (api.load)(user_dirs, core::ptr::null(), &UnicodeString::new(sub2), &mut dll2);
     c.eq(s.into(), STATUS_DLL_NOT_FOUND.into())?;
+    // An empty file is no image: Windows answers
+    // STATUS_INVALID_FILE_FOR_SECTION (measured; LoadLibraryW reports it
+    // as NULL with ERROR_BAD_EXE_FORMAT). Office's install leaves 16
+    // such 0-byte DLLs under its root where Windows has reparse points
+    // (ROADMAP OF), so a loader that took one for a module with no
+    // exports would turn one load failure into a run of GetProcAddress
+    // misses.
+    let empty = Path::new().units(top.get()).s("\\empty.dll");
+    let (st, h) = open_path(&empty, GENERIC_WRITE, FILE_OVERWRITE_IF, FILE_NON_DIRECTORY_FILE);
+    c.eq(st.into(), STATUS_SUCCESS.into())?;
+    close(h);
+    let mut none = 0;
+    let s = (api.load)(
+        core::ptr::null(),
+        core::ptr::null(),
+        &UnicodeString::new(empty.get()),
+        &mut none,
+    );
+    c.eq(s.into(), STATUS_INVALID_FILE_FOR_SECTION.into())?;
+    remove_path(&empty, false);
+
     // No leftovers (an earlier round's moved later checks).
     for name in ["\\testdll.dll", "\\testdll2.dll"] {
         remove_path(&Path::new().units(sub.get()).s(name), false);

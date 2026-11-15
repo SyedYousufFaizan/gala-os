@@ -2107,9 +2107,9 @@ share it (LX seam 4; the Linux side is `lx::file`, "The lx module"):
   FILE_FS_ATTRIBUTE_INFORMATION flags (`file::VOLUME_ATTRIBUTES`) are the
   features it has: case-preserved Unicode names, persistent ACLs, reparse
   points, POSIX unlink and rename, hard links. A feature that works but
-  is not reported is one programs do not use -- Office's installer asks
-  the volume, makes no hard link, and leaves the files that should have
-  been links empty (`user/volume_test`). NTFS reports more (sparse files,
+  is not reported is one programs do not use: a program asks the volume
+  what it can do before it uses it, and takes the answer
+  (`user/volume_test`). NTFS reports more (sparse files,
   named streams, object IDs, open by file ID, a USN journal, quotas,
   compression, encryption, transactions, case-sensitive search per open),
   which gala has not; each bit goes in with its feature.
