@@ -359,7 +359,8 @@ pub fn current_stack(process: &Process) -> Option<(u64, u64, u64)> {
     if !core::ptr::eq(&*t.process, process) {
         return None;
     }
-    let mut space = process.space.lock();
+    let space_of = process.space_now()?;
+    let mut space = space_of.lock();
     let mut word = |off: u64| {
         let mut b = [0u8; 8];
         space.read(t.teb + off, &mut b).ok().map(|()| u64::from_le_bytes(b))
@@ -398,7 +399,8 @@ pub fn current_stack32(process: &Process) -> Option<(u64, u64, u64)> {
     if !core::ptr::eq(&*t.process, process) || t.teb32 == 0 {
         return None;
     }
-    let mut space = process.space.lock();
+    let space_of = process.space_now()?;
+    let mut space = space_of.lock();
     let mut word = |off: u64| {
         let mut b = [0u8; 4];
         space.read(t.teb32 + off, &mut b).ok().map(|()| u64::from(u32::from_le_bytes(b)))
@@ -587,7 +589,7 @@ fn create_inner(
         process.name,
         thread_entry,
         id as usize,
-        process.space.clone(),
+        process.live_space()?,
         teb_addr,
         process.personality,
         id,
@@ -632,7 +634,7 @@ fn allocate_teb(
         vad.commit(addr, size, vad::PAGE_READWRITE)?;
         // Mapped under the VAD lock (ARCHITECTURE "Virtual memory").
         let flags = PageFlags { user: true, global: false, ..PageFlags::KERNEL_RW };
-        let mapped = process.space.lock().map_zeroed(addr, teb::PAGES, flags);
+        let mapped = process.live_space()?.lock().map_zeroed(addr, teb::PAGES, flags);
         mapped.map_err(|_| NtStatus::NO_MEMORY)?;
         addr
     };
@@ -1187,7 +1189,7 @@ pub fn start_adopted(object: &ObjectRef) -> Result<(), NtStatus> {
         p.name,
         thread_entry,
         t.id as usize,
-        p.space.clone(),
+        p.live_space()?,
         t.teb,
         p.personality,
         t.id,

@@ -8,6 +8,13 @@
 //! missing program fails with ERROR_FILE_NOT_FOUND. OpenProcess by id
 //! opens an exited child (while a handle keeps it), a suspended one and
 //! the caller; id 0 or an unused id fail with ERROR_INVALID_PARAMETER.
+//! The exited child's address space is gone, as on Windows 11 26100:
+//! through a handle opened before the exit, VirtualQueryEx fails with
+//! ERROR_ACCESS_DENIED and ReadProcessMemory with ERROR_PARTIAL_COPY
+//! where the child had committed and touched 8 MiB, while the object
+//! answers for it still -- its exit code, and VM_COUNTERS with the
+//! working set and the commit charge down to a residue and the peak
+//! working set kept.
 //! The child's ProcessBasicInformation names us as its parent
 //! (InheritedFromUniqueProcessId).
 //! A Toolhelp snapshot lists the suspended child (parent, threads, name)
@@ -55,6 +62,7 @@ struct ProcessInformation {
 
 #[link(name = "kernel32", kind = "raw-dylib")]
 unsafe extern "system" {
+    fn VirtualAlloc(at: *mut c_void, size: usize, kind: u32, protect: u32) -> *mut c_void;
     fn VirtualAllocEx(
         process: Handle,
         at: *mut c_void,
@@ -64,6 +72,13 @@ unsafe extern "system" {
     ) -> *mut c_void;
     fn VirtualFreeEx(process: Handle, at: *mut c_void, size: usize, kind: u32) -> Bool;
     fn VirtualQueryEx(process: Handle, at: *mut c_void, info: *mut u8, length: usize) -> usize;
+    fn ReadProcessMemory(
+        process: Handle,
+        at: *const c_void,
+        buf: *mut u8,
+        size: usize,
+        read: *mut usize,
+    ) -> Bool;
     fn GetStdHandle(which: u32) -> Handle;
     fn WriteFile(h: Handle, buf: *const u8, len: u32, written: *mut u32, ov: *mut c_void) -> Bool;
     fn GetCommandLineW() -> *const u16;
@@ -167,6 +182,19 @@ const CHILD_EXIT: u32 = 0x1234;
 const PIPES_CHILD_EXIT: u32 = 0x77;
 const STARTF_USESTDHANDLES: u32 = 0x100;
 const ERROR_BROKEN_PIPE: u32 = 109;
+const ERROR_ACCESS_DENIED: u32 = 5;
+const ERROR_PARTIAL_COPY: u32 = 299;
+/// The child commits this much at `CHILD_REGION` and touches every page
+/// of it, so that what becomes of its address space at its exit shows.
+const CHILD_REGION: usize = 0x2c0_0000_0000;
+const CHILD_REGION_SIZE: usize = 8 << 20;
+const MEM_COMMIT_RESERVE: u32 = 0x3000;
+const PAGE_READWRITE: u32 = 4;
+const PAGE: usize = 0x1000;
+/// NtQueryInformationProcess(ProcessVmCounters): VM_COUNTERS, whose
+/// PeakWorkingSetSize is at 24, WorkingSetSize at 32 and PagefileUsage
+/// (the commit charge) at 72.
+const PROCESS_VM_COUNTERS: u32 = 3;
 /// What the pipes child writes for the parent's `ping`.
 const PIPES_OUTPUT: &[u8] = b"child read 4: ping\r\nchild stderr\r\n";
 
@@ -262,10 +290,30 @@ fn put(buf: &mut [u16], at: usize, text: &[u8]) -> usize {
 
 fn child(handle: usize) -> ! {
     out(b"process_test: child says hello through the inherited console\r\n");
+    // Memory of its own, every page of it touched so the pages are
+    // really there: what the parent looks for once this process is gone.
+    // SAFETY: a region of our own at an address nothing else uses, then
+    // its own pages.
+    let committed = unsafe {
+        let at = VirtualAlloc(
+            CHILD_REGION as *mut c_void,
+            CHILD_REGION_SIZE,
+            MEM_COMMIT_RESERVE,
+            PAGE_READWRITE,
+        );
+        if at as usize == CHILD_REGION {
+            for page in (0..CHILD_REGION_SIZE).step_by(PAGE) {
+                at.cast::<u8>().add(page).write_volatile(0xab);
+            }
+            true
+        } else {
+            false
+        }
+    };
     // SAFETY: the inherited event handle (by value, as Windows passes it).
     let ok = unsafe { SetEvent(handle as Handle) } != 0;
     // SAFETY: ends the process.
-    unsafe { ExitProcess(if ok { CHILD_EXIT } else { 0xbad }) }
+    unsafe { ExitProcess(if ok && committed { CHILD_EXIT } else { 0xbad }) }
 }
 
 /// `process_test pipes`: reads stdin until end of file, reports it on
@@ -514,6 +562,39 @@ fn run() -> Result<(), u32> {
         c.ok(GetExitCodeProcess(info.process, &mut code) != 0, GetLastError().into())?;
         c.eq(code.into(), CHILD_EXIT.into())?;
         c.eq(WaitForSingleObject(event, 0).into(), 0)?; // the child set it
+        // Its address space went with it. This handle was opened before
+        // the exit and still names the process, but the 8 MiB the child
+        // committed and touched can no longer be queried or read: on
+        // Windows the virtual address space is torn down at the exit and
+        // only the object is kept.
+        let mut mbi = [0u64; 6];
+        let at = CHILD_REGION as *mut c_void;
+        c.eq(VirtualQueryEx(info.process, at, mbi.as_mut_ptr().cast(), 48) as u64, 0)?;
+        c.eq(GetLastError().into(), ERROR_ACCESS_DENIED.into())?;
+        let mut bytes = [0u8; 8];
+        let mut read = 0usize;
+        let got = ReadProcessMemory(info.process, at, bytes.as_mut_ptr(), bytes.len(), &mut read);
+        c.ok(got == 0, read as u64)?;
+        c.eq(GetLastError().into(), ERROR_PARTIAL_COPY.into())?;
+        c.eq(read as u64, 0)?;
+        // What the object still answers: the peak working set it reached,
+        // against the working set and the commit charge themselves, which
+        // are down to a residue (Windows: 40,960 and 86,016 bytes for a
+        // child that had touched 200 MiB, whose peak working set still
+        // reads 324,812,800).
+        let mut vm = [0u8; 88];
+        let st = NtQueryInformationProcess(
+            info.process,
+            PROCESS_VM_COUNTERS,
+            vm.as_mut_ptr(),
+            88,
+            core::ptr::null_mut(),
+        );
+        c.eq(st as u32 as u64, 0)?;
+        let counter = |at: usize| u64::from_le_bytes(vm[at..at + 8].try_into().unwrap_or([0; 8]));
+        c.ok(counter(24) >= CHILD_REGION_SIZE as u64, counter(24))?;
+        c.ok(counter(72) < 0x10_0000, counter(72))?;
+        c.ok(counter(32) < 0x10_0000, counter(32))?;
         // OpenProcess by id: the exited child (its object lives on while
         // we hold a handle), ourselves, and an id that is no process.
         let opened =

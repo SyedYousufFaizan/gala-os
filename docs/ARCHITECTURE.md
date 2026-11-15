@@ -834,11 +834,30 @@ current process, -2 = current thread.
     waiting loses a request made in between.
 - **Exit order**: when the last thread exits, the process records its
   exit status, closes all its handles (breaking reference cycles) and
-  leaves the registry, and only then is its object signaled (as on
-  Windows: a waiter that wakes finds its handles closed and its named
-  objects gone). The address space is freed when the last thread is
-  reaped.
-- **Leak check**: `run=` checks that the address space is freed and logs
+  leaves the registry, gives up its address space, and only then is its
+  object signaled (as on Windows: a waiter that wakes finds its handles
+  closed, its named objects gone and no memory left to read).
+- **The address space goes at the exit**, not with the last handle:
+  `process::release_space` drops the section views, clears the VAD
+  (keeping its peaks, so VM_COUNTERS still answers PeakVirtualSize and
+  PeakWorkingSetSize) and releases the process's reference to the space,
+  which is why `Core::space` is an `Option`. Windows tears the virtual
+  address space down at the exit and keeps only the object; holding the
+  space with the object instead kept the frames of every exited process
+  someone had a handle to (Chromium's crashpad handler holds one to each
+  process it watches, and a browser that had exited left 290 MiB). The
+  frames themselves go a moment later: the exiting thread's scheduler
+  record still holds a reference and the CPU is running on those page
+  tables, so the last reference goes in `sched::reap`, after the switch
+  away. What is left of the process then answers as on Windows
+  (process_test, measured on 11 26100): its exit code and its peak
+  counters, while VirtualQueryEx fails with ERROR_ACCESS_DENIED
+  (STATUS_PROCESS_IS_TERMINATING, from `Core::live_space`) and
+  ReadProcessMemory with ERROR_PARTIAL_COPY having copied nothing. A
+  refused call is an `address space gone` event (events=process).
+- **Leak check**: `run=` takes its own reference to the address space
+  before the program starts (the process gives its up at the exit),
+  checks that the space is freed and logs
   "address space still referenced" otherwise, which fails the boot
   scenario. A leak is a second without progress (each reference that
   goes restarts the second); the message is preceded by who holds the

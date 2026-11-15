@@ -73,7 +73,8 @@ fn copy_space(parent: &Process) -> core::result::Result<CopiedSpace, &'static st
     let mut counts = PageCounts::default();
     let mut failed = false;
     {
-        let mut parent_space = parent.space.lock();
+        let space_of = parent.space_now().ok_or("the parent has exited")?;
+        let mut parent_space = space_of.lock();
         let mut next = parent_space.next_mapped(0, USER_END);
         while let Some(virt) = next {
             match parent_space.share_into(&mut space, virt) {

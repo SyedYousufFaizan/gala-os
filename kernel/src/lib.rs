@@ -1520,7 +1520,14 @@ fn await_program(
     handover_requests: Option<&nt::object::ObjectRef>,
     free_before: u64,
 ) {
-    let space = {
+    // The address space, held from here: the process gives its own
+    // reference up at its exit (`nt::process::finish`), so this is the
+    // one the teardown check below watches go.
+    let Some(space) = process.space_now() else {
+        warn!("run: {} has no address space", process.name);
+        return;
+    };
+    {
         // Wait for the whole process (all threads) to end.
         match nt::object::KObject::new(nt::object::ObjectBody::Process(process.clone())) {
             Ok(object) => {
@@ -1586,8 +1593,7 @@ fn await_program(
         if wait_all {
             wait_for_the_rest();
         }
-        process.space.clone()
-    };
+    }
     // Only `space` may hold the address space now.
     drop(process);
     // Teardown check: once the exiting threads are reaped, ours must be the
