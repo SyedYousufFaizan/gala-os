@@ -1044,12 +1044,37 @@ Vulkan-Headers) Vulkan on lavapipe through the Khronos loader (PREBUILT
   built on first use (Limine, prebuilt programs) must also work when
   several threads need it at once.
 
+### The aarch64 kernel's scenarios
+
+ROADMAP AR's scenarios (`AARCH64_SCENARIOS` in xtask: `arm_boot`,
+`arm_fault_ud`, `arm_fault_pagefault`) run in `cargo xtask boot-test`
+like the others (`boot-test arm_`). xtask builds the kernel for
+`aarch64-unknown-none` (`kernel/linker-aarch64.ld`) when one is
+selected, puts it in the scenario's ISO instead of x86-64's, and boots
+it with `qemu-system-aarch64 -machine virt` (`qemu_aarch64`): the pinned
+QEMU's own `edk2-aarch64-code.fd` (or Ubuntu's AAVMF, `qemu-efi-aarch64`,
+or `AAVMF_CODE`/`AAVMF_VARS`), the image on a virtio-scsi CD, semihosting
+on for the kernel's exit. Software emulation only (KVM would need an
+ARM64 host); about 8 s to the kernel, most of it the firmware.
+
+- The serial log and verdicts are as x86-64's. There is no event stream
+  and no firmware or phase log (no ISA debug consoles on `virt`).
+- A kernel address in a panic or exception line: `llvm-addr2line -f -C
+  -e target/aarch64-unknown-none/debug/kernel <address>`.
+- Stripping the image's kernel and dropping its debug relocations take
+  LLVM's objcopy for an aarch64 ELF (binutils' x86-64 build cannot read
+  it): the toolchain's `llvm-tools` component (rust-toolchain.toml), else
+  `llvm-objcopy` on PATH. x86-64's kernel keeps binutils' objcopy.
+- While a phase is unported, its scenario ends the boot just before it
+  (`stop_after=<phase>`); porting the next phase moves that on.
+
 ### QEMU
 
 xtask runs a pinned QEMU (`QEMU_VERSION` in xtask, 11.1.3), built by
 `cargo xtask qemu` into `~/.cache/gala-qemu/<version>` (downloaded from
-download.qemu.org, SHA-256 checked, only `x86_64-softmmu` with user
-networking).
+download.qemu.org, SHA-256 checked, `x86_64-softmmu` and
+`aarch64-softmmu` with user networking; a prefix with only the first is
+built again, and CI's cache key names both).
 
 - `XTASK_QEMU=<path>` overrides it; without either, xtask uses
   `qemu-system-x86_64` from PATH and says so once. Every run prints which

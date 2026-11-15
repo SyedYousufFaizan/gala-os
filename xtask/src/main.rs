@@ -6855,6 +6855,8 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
 ];
 
 const KERNEL_TARGET: &str = "x86_64-unknown-none";
+/// The aarch64 kernel's target (ROADMAP AR: `AARCH64_SCENARIOS`).
+const KERNEL_TARGET_AARCH64: &str = "aarch64-unknown-none";
 /// Freestanding Windows test programs in `user/`, shipped as boot modules.
 const USER_TARGET: &str = "x86_64-pc-windows-msvc";
 /// 32-bit (x86) test programs, run through WOW64 (ARCHITECTURE "Plan:
@@ -10566,6 +10568,28 @@ fn build(release: bool, name: &str, cmdline: &str) -> Result<PathBuf> {
     make_iso(release, name, cmdline, &[])
 }
 
+/// The aarch64 kernel (`AARCH64_SCENARIOS`'s), built as x86-64's is.
+fn build_kernel_aarch64(release: bool) -> Result {
+    let mut cmd = cargo();
+    cmd.args([
+        "build",
+        "--package",
+        "kernel",
+        "--bin",
+        "kernel",
+        "--target",
+        KERNEL_TARGET_AARCH64,
+    ]);
+    cmd.env_remove("GALA_KERNEL_VARIANT");
+    trust::kernel_env(&mut cmd)?;
+    if release {
+        cmd.arg("--release");
+    }
+    run_cmd(&mut cmd)?;
+    let profile = if release { "release" } else { "debug" };
+    drop_debug_relocations(&target_dir().join(KERNEL_TARGET_AARCH64).join(profile).join("kernel"))
+}
+
 fn build_kernel(release: bool) -> Result {
     // Every kernel xtask builds trusts the test key (R8; `XTASK_UNSIGNED`).
     let mut cmd = cargo();
@@ -10761,7 +10785,8 @@ fn make_iso_unchecked(
     tree: Option<&Path>,
 ) -> Result<PathBuf> {
     let profile = if release { "release" } else { "debug" };
-    let mut kernel = target_dir().join(KERNEL_TARGET).join(profile).join("kernel");
+    let target = if aarch64_image(name) { KERNEL_TARGET_AARCH64 } else { KERNEL_TARGET };
+    let mut kernel = target_dir().join(target).join(profile).join("kernel");
     // `kernel=<path>`: another build of the kernel (a kernel hot swap
     // scenario's variant, `kernel_variant`).
     if let Some((path, _)) = extra.iter().find(|(f, _)| f.starts_with("kernel=")) {
@@ -11470,6 +11495,62 @@ struct Firmware {
     vars: Option<PathBuf>,
 }
 
+/// The aarch64 UEFI firmware for QEMU's `virt` machine: the pinned QEMU's
+/// own edk2 build (installed with it: `edk2-aarch64-code.fd`, its variable
+/// store `edk2-arm-vars.fd`), else Ubuntu's AAVMF (`qemu-efi-aarch64`), or
+/// `AAVMF_CODE`/`AAVMF_VARS`. Both images are 64 MiB, as `virt`'s flash.
+fn find_aavmf() -> Result<Firmware> {
+    if let Some(code) = env::var_os("AAVMF_CODE") {
+        let vars = env::var_os("AAVMF_VARS").map(PathBuf::from);
+        return Ok(Firmware { code: code.into(), vars });
+    }
+    let share = qemu_prefix().join("share/qemu");
+    let candidates = [
+        (share.join("edk2-aarch64-code.fd"), share.join("edk2-arm-vars.fd")),
+        ("/usr/share/AAVMF/AAVMF_CODE.fd".into(), "/usr/share/AAVMF/AAVMF_VARS.fd".into()),
+    ];
+    candidates
+        .into_iter()
+        .find(|(code, _)| code.exists())
+        .map(|(code, vars)| Firmware { code, vars: vars.exists().then_some(vars) })
+        .ok_or_else(|| {
+            "no aarch64 UEFI firmware found: `cargo xtask qemu` installs QEMU's, or install \
+             qemu-efi-aarch64 or set AAVMF_CODE"
+                .into()
+        })
+}
+
+/// QEMU for the aarch64 scenarios (`Boot::UefiAarch64`): the `virt`
+/// machine (GICv3, a PL011, virtio over PCIe) with the `max` CPU, booted
+/// by UEFI from the image on a virtio-scsi CD, semihosting on (the
+/// kernel's exit, `arch::aarch64::qemu`). Software emulation: KVM would
+/// need an ARM64 host.
+fn qemu_aarch64(iso: &Path) -> Result<Command> {
+    let extra = std::env::var("XTASK_QEMU_ARGS").unwrap_or_default();
+    let mut cmd = Command::new(qemu_binary_aarch64());
+    let cpus = telemetry::vm_cpus(iso).to_string();
+    cmd.args(["-machine", "virt,gic-version=3", "-cpu", "max", "-m", "512M", "-smp", &cpus]);
+    if !extra.split_whitespace().any(|a| a == "-accel") {
+        cmd.args(["-accel", "tcg"]);
+    }
+    cmd.args(["-no-reboot", "-nic", "none"]);
+    cmd.args(["-semihosting-config", "enable=on,target=native"]);
+    let fw = find_aavmf()?;
+    cmd.arg("-drive")
+        .arg(format!("if=pflash,format=raw,unit=0,readonly=on,file={}", fw.code.display()));
+    if let Some(vars) = fw.vars {
+        let copy_path = iso.with_extension("aavmf-vars.fd");
+        copy(&vars, &copy_path)?;
+        cmd.arg("-drive").arg(format!("if=pflash,format=raw,unit=1,file={}", copy_path.display()));
+    }
+    cmd.args(["-device", "virtio-scsi-pci,id=scsi0"])
+        .arg("-drive")
+        .arg(format!("if=none,id=cd0,media=cdrom,readonly=on,format=raw,file={}", iso.display()))
+        .args(["-device", "scsi-cd,drive=cd0,bus=scsi0.0"]);
+    cmd.args(extra.split_whitespace());
+    Ok(cmd)
+}
+
 fn find_ovmf() -> Result<Firmware> {
     const CANDIDATES: &[(&str, &str)] = &[
         ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
@@ -11504,6 +11585,9 @@ enum Boot {
     Bios,
     /// OVMF (UEFI), the path real machines take.
     Uefi,
+    /// The aarch64 kernel on QEMU's `virt` machine, booted by AAVMF (UEFI)
+    /// and Limine's BOOTAA64.EFI (ROADMAP AR; `AARCH64_SCENARIOS`).
+    UefiAarch64,
 }
 
 /// Lines the event stream (debug console) of a scenario must contain.
@@ -11946,6 +12030,10 @@ const NET_ECHO_BYTES: usize = 65536;
 
 /// The firmware for scenario `name` (`XTASK_FIRMWARE=bios|uefi` overrides).
 fn scenario_boot(name: &str) -> Boot {
+    // The architecture first: XTASK_FIRMWARE chooses among x86-64's.
+    if AARCH64_SCENARIOS.contains(&name) {
+        return Boot::UefiAarch64;
+    }
     match env::var("XTASK_FIRMWARE").as_deref() {
         Ok("uefi") => Boot::Uefi,
         Ok("bios") => Boot::Bios,
@@ -11975,6 +12063,16 @@ const SINGLE_THREAD_TCG: &[&str] = &[
     "straddle_test",
     "chromium_",
 ];
+
+/// The scenarios of the aarch64 kernel (ROADMAP AR), booted on QEMU's
+/// `virt` machine (`Boot::UefiAarch64`): its kernel is built for
+/// `aarch64-unknown-none` and put in their image instead of x86-64's.
+const AARCH64_SCENARIOS: &[&str] = &["arm_boot", "arm_fault_ud", "arm_fault_pagefault"];
+
+/// Whether the image `name` (`test-<scenario>`) is an aarch64 scenario's.
+fn aarch64_image(name: &str) -> bool {
+    name.strip_prefix("test-").is_some_and(|s| AARCH64_SCENARIOS.contains(&s))
+}
 
 fn single_thread_tcg(name: &str) -> bool {
     SINGLE_THREAD_TCG.iter().any(|s| name.contains(s))
@@ -12013,15 +12111,26 @@ fn qemu_binary() -> PathBuf {
     PathBuf::from("qemu-system-x86_64")
 }
 
+/// The aarch64 system emulator: `XTASK_QEMU_AARCH64`, else the pinned
+/// build's, else the one on PATH.
+fn qemu_binary_aarch64() -> PathBuf {
+    if let Some(p) = env::var_os("XTASK_QEMU_AARCH64") {
+        return PathBuf::from(p);
+    }
+    let pinned = qemu_prefix().join("bin/qemu-system-aarch64");
+    if pinned.is_file() { pinned } else { PathBuf::from("qemu-system-aarch64") }
+}
+
 /// `cargo xtask qemu`: downloads QEMU_VERSION from download.qemu.org,
-/// checks QEMU_SHA256, and builds only the x86_64 system emulator (with
-/// user networking) into `qemu_prefix()`. Build dependencies: WORKFLOW
-/// "QEMU".
+/// checks QEMU_SHA256, and builds the x86_64 and aarch64 system emulators
+/// (with user networking) into `qemu_prefix()`; a prefix holding only the
+/// first is built again. Build dependencies: WORKFLOW "QEMU".
 fn build_qemu() -> Result {
     let prefix = qemu_prefix();
     let bin = prefix.join("bin/qemu-system-x86_64");
-    if bin.is_file() {
-        eprintln!("xtask: QEMU {QEMU_VERSION} already built at {}", bin.display());
+    let bin_arm = prefix.join("bin/qemu-system-aarch64");
+    if bin.is_file() && bin_arm.is_file() {
+        eprintln!("xtask: QEMU {QEMU_VERSION} already built at {}", prefix.display());
         return Ok(());
     }
     let work = target_dir().join("qemu-build");
@@ -12044,7 +12153,11 @@ fn build_qemu() -> Result {
     run_cmd(
         Command::new(src.join("configure"))
             .current_dir(&build)
-            .args(["--target-list=x86_64-softmmu", "--enable-slirp", "--disable-docs"])
+            .args([
+                "--target-list=x86_64-softmmu,aarch64-softmmu",
+                "--enable-slirp",
+                "--disable-docs",
+            ])
             .args(["--disable-werror", "--disable-gtk", "--disable-sdl"])
             .arg(format!("--prefix={}", prefix.display())),
     )?;
@@ -12052,11 +12165,14 @@ fn build_qemu() -> Result {
     run_cmd(Command::new("make").current_dir(&build).args(["-j", &jobs]))?;
     run_cmd(Command::new("make").current_dir(&build).arg("install"))?;
     let _ = fs::remove_dir_all(&work);
-    eprintln!("xtask: QEMU {QEMU_VERSION} built at {}", bin.display());
+    eprintln!("xtask: QEMU {QEMU_VERSION} built at {}", prefix.display());
     Ok(())
 }
 
 fn qemu(iso: &Path, boot: Boot) -> Result<Command> {
+    if boot == Boot::UefiAarch64 {
+        return qemu_aarch64(iso);
+    }
     // 512 MiB, plus twice the image for images with large programs (the
     // boot modules stay in memory, and programs like a JVM map them).
     let image_mib = fs::metadata(iso).map_or(0, |m| m.len() >> 20);
@@ -12145,6 +12261,47 @@ struct Scenario {
 }
 
 const SCENARIOS: &[Scenario] = &[
+    Scenario {
+        // The aarch64 kernel (ROADMAP AR) on QEMU's `virt` machine,
+        // booted by UEFI and Limine's BOOTAA64.EFI (`AARCH64_SCENARIOS`):
+        // its PL011 console, the bootloader's handoff, the memory map and
+        // the frame allocator, then the boot ends where the port has got
+        // to (`stop_after`) and the kernel exits through semihosting.
+        name: "arm_boot",
+        cmdline: "qemu_exit stop_after=frames",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "gala-os kernel",
+            "firmware: UEFI aarch64",
+            "memory map (",
+            "boot: stopping after boot phase frames (stop_after)",
+        ],
+    },
+    Scenario {
+        // The aarch64 kernel's exception vectors (`early_fault`): an
+        // undefined instruction is reported with its class and address,
+        // and the kernel stops with the failure status.
+        name: "arm_fault_ud",
+        cmdline: "qemu_exit early_fault=ud",
+        exit_status: QEMU_EXIT_FAILURE,
+        expect: &[
+            "provoking fault InvalidOpcode (early)",
+            "aarch64: exception: synchronous from EL1 with SP_EL1 (vector 4): unknown reason \
+             (undefined instruction) (ESR 0x2000000, class 0x0)",
+        ],
+    },
+    Scenario {
+        // A data abort at EL1 (a read of the unmapped first page): the
+        // faulting address in FAR.
+        name: "arm_fault_pagefault",
+        cmdline: "qemu_exit early_fault=pagefault",
+        exit_status: QEMU_EXIT_FAILURE,
+        expect: &[
+            "provoking fault PageFault (early)",
+            "aarch64: exception: synchronous from EL1 with SP_EL1 (vector 4): data abort from EL1",
+            "FAR 0x8,",
+        ],
+    },
     // Fault injection (kernel/src/failpoint.rs): programs run while every
     // n-th kernel heap allocation (or frame allocation) fails. They end
     // however they end; the kernel must survive (no panic, no hang, every
@@ -18022,6 +18179,9 @@ fn boot_tests(release: bool, filter: Option<&String>) -> Result {
     if selected.is_empty() {
         return Err("no boot test scenario matches the filter".into());
     }
+    if selected.iter().any(|s| AARCH64_SCENARIOS.contains(&s.name)) {
+        build_kernel_aarch64(release)?;
+    }
     if snapshot::request().is_some() && selected.len() != 1 {
         return Err(format!(
             "a machine snapshot is of one scenario; the filter selects {} (`name$` selects one)",
@@ -19537,12 +19697,17 @@ fn run_vm_once(
     let monitor = format!("unix:{},server,nowait", socket.display());
     cmd.args(["-display", "none", "-monitor", &monitor])
         .arg("-serial")
-        .arg(format!("file:{}", log.display()))
-        // The kernel's event stream (`events=` on its command line).
-        .arg("-debugcon")
-        .arg(format!("file:{}", events.display()))
-        .args(["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"])
-        .stdin(Stdio::null())
+        .arg(format!("file:{}", log.display()));
+    // x86-64's ISA devices: the kernel's event stream (`events=` on its
+    // command line) and the exit device. aarch64's virt machine has no ISA
+    // bus: its kernel exits through semihosting (`qemu_aarch64`) and has
+    // no event stream yet (ROADMAP AR).
+    if boot != Boot::UefiAarch64 {
+        cmd.arg("-debugcon")
+            .arg(format!("file:{}", events.display()))
+            .args(["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]);
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         // QEMU's own complaints (a port it cannot forward, a bad option):
         // in the failed log's telemetry.
@@ -19563,22 +19728,24 @@ fn run_vm_once(
     // `XTASK_QEMU_LOG=int,cpu_reset`: more of QEMU's log (`-d int` is
     // every exception with the registers: large).
     let what = env::var("XTASK_QEMU_LOG").unwrap_or_else(|_| "cpu_reset,guest_errors".into());
-    cmd.args(["-d", &what, "-D"])
-        .arg(&qemu_log)
-        .arg("-chardev")
-        .arg(format!("file,id=gala_bios,path={}", bios_log.display()))
-        .args([
-            "-device",
-            &format!("isa-debugcon,iobase={},chardev=gala_bios", telemetry::BIOS_PORT),
-        ])
-        .arg("-chardev")
-        .arg(format!("file,id=gala_phases,path={}", phases_log.display()))
-        .args([
-            "-device",
-            &format!("isa-debugcon,iobase={},chardev=gala_phases", telemetry::PHASE_PORT),
-        ])
-        .arg("-qmp")
-        .arg(format!("unix:{},server=on,wait=off", qmp.display()));
+    cmd.args(["-d", &what, "-D"]).arg(&qemu_log);
+    // The firmware's log and the phase markers: ISA debug consoles
+    // (x86-64 only, as above).
+    if boot != Boot::UefiAarch64 {
+        cmd.arg("-chardev")
+            .arg(format!("file,id=gala_bios,path={}", bios_log.display()))
+            .args([
+                "-device",
+                &format!("isa-debugcon,iobase={},chardev=gala_bios", telemetry::BIOS_PORT),
+            ])
+            .arg("-chardev")
+            .arg(format!("file,id=gala_phases,path={}", phases_log.display()))
+            .args([
+                "-device",
+                &format!("isa-debugcon,iobase={},chardev=gala_phases", telemetry::PHASE_PORT),
+            ]);
+    }
+    cmd.arg("-qmp").arg(format!("unix:{},server=on,wait=off", qmp.display()));
     let host_before = telemetry::host_state();
     // Held until this boot (and its client) is over: no other VM of this
     // xtask gets the port meanwhile.
@@ -26763,7 +26930,7 @@ fn copy(from: &Path, to: &Path) -> Result {
 /// handover (R8): 3 MB instead of 30 for a debug build. Backtraces are
 /// symbolized on the host from the build's own ELF, which keeps it.
 fn copy_kernel(from: &Path, to: &Path) -> Result {
-    run_quiet(Command::new("objcopy").arg("--strip-debug").arg(from).arg(to))
+    run_quiet(Command::new(objcopy_for(from)).arg("--strip-debug").arg(from).arg(to))
 }
 
 /// Removes the relocations of a kernel ELF's debug sections
@@ -26773,7 +26940,37 @@ fn copy_kernel(from: &Path, to: &Path) -> Result {
 /// for every section, and those of the DWARF are most of the file: 71 of
 /// 135 MB for a debug build. The DWARF itself stays for symbolizing.
 fn drop_debug_relocations(elf: &Path) -> Result {
-    run_quiet(Command::new("objcopy").arg("--remove-section=.rela.debug_*").arg(elf))
+    run_quiet(Command::new(objcopy_for(elf)).arg("--remove-section=.rela.debug_*").arg(elf))
+}
+
+/// The objcopy for `elf`: binutils' for x86-64 (what the checked-in
+/// images were made with), LLVM's for aarch64, which binutils' x86-64
+/// build cannot read: the toolchain's `llvm-tools` component
+/// (rust-toolchain.toml), else `llvm-objcopy` on PATH.
+fn objcopy_for(elf: &Path) -> PathBuf {
+    const EM_AARCH64: u16 = 183;
+    let machine = fs::File::open(elf).ok().and_then(|mut f| {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut b = [0u8; 2];
+        f.seek(SeekFrom::Start(18)).ok()?;
+        f.read_exact(&mut b).ok()?;
+        Some(u16::from_le_bytes(b))
+    });
+    if machine != Some(EM_AARCH64) {
+        return PathBuf::from("objcopy");
+    }
+    let sysroot = Command::new("rustc").args(["--print", "sysroot"]).output().ok();
+    let host = Command::new("rustc").args(["--print", "host-tuple"]).output().ok();
+    if let (Some(s), Some(h)) = (sysroot, host) {
+        let tool = Path::new(String::from_utf8_lossy(&s.stdout).trim())
+            .join("lib/rustlib")
+            .join(String::from_utf8_lossy(&h.stdout).trim())
+            .join("bin/llvm-objcopy");
+        if tool.is_file() {
+            return tool;
+        }
+    }
+    PathBuf::from("llvm-objcopy")
 }
 
 fn write(path: &Path, contents: &str) -> Result {

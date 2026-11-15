@@ -1,5 +1,8 @@
 //! The other CPUs (stub: PSCI CPU_ON, GIC SGIs): one CPU, the boot CPU.
 
+/// What a processor's hardware id is (`boot::MpInfo::hw_id`): MPIDR_EL1's affinity fields.
+pub const HW_ID_NAME: &str = "MPIDR";
+
 use super::context::StackError;
 use super::unported;
 use crate::boot::{BootInfo, KernelAddress};

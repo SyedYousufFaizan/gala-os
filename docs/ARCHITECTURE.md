@@ -148,7 +148,10 @@ code (`set_teb32`: x86-64's compatibility mode).
 Limits (ROADMAP PT): `mm::paging` is x86-64's page-table format (generic
 over table access for host tests); the user thread-pointer bases keep
 x86-64's names (`gs_base`, `fs_base`, `teb32`) and the FP control
-register MXCSR's; `boot` is Limine's x86-64 protocol.
+register MXCSR's. `boot` reads Limine's protocol for both: the MP
+response's layout is per architecture (`boot::MpInfo::hw_id`: x86-64's
+local APIC id, aarch64's MPIDR affinity; `Processors::bsp_id`), and
+x86-64's own code keeps the APIC names.
 
 gala's DLLs build for ARM64 too (`aarch64-pc-windows-msvc`, CI's Clippy
 step: Clippy and a build, which assembles inline assembly). Their
@@ -164,6 +167,43 @@ built for ARM64 (ROADMAP PT lists which). gala's ntdll makes system
 calls on the kernel stub's convention (the number in x8, `svc #0`,
 arguments in x0-x7 and on the stack, the result in x0). wow64 runs x86
 code on x64 and is not built for ARM64.
+
+## The aarch64 port
+
+ROADMAP AR, under way on QEMU's `virt` machine (GICv3, a PL011, virtio
+over PCIe), booted by UEFI (QEMU's own edk2 build, or AAVMF) and
+Limine's `BOOTAA64.EFI` from the same kind of ISO as x86-64's (Limine's
+EFI image carries both loaders; the ISO holds the aarch64 kernel). The
+kernel boots to its frame allocator: scenarios `arm_boot` (to
+`stop_after=frames`), `arm_fault_ud` and `arm_fault_pagefault` (the
+vectors' report); `paging::init` is the next unported step.
+
+- **Entry** (`arch/aarch64/entry.rs`): Limine (base revision 6) enters
+  at EL1, or at EL2 with VHE (the `_EL1` register names then reach EL2's),
+  with the MMU on, IRQs masked and FP/SIMD trapped (`CPACR_EL1` = 0). Rust
+  code may touch the SIMD registers at any instruction, so the entry
+  turns FP/SIMD on first. It also moves the boot stack to SP_EL1: Limine
+  left the kernel on SP_EL0, and an exception at EL1 runs on SP_EL1, so
+  the first exception ran on a stale stack and faulted again inside the
+  handler (what `arm_fault_*` caught).
+- **Vectors**: `VBAR_EL1` is undefined at entry; `init_boot_cpu` installs
+  the kernel's. Every exception is reported for now (the vector's kind
+  and origin, ESR's class named, ELR, FAR, SPSR) and ends the kernel.
+- **Devices before the kernel's page tables** (`early_map`): the
+  bootloader's higher half maps the kernel and the HHDM of memory, no
+  device. A device page is added to its TTBR1 tables, in the 2 MiB below
+  the kernel image, with MAIR_EL1's slot 2 set to Device-nGnRE (slots
+  2-7 are guaranteed unused); missing tables come from a pool in .bss.
+  The console's PL011 (QEMU `virt`'s at 0x0900_0000, the board's fixed
+  layout) is mapped this way by `serial::init`.
+- **Exit**: semihosting's SYS_EXIT_EXTENDED (`hlt #0xf000`; xtask runs
+  QEMU with `-semihosting-config enable=on`), with x86-64's statuses (33
+  success, 35 failure). There is no ISA bus: no debug console (no event
+  stream yet) and no phase port (`bootphase` marks are no-ops).
+- **Limits**: the UART's address is the board's, not read from the
+  firmware (SPCR or the device tree: the port); one CPU (the others stay
+  in Limine's wait loop); no timer, interrupts, scheduler, user mode; the
+  image is not sealed for BOOTAA64.EFI (R8's enrollment is BOOTX64.EFI's).
 
 ## Boot
 
@@ -260,6 +300,8 @@ Whitespace-separated `flag` and `key=value` words (`kernel/src/cmdline.rs`).
 | `nomigrate` | a thread that runs user code stays on the CPU it first ran on (tells migration bugs from others) |
 | `framecheck` | user mappings of each frame are counted; freeing a frame a user space still maps panics |
 | `eagercommit` | committed private pages get their frames at once instead of at the first touch (no demand-zero faults in user code) |
+| `stop_after=<phase>` | end the boot after that boot phase (`memory_map`, `frames`, `paging`, `timer`, `sched`, `smp_start`, `smp_done`, `drivers`, `manifest`): logged (`boot: stopping after boot phase <phase> (stop_after)`), then QEMU exits with success under `qemu_exit` (else the CPU halts). The aarch64 port's scenarios use it while the phases after are unported |
+| `early_fault=<ud\|pagefault\|stackoverflow>` | provoke that fault right after the exception vectors are installed, before anything else is up (`fault=` is the same later, on a scheduler thread); scenarios `arm_fault_ud`, `arm_fault_pagefault` |
 | `calwrong`, `calstall` | clock-calibration tests: the first TSC calibration 20x low (the RTC check must catch it), or the boot CPU stalled inside the calibration (scenarios `clockcal_*`; "Interrupts and time") |
 | `failpoint=<point>:<mode>:<n>[,...]` | fault injection while the `start=`/`run=` programs run (debug builds; "Fault injection"). Points `heap`, `frame`, `disk_io`, `net_tx`, `pageout`; modes `every:<n>` (the n-th, 2n-th, ... occurrence fails), `nth:<n>` (only the n-th), `random:<per-mille>` (from `failseed=`). Example: `failpoint=heap:every:97,net_tx:random:50` |
 | `failpoint=disk_io:delay:<ms>` | added latency: each disk request waits that long first, nothing fails (debug builds; R7) |

@@ -28,6 +28,9 @@ pub mod syscall;
 pub mod timer;
 pub mod xstate;
 
+/// The architecture's name in logs ("firmware: UEFI x86_64").
+pub const NAME: &str = "x86_64";
+
 /// The boot CPU's own state, first thing (before lock-order checking,
 /// which needs the CPU's index): x86-64's GDT and TSS, the per-CPU block.
 pub fn init_boot_cpu() {
