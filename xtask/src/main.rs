@@ -17281,11 +17281,19 @@ const GIMP_SCREEN: ScreenCheck = ScreenCheck {
             pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
         },
         // The image opened: GIMP's title names it (`[in] (imported)-1.0
-        // ...`); its picture (screen3.png), then Ctrl+Q.
+        // ...`) and its docks show its layer (screen3.png).
         ScreenStep {
             after: "desktop: window titled '[in]",
             input: &[],
             pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
+        },
+        // The image painted on the canvas (screen4.png): in.png's orange
+        // rectangle (250, 200, 40; user/lx/gimp/mkpng.py) in the canvas
+        // between the docks. Then Ctrl+Q.
+        ScreenStep {
+            after: "",
+            input: &[],
+            pixels: &[PixelCheck::AnyIn(262, 185, 330, 450, 0xfac828)],
         },
         ScreenStep { after: "", input: &["sendkey ctrl-q"], pixels: &[] },
     ],
