@@ -1872,7 +1872,13 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
             Deb {
                 pool: "universe/x/xterm/xterm_407-1ubuntu1_amd64.deb",
                 sha256: "152cef8061050bb3428e3078208bc94187b57a6885a851094c26ad77e9db9169",
-                files: &["etc/X11/app-defaults/XTerm", "usr/bin/xterm"],
+                // Its desktop entry: the start menu lists it as Ubuntu's
+                // application (linux_menu; xterm itself never opens it).
+                files: &[
+                    "etc/X11/app-defaults/XTerm",
+                    "usr/bin/xterm",
+                    "usr/share/applications/debian-xterm.desktop",
+                ],
             },
             Deb {
                 pool: "main/x/xwayland/xwayland_24.1.10-1_amd64.deb",
@@ -17427,6 +17433,15 @@ const XDESKTOP_SCREEN: ScreenCheck = ScreenCheck {
                 PixelCheck::AnyIn(62, 78, 34, 10, 0xffffff), // twm's title "xterm"
             ],
         },
+        // twm's focus follows the pointer (as on Ubuntu 26.04: there the
+        // keys typed into the window go to the xterm only once the pointer
+        // is on it): the pointer onto the xterm (from (640, 400) to
+        // (300, 300)), the xterm's white beside the arrow, then `exit`.
+        ScreenStep {
+            after: "",
+            input: &["mouse_move -340 -100"],
+            pixels: &[PixelCheck::At(400, 250, 0xffffff)],
+        },
         ScreenStep { after: "", input: typed!("e", "x", "i", "t"), pixels: &[] },
     ],
 };
@@ -17518,18 +17533,22 @@ const LINUX_MENU_SCREEN: ScreenCheck = ScreenCheck {
                 PixelCheck::At(300, 300, 0xffffff),
             ],
         },
-        // `exit` in its xterm ends the session.
+        // `exit` in its xterm ends the session. twm's focus follows the
+        // pointer (as on Ubuntu 26.04: keys go to the xterm only with the
+        // pointer on it): the pointer from (416, 440), the xterm's edge,
+        // into it (356, 340), its white beside the arrow, then `exit`.
         ScreenStep {
             after: "session: display :1 ready",
-            input: typed!("e", "x", "i", "t"),
-            pixels: &[],
+            input: &["mouse_move -60 -100"],
+            pixels: &[PixelCheck::At(500, 250, 0xffffff)],
         },
+        ScreenStep { after: "", input: typed!("e", "x", "i", "t"), pixels: &[] },
         // The menu again, Ubuntu's context menu: "Open terminal" and
         // XTerm (from its .desktop file). "context menu".
         ScreenStep {
             after: "session: done",
             input: &[
-                "mouse_move 224 255",
+                "mouse_move 284 355",
                 "mouse_move 0 81",
                 "mouse_button 1",
                 "mouse_button 0",

@@ -269,10 +269,20 @@ impl NtFile {
                 write(&termios_bytes(&t))?;
                 Ok(0)
             }
-            termios::TCSETS | termios::TCSETSW | termios::TCSETSF => {
-                let mut raw = [0u8; 36];
-                read(&mut raw)?;
-                let t = termios_from(&raw);
+            termios::TCGETS2 => {
+                let t = *term.termios.lock();
+                write(&super::pty::termios2_bytes(&t))?;
+                Ok(0)
+            }
+            termios::TCSETS
+            | termios::TCSETSW
+            | termios::TCSETSF
+            | termios::TCSETS2
+            | termios::TCSETSW2
+            | termios::TCSETSF2 => {
+                let mut raw = [0u8; 44];
+                read(&mut raw[..super::pty::set_size(cmd)])?;
+                let t = super::pty::termios_of(cmd, &raw);
                 *term.termios.lock() = t;
                 if let Some(s) = &term.session {
                     let bit = |on: bool, b: u32| if on { b } else { 0 };
@@ -317,13 +327,6 @@ fn termios_bytes(t: &Termios) -> [u8; 36] {
     b
 }
 
-fn termios_from(b: &[u8; 36]) -> Termios {
-    let word = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
-    let mut cc = [0u8; termios::NCCS];
-    cc.copy_from_slice(&b[17..]);
-    Termios { iflag: word(0), oflag: word(4), cflag: word(8), lflag: word(12), line: b[16], cc }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,7 +336,7 @@ mod tests {
         let mut t = Termios::fresh_pty();
         t.make_raw();
         let b = termios_bytes(&t);
-        assert_eq!(termios_from(&b), t);
+        assert_eq!(super::super::pty::termios_from(&b), t);
         // c_iflag first, c_cc from byte 17 (VINTR first: ^C).
         assert_eq!(b[17], 3);
     }

@@ -230,7 +230,12 @@ fn handle(call: &Call<'_>, number: u64) -> Result {
                 )
             }
             Some(_) => {
-                ledger::record("ioctl", "linux syscall stub", a(1));
+                // A terminal request ('T') on what is not a terminal:
+                // ENOTTY is Linux's answer too (isatty's). Others are not
+                // done (ledgered).
+                if (a(1) >> 8) & 0xff != 0x54 {
+                    ledger::record("ioctl", "linux syscall stub", a(1));
+                }
                 Err(ENOTTY)
             }
         },
