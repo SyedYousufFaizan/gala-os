@@ -1947,7 +1947,16 @@ need gala's.
      lay out from the disk because every page read walked the whole tree
      to let pages go while other uses held the memory; done: a futile
      eviction is not repeated until pages could leave (ARCHITECTURE "A
-     disk-backed C:"). Where the fast path ends now (about 1600 s):
+     disk-backed C:"). A residue of it is measured: laying out one
+     36 MiB image still spent 22.3 s inside a single NtCreateSection
+     (the flight recorder's unmatched `syscall` on CPU 1, which is what
+     the watchdog then reported -- not a livelock: the call finished and
+     the process exited 0), with 142 MiB of frames free and no cluster
+     read failing. To do: page-in drops the answer `RamFs::fill` gives
+     it, so it cannot tell a page it failed to keep from one it kept,
+     and it says nothing when it reads the same cluster again -- an
+     unbounded retry with no log of its own.
+     Where the fast path ends now (about 1600 s):
      APPLYCONFIGURATION publishes the staged files with hard links
      (`fileops::HardlinkOperation`), which fail (kernel32's CreateHardLinkW
      is unsupported, ERROR_NOT_SUPPORTED; NtSetInformationFile has no
@@ -2191,9 +2200,39 @@ need gala's.
      "wintrust: Authenticode", trust provider registration), the
      documented entries under
      `HKLM\Software\Microsoft\Cryptography\Providers\Trust`, test
-     first in `actionid_test`. Next: the install's next blocker, found
-     from a snapshot taken at integrator.exe's start. A failure there fails the install as before: the service ends with 17002 and setup.exe with
-     0x426a (17002, "C2RClient returned a failing exit code"). Seen
+     first in `actionid_test`. The run's third integrator.exe then died
+     of 0xc06d007f on `msi.dll` ordinal 92, which is MsiOpenDatabaseW
+     read from Windows' own export directory on this machine (build
+     26200; the method checked by reading back the nine ordinals msi
+     already carries, all of which matched): it opens an installer
+     database, which gala has no engine for. Done: msi's
+     MsiOpenDatabaseW, x64 and x86, answering as Windows does for a
+     database it cannot open -- ERROR_OPEN_FAILED for a path that is not
+     there and for a file that is not a database alike, whichever of the
+     modes that only open is asked; ERROR_CREATE_FAILED for a create
+     mode that cannot create one; ERROR_INVALID_PARAMETER without a path,
+     with an empty one or without a handle; the handle set to 0 except
+     where the NULL path pointer is refused before it is touched -- test
+     first in `msi_test` and `wow64_msi_test` (every answer measured on
+     this machine's Windows 11 build 26200, both widths). Asked to
+     create a database where it can, Windows creates one (16 KiB,
+     measured) and gala does not: the one place msi's answer is
+     deliberately not Windows', a database engine being galapkg's
+     business (ROADMAP PK), not msi.dll's.
+     A failure there fails the install as before: the
+     service ends with 17002 and setup.exe with 0x426a (17002,
+     "C2RClient returned a failing exit code") -- at 90%
+     of the scenario's progress, the uninstall-centennial, migrate and
+     fonts tasks done (the fonts task lays down Office's TTFs and TTCs
+     and succeeds), the service going quiet for the 30 s in which the
+     integrator dies and then setting its failure event. Everything
+     from APPLYCONFIGURATION on is measured with the guest's egress
+     blocked (`restrict=y`, by hand and not checked in), because
+     setup.exe with egress reaches the configuration service and dies
+     3 s in at webservices.dll, below. That is the order the two
+     blockers have to be taken in: webservices first, since without it
+     no run that behaves like a real install gets as far as the
+     integrator, and a snapshot of that point cannot be taken at all. Seen
      too, not fatal so far: `slc.dll` a missing DLL (loaded by name at
      run time), Office's product key not decoded by gala's sppc
      (SLInstallProofOfPurchase answers SL_E_INVALID_PRODUCT_KEY; no
@@ -2319,7 +2358,19 @@ need gala's.
      then the other DLLs
      setup.exe imports that gala has no i686 build of (xmllite,
      webservices, cabinet, credui, and osppc.dll, which is the system's
-     sppc.dll, gala's being x64 only so far) and the functions its imports lack (shell32's
+     sppc.dll, gala's being x64 only so far; of these webservices is
+     where a run whose guest has egress stops: setup.exe reaches the
+     configuration service over winhttp and then ends with 0xc06d007e at
+     webservices.dll, whose delay imports in setup.exe are the XML
+     reader/writer subset alone -- WsCreateError, WsCreateHeap,
+     WsCreateReader, WsCreateWriter, WsFillReader, WsFreeError,
+     WsFreeHeap, WsFreeReader, WsFreeWriter, WsGetErrorProperty,
+     WsGetErrorString, WsReadStartElement, WsReadToStartElement,
+     WsReadType and WsSetInput: a pull parser over a buffer, no channel,
+     no service proxy, no security binding. gala's `user/webservices`
+     has a disjoint set of x64 stubs staged for sqllocaldb, so the
+     i686 build and these 15 functions are both still to do) and the
+     functions its imports lack (shell32's
      SHGetSettings, user32's CheckRadioButton,
      iphlpapi's CreateSortedAddressPairs); BITS (the
      BackgroundCopyManager it asks for: absent, survived); WinINet's

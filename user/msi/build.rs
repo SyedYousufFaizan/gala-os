@@ -1,12 +1,15 @@
 //! msi.dll's functions that programs import by ordinal (the Office
-//! Deployment Tool's setup.exe imports every msi function so): the
-//! exports carry Windows' ordinals, as Wine's msi.spec lists them.
+//! Deployment Tool's setup.exe and its integrator.exe import every msi
+//! function so): the exports carry Windows' ordinals, read from the
+//! export directory of build 26200's msi.dll -- which lists all but
+//! #92 the same as Wine's msi.spec, where the others came from.
 fn main() {
     let ordinals: &[(&str, u32)] = &[
         ("MsiCloseHandle", 8),
         ("MsiEnumComponentQualifiersW", 39),
         ("MsiEnumProductsW", 45),
         ("MsiLocateComponentW", 90),
+        ("MsiOpenDatabaseW", 92),
         ("MsiQueryProductStateW", 113),
         ("MsiSetInternalUI", 141),
         ("MsiGetComponentPathW", 173),

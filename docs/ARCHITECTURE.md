@@ -9653,9 +9653,19 @@ stations and desktops a program creates are refused until stage 3).
   keeps the process's level and owner window (an invalid level returns
   INSTALLUILEVEL_NOCHANGE yet its known flags replace the current ones,
   as on Windows); MsiCloseHandle knows no handle
-  but 0. Each "nothing installed" answer is recorded (`msi.dll!<function>:
+  but 0; MsiOpenDatabaseW opens nothing -- ERROR_OPEN_FAILED whether the
+  path is absent or is a file that is no database, for each mode that
+  only opens, and ERROR_CREATE_FAILED for a create mode. Windows asked
+  to create a database creates one and gala does not: msi's one
+  deliberate divergence, for the same reason installing is absent.
+  MsiOpenDatabaseW refuses a NULL or empty path and a NULL handle with
+  ERROR_INVALID_PARAMETER, and writes 0 through the handle in every case
+  it gets past the pointer check -- only the NULL path pointer, refused
+  first, leaves the caller's handle untouched. Each "nothing installed"
+  answer is recorded (`msi.dll!<function>:
   nothing installed`, kind other, the ordinal as detail). The exports
-  carry Windows' ordinals (build.rs; ODT's setup.exe imports them by
+  carry Windows' ordinals (build.rs; ODT's setup.exe and the
+  integrator.exe it runs both import them by
   ordinal). Installing (MsiInstallProduct and the rest) is absent:
   galapkg's MSI reader (ROADMAP PK) installs packages, not msi.dll.
 - rstrtmgr (`user/rstrtmgr`, x64 and x86; `rstrtmgr_test`,
