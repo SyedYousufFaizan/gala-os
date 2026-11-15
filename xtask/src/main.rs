@@ -14350,7 +14350,14 @@ const SCENARIOS: &[Scenario] = &[
         name: "lx_gimp_batch",
         cmdline: "qemu_exit lxrun=/bin/sh lxargs=sh%20/lx/gimp/batch.sh lxenv=HOME=/Users/gala%20PATH=/usr/bin:/bin",
         exit_status: QEMU_EXIT_SUCCESS,
-        expect: &["personality linux", "run: end /bin/sh", BOOT_OK_MARKER],
+        // The shell's child is gimp-console-3.2 once it has run execve:
+        // its name in the log is the program's, not the shell's.
+        expect: &[
+            "personality linux",
+            "process gimp-console-3.2 (pid ",
+            "run: end /bin/sh",
+            BOOT_OK_MARKER,
+        ],
     },
     Scenario {
         // user/lx/gtk_test under X11 (LD step 5): GDK's X11 backend on

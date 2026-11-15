@@ -11922,6 +11922,11 @@ The running parts (milestone 1; `lxrun=`):
   told (ledgered), P_PGID waits for any child (ledgered), siginfo given
   to pidfd_send_signal is unused (ledgered), no PIDFD_THREAD pidfds, no
   pidfd_getfd.
+- **A process's name after execve** (`Core::current_name`,
+  `name_now`): the new program's file name (the path given: a script's,
+  as `comm`), in the log lines (its exit, a missing call, the thread
+  dump); the first image's name (`Core::name`, static) stays for the
+  scheduler's thread names. The task manager shows `comm`.
 - **inotify** (`lx::inotify`; inotify_test, `lx_inotify`): instances
   (`Object::Inotify`; inotify_init, inotify_init1 with IN_NONBLOCK and
   IN_CLOEXEC) hold watches on nodes (add_watch resolves the path as stat

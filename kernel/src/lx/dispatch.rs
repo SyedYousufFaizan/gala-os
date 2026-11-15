@@ -464,7 +464,7 @@ fn missing(call: &Call<'_>, number: u64) -> Result {
     crate::warn!(
         "{}",
         Missing {
-            program: call.process.name,
+            program: call.process.name_now(),
             pid: call.process.id,
             number,
             personality: call.process.personality
@@ -476,7 +476,7 @@ fn missing(call: &Call<'_>, number: u64) -> Result {
 /// The log line of an unimplemented system call: the program, the call
 /// by its Linux name and number, the dispatcher and the personality.
 struct Missing {
-    program: &'static str,
+    program: crate::nt::process::CurrentName,
     pid: u64,
     number: u64,
     personality: Personality,
@@ -1140,7 +1140,12 @@ mod tests {
     #[test]
     fn a_missing_call_is_named_from_the_table() {
         let line = |number| {
-            let m = Missing { program: "a", pid: 4, number, personality: Personality::Linux };
+            let m = Missing {
+                program: crate::nt::process::CurrentName::of_path(b"a"),
+                pid: 4,
+                number,
+                personality: Personality::Linux,
+            };
             alloc::format!("{m}")
         };
         assert_eq!(
