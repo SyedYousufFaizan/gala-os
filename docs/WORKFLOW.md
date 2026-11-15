@@ -2387,6 +2387,22 @@ A root is what its workload opened on real 26.04, traced:
   into words); GLib's criticals and GIMP's own messages are on its
   stderr in the transcript.
 
+### Inkscape (ROADMAP LD)
+
+- Scenario `lx_inkscape_batch` (`cargo xtask boot-test
+  'lx_inkscape_batch$'`): `/bin/sh /lx/inkscape/batch.sh` runs `inkscape
+  --export-type=png` on `user/lx/inkscape/in.svg`, its stderr (GTK's
+  warnings, with a pid and a time) in `$HOME/inkscape.log`, then
+  busybox's sha256sum of the PNG; its transcript is
+  `user/lx/sh/lx_inkscape_batch.txt`, recorded in a fresh Ubuntu 26.04
+  chroot (`mkchroot.sh ... inkscape`, Inkscape 1.4.3-0ubuntu2) as uid
+  1000: `chroot --userspec=1000:1000 <dir> env -i HOME=<an empty home>
+  PATH=/usr/bin:/bin BB= DIR=<a copy of user/lx/inkscape> sh <that
+  copy>/batch.sh`, then `-- exit status 0`.
+- The root "inkscape" is that run's `strace -f -y` (`plan.py`, `rows.py`
+  excluding the "gtk3", "x11" and "glibc" roots' files). Inkscape finds
+  its own libraries through `$ORIGIN/..`: plan.py normalizes such paths.
+
 ### The WSL facade's tests (user/wsl_test, ROADMAP CT)
 
 - `user/wsl_test` drives `%SystemRoot%\System32\wsl.exe` from outside

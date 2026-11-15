@@ -4018,7 +4018,6 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "universe/i/inkscape/inkscape_1.4.3-0ubuntu2_amd64.deb",
                 sha256: "24a2e9225c2cdcaad8f3e36a8b7a0f5a68db58ed67fc6f67455395fdd918326e",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/libinkscape_base.so.1.4.3.0",
                     "usr/bin/inkscape",
                     "usr/lib/x86_64-linux-gnu/inkscape/libinkscape_base.so.1.4.3.0",
                     "usr/share/inkscape/extensions/LICENSE.txt",
@@ -4957,10 +4956,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
             Deb {
                 pool: "universe/lib2/lib2geom/lib2geom1.4.0_1.4-5_amd64.deb",
                 sha256: "8a87d2e6360077863b2b0c7b15eea97d7672eeb3f132938461d29541556539ea",
-                files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../lib2geom.so.1.4.0",
-                    "usr/lib/x86_64-linux-gnu/lib2geom.so.1.4.0",
-                ],
+                files: &["usr/lib/x86_64-linux-gnu/lib2geom.so.1.4.0"],
             },
             Deb {
                 pool: "main/liba/libassuan/libassuan9_3.0.2-2build1_amd64.deb",
@@ -4974,41 +4970,25 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/a/atkmm1.6/libatkmm-1.6-1v5_2.28.4-2_amd64.deb",
                 sha256: "99db364a63a9998d33215c1ead58ab39896ee95b19d2d080a383f35244bf7883",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libatkmm-1.6.so.1",
+                    "usr/lib/x86_64-linux-gnu/libatkmm-1.6.so.1",
                     "usr/lib/x86_64-linux-gnu/libatkmm-1.6.so.1.1.0",
                 ],
             },
             Deb {
                 pool: "main/b/boost1.90/libboost-filesystem1.90.0_1.90.0-6ubuntu1_amd64.deb",
                 sha256: "3f78b71bf3bcaf465ee3010a7fd09e0374a1e3be040b4520a71466788f1fa93b",
-                files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libboost_filesystem.so.1.90.0",
-                    "usr/lib/x86_64-linux-gnu/libboost_filesystem.so.1.90.0",
-                ],
+                files: &["usr/lib/x86_64-linux-gnu/libboost_filesystem.so.1.90.0"],
             },
             Deb {
                 pool: "main/g/glibc/libc6_2.43-2ubuntu2_amd64.deb",
                 sha256: "c13775dc0c984403f3fcad229d14507a9f387763bd07ace1e5f93897ee6b8434",
-                files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libm.so.6",
-                    "usr/lib/x86_64-linux-gnu/gconv/gconv-modules.cache",
-                ],
-            },
-            Deb {
-                pool: "main/c/cairo/libcairo-gobject2_1.18.4-3_amd64.deb",
-                sha256: "1d48661d59bb164fc27e88bb8e6a8dab0cdfdbf35ea5d2bbf3ebffe849a38822",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libcairo-gobject.so.2"],
-            },
-            Deb {
-                pool: "main/c/cairo/libcairo2_1.18.4-3_amd64.deb",
-                sha256: "525ab7b5ad6529ea35aa09308ddd1fd2325c85ad70e7483ba66b526d8ee9f7a7",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libcairo.so.2"],
+                files: &["usr/lib/x86_64-linux-gnu/gconv/gconv-modules.cache"],
             },
             Deb {
                 pool: "main/c/cairomm/libcairomm-1.0-1v5_1.14.5-3_amd64.deb",
                 sha256: "c0ed6ddbed981adc8fc8a206f98ddda0272078c107f00e43b35bba05b584ff37",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libcairomm-1.0.so.1",
+                    "usr/lib/x86_64-linux-gnu/libcairomm-1.0.so.1",
                     "usr/lib/x86_64-linux-gnu/libcairomm-1.0.so.1.4.0",
                 ],
             },
@@ -5016,7 +4996,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/libc/libcdr/libcdr-0.1-1_0.1.7-1build4_amd64.deb",
                 sha256: "3fbbea340da04824c1b103a4e5f6b721da7be8ef9e95841d494769b1a30513e2",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libcdr-0.1.so.1",
+                    "usr/lib/x86_64-linux-gnu/libcdr-0.1.so.1",
                     "usr/lib/x86_64-linux-gnu/libcdr-0.1.so.1.0.7",
                 ],
             },
@@ -5050,40 +5030,11 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 ],
             },
             Deb {
-                pool: "main/libe/libepoxy/libepoxy0_1.5.10-2build1_amd64.deb",
-                sha256: "2f4525535b2c7c6d61cc5c131f1cb3f5c0d70177ccf550a05f80d12016dfcfdf",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libepoxy.so.0"],
-            },
-            Deb {
-                pool: "main/f/fontconfig/libfontconfig1_2.17.1-3ubuntu1_amd64.deb",
-                sha256: "72ba4fc43155566b46442b741a6892d5d1f1581ba58cdfd037aabf47ad9080f7",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libfontconfig.so.1"],
-            },
-            Deb {
-                pool: "main/f/freetype/libfreetype6_2.14.2+dfsg-1_amd64.deb",
-                sha256: "a76ad9102039122ef72b01c9c364e7d8967331414cbe19151c01d1391ff9fe25",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libfreetype.so.6"],
-            },
-            Deb {
                 pool: "main/libg/libgc/libgc1_8.2.12-1_amd64.deb",
                 sha256: "b00fdd469849892f74374018652599c55f6936dde28c6156505257d2a4ccca43",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgc.so.1",
+                    "usr/lib/x86_64-linux-gnu/libgc.so.1",
                     "usr/lib/x86_64-linux-gnu/libgc.so.1.5.6",
-                ],
-            },
-            Deb {
-                pool: "main/g/gdk-pixbuf/libgdk-pixbuf-2.0-0_2.44.5+dfsg-4ubuntu1_amd64.deb",
-                sha256: "ccd902384546225842384de0c46dad4670ccdda17b697bed4518610ed2e08e89",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgdk_pixbuf-2.0.so.0"],
-            },
-            Deb {
-                pool: "main/g/glib2.0/libglib2.0-0t64_2.88.0-1_amd64.deb",
-                sha256: "8883a2bd236e54af0af33d7115835929c959bc50fd02ba63496ab6908b0c204a",
-                files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgio-2.0.so.0",
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgmodule-2.0.so.0",
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgobject-2.0.so.0",
                 ],
             },
             Deb {
@@ -5117,7 +5068,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/g/gcc-16/libgomp1_16-20260322-1ubuntu1_amd64.deb",
                 sha256: "add19738c63794d2aa9ac529d3b8aebe2e88980faecb6c1c59f07aefd6c3c314",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgomp.so.1",
+                    "usr/lib/x86_64-linux-gnu/libgomp.so.1",
                     "usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0",
                 ],
             },
@@ -5141,7 +5092,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "universe/g/gsl/libgsl28_2.8+dfsg-6_amd64.deb",
                 sha256: "84547a63ee0d1d247b51b1f9695dd1e4f470575d5443e78b412e421e6fad3e48",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgsl.so.28",
+                    "usr/lib/x86_64-linux-gnu/libgsl.so.28",
                     "usr/lib/x86_64-linux-gnu/libgsl.so.28.0.0",
                 ],
             },
@@ -5156,26 +5107,15 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
             Deb {
                 pool: "universe/g/gspell/libgspell-1-3_1.14.2-2_amd64.deb",
                 sha256: "d15c6dd05898e3467dcbdeb2c5553e08166d039145d6a745c9be819c0f402a91",
-                files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgspell-1.so.3",
-                    "usr/lib/x86_64-linux-gnu/libgspell-1.so.3",
-                ],
-            },
-            Deb {
-                pool: "main/g/gtk+3.0/libgtk-3-0t64_3.24.52-0ubuntu1_amd64.deb",
-                sha256: "d03b766dd7ba2becf66cf21424bb441af4dbf62841b314af2720df74d95bda1a",
-                files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgdk-3.so.0",
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgtk-3.so.0",
-                ],
+                files: &["usr/lib/x86_64-linux-gnu/libgspell-1.so.3"],
             },
             Deb {
                 pool: "main/g/gtkmm3.0/libgtkmm-3.0-1t64_3.24.10-2_amd64.deb",
                 sha256: "a86061c9871777d77c2d2d1b84e576db8a3f3fbecf19bb9e2b6c8a12184f2351",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgdkmm-3.0.so.1",
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgtkmm-3.0.so.1",
+                    "usr/lib/x86_64-linux-gnu/libgdkmm-3.0.so.1",
                     "usr/lib/x86_64-linux-gnu/libgdkmm-3.0.so.1.1.0",
+                    "usr/lib/x86_64-linux-gnu/libgtkmm-3.0.so.1",
                     "usr/lib/x86_64-linux-gnu/libgtkmm-3.0.so.1.1.0",
                 ],
             },
@@ -5183,14 +5123,9 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "universe/g/gtksourceview4/libgtksourceview-4-0_4.8.4-9_amd64.deb",
                 sha256: "d1e3324a4cda469d418beb56d674b5b1febaf702f5678b858d4ac228649b40e6",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libgtksourceview-4.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgtksourceview-4.so.0",
                     "usr/lib/x86_64-linux-gnu/libgtksourceview-4.so.0.0.0",
                 ],
-            },
-            Deb {
-                pool: "main/h/harfbuzz/libharfbuzz0b_12.3.2-2_amd64.deb",
-                sha256: "ec93ea39ddeb5a98179b60eab4af234b6c676f1958106645d1f4b19280d4cd09",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libharfbuzz.so.0"],
             },
             Deb {
                 pool: "main/n/nettle/libhogweed6t64_3.10.2-1_amd64.deb",
@@ -5229,14 +5164,9 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/libj/libjpeg-turbo/libjpeg-turbo8_2.1.5-4ubuntu4_amd64.deb",
                 sha256: "07672ce1f4d187e005ea0cc35d03e515ba056f3d3e7a9a25d3ef386e184da8c5",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libjpeg.so.8",
+                    "usr/lib/x86_64-linux-gnu/libjpeg.so.8",
                     "usr/lib/x86_64-linux-gnu/libjpeg.so.8.2.2",
                 ],
-            },
-            Deb {
-                pool: "main/l/lcms2/liblcms2-2_2.17-1_amd64.deb",
-                sha256: "6beb06e118c5a49abc312d029d6dc1ba47009e51a284d598bf394465522292f2",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../liblcms2.so.2"],
             },
             Deb {
                 pool: "main/o/openldap/libldap2_2.6.10+dfsg-1ubuntu5_amd64.deb",
@@ -5312,38 +5242,18 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 ],
             },
             Deb {
-                pool: "main/p/pango1.0/libpango-1.0-0_1.57.0-1_amd64.deb",
-                sha256: "309f30a8ea77e0264a3c8b66811188f5b788fe87b33be3cafd97c8f221235591",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libpango-1.0.so.0"],
-            },
-            Deb {
-                pool: "main/p/pango1.0/libpangocairo-1.0-0_1.57.0-1_amd64.deb",
-                sha256: "a989e666bb0d64636a10a1253c949f92a282782d79d1725e0e1acc17282909a5",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libpangocairo-1.0.so.0"],
-            },
-            Deb {
-                pool: "main/p/pango1.0/libpangoft2-1.0-0_1.57.0-1_amd64.deb",
-                sha256: "c1e08ebf03feded26a42a0f07f94789e5995b402d704d2faafdc86fffda0b28b",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libpangoft2-1.0.so.0"],
-            },
-            Deb {
                 pool: "main/p/pangomm/libpangomm-1.4-1v5_2.46.4-2_amd64.deb",
                 sha256: "0697f7fb9946133cfc96ecc7a14baed19ef8c134c28a82331831fb153a3c62be",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libpangomm-1.4.so.1",
+                    "usr/lib/x86_64-linux-gnu/libpangomm-1.4.so.1",
                     "usr/lib/x86_64-linux-gnu/libpangomm-1.4.so.1.0.30",
                 ],
-            },
-            Deb {
-                pool: "main/libp/libpng1.6/libpng16-16t64_1.6.57-1_amd64.deb",
-                sha256: "e3af297b2131aea35eab7e2751b4158ec7ae4ffb6d746043199f766fc727744f",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libpng16.so.16"],
             },
             Deb {
                 pool: "main/p/poppler/libpoppler-glib8t64_26.01.0-2build2_amd64.deb",
                 sha256: "59f86b52dad55e14c147a3df6b0fb6b380f0199741b224fc42049e3ceae06728",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libpoppler-glib.so.8",
+                    "usr/lib/x86_64-linux-gnu/libpoppler-glib.so.8",
                     "usr/lib/x86_64-linux-gnu/libpoppler-glib.so.8.31.0",
                 ],
             },
@@ -5351,7 +5261,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/p/poppler/libpoppler156_26.01.0-2build2_amd64.deb",
                 sha256: "36d7d4ed95a1b601f13552f2b7432482733258ca9b0a6e27019c93110f75885b",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libpoppler.so.156",
+                    "usr/lib/x86_64-linux-gnu/libpoppler.so.156",
                     "usr/lib/x86_64-linux-gnu/libpoppler.so.156.0.0",
                 ],
             },
@@ -5359,7 +5269,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "universe/p/potrace/libpotrace0_1.16-2build2_amd64.deb",
                 sha256: "5dad1784eb18d36a5abe721bdce6bf365ea4c06c013310c662207e6b8623fb67",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libpotrace.so.0",
+                    "usr/lib/x86_64-linux-gnu/libpotrace.so.0",
                     "usr/lib/x86_64-linux-gnu/libpotrace.so.0.0.6",
                 ],
             },
@@ -5375,7 +5285,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/r/readline/libreadline8t64_8.3-4_amd64.deb",
                 sha256: "260b3333e9f714252593b83fb31d2571097b64d337d0d7100aae7349029821fc",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libreadline.so.8",
+                    "usr/lib/x86_64-linux-gnu/libreadline.so.8",
                     "usr/lib/x86_64-linux-gnu/libreadline.so.8.3",
                 ],
             },
@@ -5383,9 +5293,9 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/libr/librevenge/librevenge-0.0-0_0.0.5-3build2_amd64.deb",
                 sha256: "25d9fd707ea03360fe3a7c96133b45c6d46971f0fce863ff6b2bbde63e890e5d",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../librevenge-0.0.so.0",
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../librevenge-stream-0.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/librevenge-0.0.so.0",
                     "usr/lib/x86_64-linux-gnu/librevenge-0.0.so.0.0.5",
+                    "usr/lib/x86_64-linux-gnu/librevenge-stream-0.0.so.0",
                     "usr/lib/x86_64-linux-gnu/librevenge-stream-0.0.so.0.0.5",
                 ],
             },
@@ -5414,7 +5324,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/libs/libsigc++-2.0/libsigc++-2.0-0v5_2.12.1-4build1_amd64.deb",
                 sha256: "db0444e2eeb46a016e23ea1dbeb51709c2fc1e312a719fbe1d643fd574d28ff0",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libsigc-2.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libsigc-2.0.so.0",
                     "usr/lib/x86_64-linux-gnu/libsigc-2.0.so.0.0.0",
                 ],
             },
@@ -5462,7 +5372,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/libv/libvisio/libvisio-0.1-1_0.1.10-1build1_amd64.deb",
                 sha256: "9cb2f66e2a34ecc326c5a8ccb882f2a992a150e77f455baf2334461b97231063",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libvisio-0.1.so.1",
+                    "usr/lib/x86_64-linux-gnu/libvisio-0.1.so.1",
                     "usr/lib/x86_64-linux-gnu/libvisio-0.1.so.1.0.10",
                 ],
             },
@@ -5486,32 +5396,22 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                 pool: "main/libw/libwpg/libwpg-0.3-3_0.3.4-3build2_amd64.deb",
                 sha256: "b3b75b2bd3a835c0a4c3159ed03a41898b0933287834efcf9bf9c8574062ef38",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libwpg-0.3.so.3",
+                    "usr/lib/x86_64-linux-gnu/libwpg-0.3.so.3",
                     "usr/lib/x86_64-linux-gnu/libwpg-0.3.so.3.0.4",
                 ],
-            },
-            Deb {
-                pool: "main/libx/libxml2/libxml2-16_2.15.2+dfsg-0.1_amd64.deb",
-                sha256: "f0c87cee9a1fb871e66698dc05fe38e0a3e7232eb961b690a8e7dc26f9753813",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libxml2.so.16"],
             },
             Deb {
                 pool: "main/libx/libxslt/libxslt1.1_1.1.45-0.1_amd64.deb",
                 sha256: "d2ad5edf215939cc0fe74ca6cb9910060915233032a7c7074d4f206702c802a1",
                 files: &[
-                    "usr/bin/../lib/x86_64-linux-gnu/inkscape/../libxslt.so.1",
+                    "usr/lib/x86_64-linux-gnu/libxslt.so.1",
                     "usr/lib/x86_64-linux-gnu/libxslt.so.1.1.45",
                 ],
             },
             Deb {
                 pool: "main/t/tzdata/tzdata_2026a-3ubuntu1_all.deb",
                 sha256: "88bfe1faddda7b905746429af8ee26ac5ace881c8fb9a994de8b54572445e728",
-                files: &["etc/localtime", "usr/share/zoneinfo/Etc/UTC"],
-            },
-            Deb {
-                pool: "main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1ubuntu3_amd64.deb",
-                sha256: "c45bbbf9c87457d90b8ba38720c5f01b9388c380d40f303c26f5c4953932da26",
-                files: &["usr/bin/../lib/x86_64-linux-gnu/inkscape/../libz.so.1"],
+                files: &["etc/localtime=usr/share/zoneinfo/Etc/UTC", "usr/share/zoneinfo/Etc/UTC"],
             },
         ],
     },

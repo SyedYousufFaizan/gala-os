@@ -8,7 +8,7 @@ nothing used beneath it (GIMP's plug-ins check that /usr/share/locale is
 there) is "<dir>/", by one of its owners. A file used through a
 directory link's target is also wanted under the link (boot modules carry
 no links). WORKFLOW "Linux roots from Ubuntu 26.04"."""
-import json, re, subprocess, sys
+import json, posixpath, re, subprocess, sys
 
 chroot, out, traces = sys.argv[1], sys.argv[2], sys.argv[3:]
 skip = ("/proc", "/dev", "/sys", "/tmp", "/run", "/work", "/root", "/home", "/etc/ld.so.cache")
@@ -55,7 +55,8 @@ def owner(path):
     return m.group(1) if m else ""
 
 def norm(p):
-    p = p.lstrip("/")
+    # A path through `..` (a library found by $ORIGIN/..) as the file is.
+    p = posixpath.normpath("/" + p).lstrip("/")
     return "usr/" + p if p.startswith(("lib/", "lib64/", "bin/", "sbin/")) else p
 
 def through_alternatives(p):
@@ -69,6 +70,13 @@ for p in sorted(paths - set(files)):
     if run("sh", "-c", 'test -d "$1" && ! test -L "$1" && echo d', "-", p).strip():
         dirs.add(p.rstrip("/"))
 kept = [norm(p) for p in files]
+
+listed = {}
+def shipped(pkg, path):
+    """Whether package `pkg`'s own files (dpkg -L) include `path`."""
+    if pkg not in listed:
+        listed[pkg] = set(run("dpkg", "-L", pkg.split(":")[0]).splitlines())
+    return path in listed[pkg] or "/" + norm(path) in listed[pkg]
 
 by = {}
 for p, real in files.items():
@@ -86,6 +94,11 @@ for p, real in files.items():
         # usrmerge: dpkg may know the /usr path only.
         alt = "/" + norm(p)
         pkg = owner(alt) if alt != p else ""
+    if pkg and real != p and not shipped(pkg, p) and shipped(pkg, real):
+        # A link its package's maintainer script makes (tzdata's
+        # /etc/localtime): the packaged file under the link's name.
+        by.setdefault(pkg, set()).add(norm(p) + "=" + norm(real))
+        continue
     by.setdefault(pkg, set()).add(norm(p))
 for d in sorted(dirs):
     n = norm(d)

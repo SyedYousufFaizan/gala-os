@@ -3754,7 +3754,16 @@ the next breakthroughs).
    GIO's mount monitor), inotify (`lx_inotify`: GIO's file monitors),
    setfsuid and setfsgid (`lx_fsid`), a process's name after execve in
    the log (`lx_gimp_batch`: `process gimp-console-3.2`), seccomp: strict
-   mode, filters enforced, the probes (`lx_seccomp`). Linux system calls
+   mode, filters enforced, the probes (`lx_seccomp`). Open: once, in a
+   full parallel run of the `lx_` scenarios, `lx_gimp_batch`'s file-png
+   plug-in (the load of in.png, its result right) printed "gimp_flush():
+   error: Broken pipe" at its end: it wrote after GIMP had closed its
+   pipe. Not seen again in 7 runs (5 beside `lx_gimp`, `linux_menu` and
+   `lx_gtk_x11` with `XTASK_EVENTS=syscall`); the cause is not found yet.
+10. Inkscape (the owner): Ubuntu 26.04's Inkscape 1.4.3 (LINUX_ROOTS
+   "inkscape"), first in batch mode (`lx_inkscape_batch`: in.svg rendered
+   to a PNG Ubuntu's byte for byte; WORKFLOW "Inkscape"); next its window
+   over Wayland with a screen check. Linux system calls
    are traced with `events=syscall` (`lx syscall`). Open: rseq is ENOSYS
    (glibc carries on without it).
 
