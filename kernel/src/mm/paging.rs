@@ -1,7 +1,12 @@
-//! x86_64 4-level page tables: entry encoding and a mapper that is generic
-//! over how page-table frames are accessed, so it can be tested on the host.
+//! 4-level page tables with 4 KiB pages: a mapper generic over how
+//! page-table frames are accessed (so it is tested on the host) and over
+//! the entry encoding (`Format`): x86-64's (`X86`, the default) and
+//! VMSAv8-64's with the 4 KiB granule (`Vmsa`, aarch64). Both index a
+//! 48-bit address 9 bits a level from bit 12, and map 2 MiB and 1 GiB
+//! blocks at levels 2 and 3, so the walk is one.
 
 use core::fmt;
+use core::marker::PhantomData;
 
 use super::PAGE_SIZE;
 use super::frame::Frame;
@@ -9,30 +14,6 @@ use super::frame::Frame;
 pub const ENTRIES: usize = 512;
 pub const SIZE_2M: u64 = 2 * 1024 * 1024;
 pub const SIZE_1G: u64 = 1024 * 1024 * 1024;
-
-const PRESENT: u64 = 1 << 0;
-const WRITABLE: u64 = 1 << 1;
-const USER: u64 = 1 << 2;
-const PWT: u64 = 1 << 3;
-const PCD: u64 = 1 << 4;
-const HUGE: u64 = 1 << 7;
-/// PAT bit in 4 KiB entries (same position as `HUGE` in higher levels).
-const PAT_4K: u64 = 1 << 7;
-const GLOBAL: u64 = 1 << 8;
-/// Software-available bit: the leaf maps a frame this address space does
-/// not own (a section page, a shared kernel page); never free it.
-const BORROWED: u64 = 1 << 9;
-/// Set by the processor at an access through the leaf, and at a write.
-const ACCESSED: u64 = 1 << 5;
-const DIRTY: u64 = 1 << 6;
-/// Software bit of a *not present* 4 KiB leaf: the page is in the page
-/// file (`mm::swap`); the rest of the entry is the caller's token (its
-/// slot and generation), never a frame.
-const SWAPPED: u64 = 1 << 10;
-/// PAT bit in 2 MiB / 1 GiB entries.
-const PAT_LARGE: u64 = 1 << 12;
-const NO_EXECUTE: u64 = 1 << 63;
-const ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
 
 /// Memory types, as indices into the PAT layout programmed by the arch layer
 /// (`arch::paging::PAT_VALUE`).
@@ -115,54 +96,6 @@ impl PageFlags {
     pub const KERNEL_RW: PageFlags = PageFlags { writable: true, ..Self::KERNEL_RO };
     pub const KERNEL_RX: PageFlags = PageFlags { executable: true, ..Self::KERNEL_RO };
     pub const MMIO: PageFlags = PageFlags { cache: CacheMode::Uncached, ..Self::KERNEL_RW };
-
-    fn leaf_bits(self, large: bool) -> u64 {
-        let mut bits = PRESENT;
-        if self.writable {
-            bits |= WRITABLE;
-        }
-        if self.user {
-            bits |= USER;
-        }
-        if self.global {
-            bits |= GLOBAL;
-        }
-        if self.borrowed {
-            bits |= BORROWED;
-        }
-        if !self.executable {
-            bits |= NO_EXECUTE;
-        }
-        let pat = self.cache as u64;
-        if pat & 1 != 0 {
-            bits |= PWT;
-        }
-        if pat & 2 != 0 {
-            bits |= PCD;
-        }
-        if pat & 4 != 0 {
-            bits |= if large { PAT_LARGE } else { PAT_4K };
-        }
-        if large {
-            bits |= HUGE;
-        }
-        bits
-    }
-
-    fn from_leaf_bits(bits: u64, large: bool) -> Self {
-        let pat_bit = if large { PAT_LARGE } else { PAT_4K };
-        let index = u64::from(bits & PWT != 0)
-            | u64::from(bits & PCD != 0) << 1
-            | u64::from(bits & pat_bit != 0) << 2;
-        PageFlags {
-            writable: bits & WRITABLE != 0,
-            executable: bits & NO_EXECUTE == 0,
-            user: bits & USER != 0,
-            global: bits & GLOBAL != 0,
-            cache: CacheMode::from_index(index),
-            borrowed: bits & BORROWED != 0,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -174,38 +107,6 @@ impl Entry {
 
     pub fn raw(self) -> u64 {
         self.0
-    }
-
-    pub fn is_present(self) -> bool {
-        self.0 & PRESENT != 0
-    }
-
-    fn is_huge(self) -> bool {
-        self.0 & HUGE != 0
-    }
-
-    /// A not-present leaf holding a page file token (`SWAPPED`).
-    fn is_swapped(self) -> bool {
-        !self.is_present() && self.0 & SWAPPED != 0
-    }
-
-    fn addr(self) -> u64 {
-        self.0 & ADDR_MASK
-    }
-
-    /// Address of a large leaf (bit 12 is PAT there, not address).
-    fn large_addr(self) -> u64 {
-        self.0 & ADDR_MASK & !PAT_LARGE
-    }
-
-    /// Entry pointing to a next-level table. Intermediate entries are
-    /// maximally permissive; leaves restrict access.
-    fn table(frame: Frame, user: bool) -> Entry {
-        let mut bits = PRESENT | WRITABLE;
-        if user {
-            bits |= USER;
-        }
-        Entry(frame.start() | bits)
     }
 }
 
@@ -227,6 +128,272 @@ impl PageTable {
 impl Default for PageTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// An entry encoding: what the walk asks of an entry. Levels count from 1
+/// (the 4 KiB leaves) to 4 (the root); `large` is a leaf at level 2 or 3.
+pub trait Format {
+    /// Bits of an entry's frame address.
+    const ADDR_MASK: u64;
+    /// Software bit: the leaf maps a frame this address space does not own
+    /// (a section page, a shared kernel page); never free it.
+    const BORROWED: u64;
+    /// Set at an access through the leaf (and by `set_dirty_4k`).
+    const ACCESSED: u64;
+    /// Set at a write through the leaf (and by `set_dirty_4k`).
+    const DIRTY: u64;
+    /// A bit of a *not present* 4 KiB leaf: the page is in the page file
+    /// (`mm::swap`); the rest of the entry is the caller's token (its slot
+    /// and generation), never a frame.
+    const SWAPPED: u64;
+    /// The bit that makes an entry present (valid).
+    const PRESENT: u64;
+
+    fn present(e: u64) -> bool {
+        e & Self::PRESENT != 0
+    }
+    /// Whether `addr` is an address the walk can map (x86-64's canonical
+    /// form; aarch64's two 48-bit halves, TTBR0's and TTBR1's).
+    fn valid_virt(addr: u64) -> bool;
+    /// A present entry at level 2 or 3 that is a leaf (a large page).
+    fn large(e: u64) -> bool;
+    /// The next table's address in a table entry.
+    fn next_table(e: u64) -> u64 {
+        e & Self::ADDR_MASK
+    }
+    /// A leaf's frame address.
+    fn leaf_addr(e: u64, large: bool) -> u64;
+    /// An entry pointing to the next-level table `frame`. Intermediate
+    /// entries are maximally permissive; leaves restrict access.
+    fn table(frame: Frame, user: bool) -> u64;
+    /// The table entry `e` also allowing user access below it.
+    fn table_allow_user(e: u64) -> u64;
+    /// A leaf mapping `phys` with `flags`.
+    fn leaf(phys: u64, flags: PageFlags, large: bool) -> u64;
+    /// The flags of the leaf `e`.
+    fn leaf_flags(e: u64, large: bool) -> PageFlags;
+}
+
+/// x86-64's 4-level paging (PML4): the PAT index in PWT, PCD and the PAT
+/// bit (bit 7 in a 4 KiB leaf, bit 12 in a large one).
+pub struct X86;
+
+mod x86 {
+    pub const PRESENT: u64 = 1 << 0;
+    pub const WRITABLE: u64 = 1 << 1;
+    pub const USER: u64 = 1 << 2;
+    pub const PWT: u64 = 1 << 3;
+    pub const PCD: u64 = 1 << 4;
+    pub const HUGE: u64 = 1 << 7;
+    /// PAT bit in 4 KiB entries (same position as `HUGE` in higher levels).
+    pub const PAT_4K: u64 = 1 << 7;
+    pub const GLOBAL: u64 = 1 << 8;
+    /// Software-available bit: the leaf maps a frame this address space does
+    /// not own (a section page, a shared kernel page); never free it.
+    pub const BORROWED: u64 = 1 << 9;
+    /// Set by the processor at an access through the leaf, and at a write.
+    pub const ACCESSED: u64 = 1 << 5;
+    pub const DIRTY: u64 = 1 << 6;
+    /// Software bit of a *not present* 4 KiB leaf: the page is in the page
+    /// file (`mm::swap`); the rest of the entry is the caller's token (its
+    /// slot and generation), never a frame.
+    pub const SWAPPED: u64 = 1 << 10;
+    /// PAT bit in 2 MiB / 1 GiB entries.
+    pub const PAT_LARGE: u64 = 1 << 12;
+    pub const NO_EXECUTE: u64 = 1 << 63;
+    pub const ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
+}
+
+impl Format for X86 {
+    const ADDR_MASK: u64 = x86::ADDR_MASK;
+
+    fn valid_virt(addr: u64) -> bool {
+        is_canonical(addr)
+    }
+    const BORROWED: u64 = x86::BORROWED;
+    const ACCESSED: u64 = x86::ACCESSED;
+    const DIRTY: u64 = x86::DIRTY;
+    const SWAPPED: u64 = x86::SWAPPED;
+    const PRESENT: u64 = x86::PRESENT;
+
+    fn large(e: u64) -> bool {
+        e & x86::HUGE != 0
+    }
+
+    /// A large leaf's address leaves out bit 12 (its PAT bit).
+    fn leaf_addr(e: u64, large: bool) -> u64 {
+        if large { e & x86::ADDR_MASK & !x86::PAT_LARGE } else { e & x86::ADDR_MASK }
+    }
+
+    fn table(frame: Frame, user: bool) -> u64 {
+        let mut bits = x86::PRESENT | x86::WRITABLE;
+        if user {
+            bits |= x86::USER;
+        }
+        frame.start() | bits
+    }
+
+    fn table_allow_user(e: u64) -> u64 {
+        e | x86::USER
+    }
+
+    fn leaf(phys: u64, flags: PageFlags, large: bool) -> u64 {
+        use x86::*;
+        let mut bits = PRESENT;
+        if flags.writable {
+            bits |= WRITABLE;
+        }
+        if flags.user {
+            bits |= USER;
+        }
+        if flags.global {
+            bits |= GLOBAL;
+        }
+        if flags.borrowed {
+            bits |= BORROWED;
+        }
+        if !flags.executable {
+            bits |= NO_EXECUTE;
+        }
+        let pat = flags.cache as u64;
+        if pat & 1 != 0 {
+            bits |= PWT;
+        }
+        if pat & 2 != 0 {
+            bits |= PCD;
+        }
+        if pat & 4 != 0 {
+            bits |= if large { PAT_LARGE } else { PAT_4K };
+        }
+        if large {
+            bits |= HUGE;
+        }
+        phys | bits
+    }
+
+    fn leaf_flags(bits: u64, large: bool) -> PageFlags {
+        use x86::*;
+        let pat_bit = if large { PAT_LARGE } else { PAT_4K };
+        let index = u64::from(bits & PWT != 0)
+            | u64::from(bits & PCD != 0) << 1
+            | u64::from(bits & pat_bit != 0) << 2;
+        PageFlags {
+            writable: bits & WRITABLE != 0,
+            executable: bits & NO_EXECUTE == 0,
+            user: bits & USER != 0,
+            global: bits & GLOBAL != 0,
+            cache: CacheMode::from_index(index),
+            borrowed: bits & BORROWED != 0,
+        }
+    }
+}
+
+/// VMSAv8-64 with the 4 KiB granule and 48-bit addresses (aarch64; Arm's
+/// Architecture Reference Manual, "VMSAv8-64 translation table format
+/// descriptors"): a table or a 4 KiB page is `0b11` in bits 1:0, a block
+/// (2 MiB, 1 GiB) `0b01`. A leaf's memory type is an index into MAIR_EL1
+/// (AttrIndx, bits 4:2): `CacheMode`'s own value, so MAIR_EL1 holds one
+/// attribute per mode (`arch::aarch64::paging::MAIR`). The user and the
+/// kernel halves have separate roots (TTBR0, TTBR1): no sharing of a
+/// kernel half between address spaces.
+pub struct Vmsa;
+
+mod vmsa {
+    pub const VALID: u64 = 1 << 0;
+    /// Bit 1: a table or page (set), a block (clear).
+    pub const TABLE_OR_PAGE: u64 = 1 << 1;
+    /// AP[1]: EL0 may access.
+    pub const AP_USER: u64 = 1 << 6;
+    /// AP[2]: read-only.
+    pub const AP_READ_ONLY: u64 = 1 << 7;
+    /// SH = 0b11: inner shareable (ignored for Device memory).
+    pub const INNER_SHAREABLE: u64 = 0b11 << 8;
+    /// The access flag: set on every mapping made here.
+    pub const AF: u64 = 1 << 10;
+    /// Not global: tagged with the address space's ASID.
+    pub const NOT_GLOBAL: u64 = 1 << 11;
+    pub const PXN: u64 = 1 << 53;
+    pub const UXN: u64 = 1 << 54;
+    /// Software bits (55-58 are the OS's).
+    pub const BORROWED: u64 = 1 << 55;
+    pub const DIRTY: u64 = 1 << 56;
+    /// Of an invalid entry (ignored by the walk).
+    pub const SWAPPED: u64 = 1 << 10;
+    pub const ADDR_MASK: u64 = 0x0000_ffff_ffff_f000;
+}
+
+impl Format for Vmsa {
+    const ADDR_MASK: u64 = vmsa::ADDR_MASK;
+
+    /// T0SZ = T1SZ = 16: the top 16 bits all clear (TTBR0) or all set
+    /// (TTBR1, from 0xffff_0000_0000_0000).
+    fn valid_virt(addr: u64) -> bool {
+        matches!(addr >> 48, 0 | 0xffff)
+    }
+    const BORROWED: u64 = vmsa::BORROWED;
+    const ACCESSED: u64 = vmsa::AF;
+    const DIRTY: u64 = vmsa::DIRTY;
+    const SWAPPED: u64 = vmsa::SWAPPED;
+    const PRESENT: u64 = vmsa::VALID;
+
+    fn large(e: u64) -> bool {
+        e & vmsa::TABLE_OR_PAGE == 0
+    }
+
+    fn leaf_addr(e: u64, _large: bool) -> u64 {
+        e & vmsa::ADDR_MASK
+    }
+
+    fn table(frame: Frame, _user: bool) -> u64 {
+        frame.start() | vmsa::VALID | vmsa::TABLE_OR_PAGE
+    }
+
+    /// Table descriptors restrict nothing here (APTable, UXNTable,
+    /// PXNTable are 0): the leaf decides.
+    fn table_allow_user(e: u64) -> u64 {
+        e
+    }
+
+    fn leaf(phys: u64, flags: PageFlags, large: bool) -> u64 {
+        use vmsa::*;
+        let mut bits = VALID | AF | INNER_SHAREABLE | (flags.cache as u64) << 2;
+        if !large {
+            bits |= TABLE_OR_PAGE;
+        }
+        if !flags.writable {
+            bits |= AP_READ_ONLY;
+        }
+        if flags.user {
+            bits |= AP_USER;
+        }
+        if !flags.global {
+            bits |= NOT_GLOBAL;
+        }
+        if flags.borrowed {
+            bits |= BORROWED;
+        }
+        // Executable at one level only: the kernel never runs user pages.
+        if !flags.executable || flags.user {
+            bits |= PXN;
+        }
+        if !flags.executable || !flags.user {
+            bits |= UXN;
+        }
+        phys | bits
+    }
+
+    fn leaf_flags(e: u64, _large: bool) -> PageFlags {
+        use vmsa::*;
+        let user = e & AP_USER != 0;
+        PageFlags {
+            writable: e & AP_READ_ONLY == 0,
+            executable: e & if user { UXN } else { PXN } == 0,
+            user,
+            global: e & NOT_GLOBAL == 0,
+            cache: CacheMode::from_index((e >> 2) & 7),
+            borrowed: e & BORROWED != 0,
+        }
     }
 }
 
@@ -291,24 +458,31 @@ pub struct Translation {
     pub flags: PageFlags,
 }
 
-/// A 4-level address space rooted at a PML4 frame.
-pub struct Mapper<M: TableMemory> {
-    root: Frame,
-    mem: M,
+/// A not-present leaf holding a page file token (`Format::SWAPPED`).
+fn is_swapped<F: Format>(e: u64) -> bool {
+    !F::present(e) && e & F::SWAPPED != 0
 }
 
-impl<M: TableMemory> Mapper<M> {
+/// A 4-level address space rooted at a level-4 table (x86-64's PML4,
+/// aarch64's level 0 table), its entries encoded by `F`.
+pub struct Mapper<M: TableMemory, F: Format = X86> {
+    root: Frame,
+    mem: M,
+    format: PhantomData<F>,
+}
+
+impl<M: TableMemory, F: Format> Mapper<M, F> {
     /// Allocates and zeroes a new, empty PML4.
     pub fn new(mut mem: M, alloc: &mut impl FnMut() -> Option<Frame>) -> Result<Self, MapError> {
         let root = alloc().ok_or(MapError::OutOfMemory)?;
         *mem.table(root) = PageTable::new();
-        Ok(Self { root, mem })
+        Ok(Self { root, mem, format: PhantomData })
     }
 
     /// Wraps existing tables rooted at `root` without taking ownership
     /// semantics beyond what the caller arranges.
     pub fn from_root(mem: M, root: Frame) -> Self {
-        Self { root, mem }
+        Self { root, mem, format: PhantomData }
     }
 
     pub fn root(&self) -> Frame {
@@ -326,18 +500,18 @@ impl<M: TableMemory> Mapper<M> {
     ) -> Result<Frame, MapError> {
         let i = index(addr, level);
         let entry = self.mem.table(table).0[i];
-        if entry.is_present() {
-            if entry.is_huge() {
+        if F::present(entry.0) {
+            if F::large(entry.0) {
                 return Err(MapError::LargePageConflict);
             }
-            if user && entry.0 & USER == 0 {
-                self.mem.table(table).0[i] = Entry(entry.0 | USER);
+            if user {
+                self.mem.table(table).0[i] = Entry(F::table_allow_user(entry.0));
             }
-            return Ok(Frame::containing(entry.addr()));
+            return Ok(Frame::containing(F::next_table(entry.0)));
         }
         let frame = alloc().ok_or(MapError::OutOfMemory)?;
         *self.mem.table(frame) = PageTable::new();
-        self.mem.table(table).0[i] = Entry::table(frame, user);
+        self.mem.table(table).0[i] = Entry(F::table(frame, user));
         Ok(frame)
     }
 
@@ -351,10 +525,10 @@ impl<M: TableMemory> Mapper<M> {
         alloc: &mut impl FnMut() -> Option<Frame>,
     ) -> Result<(), MapError> {
         let bytes = size.bytes();
-        if !is_canonical(virt)
+        if !F::valid_virt(virt)
             || !virt.is_multiple_of(bytes)
             || !phys.is_multiple_of(bytes)
-            || phys & !ADDR_MASK != 0
+            || phys & !F::ADDR_MASK != 0
         {
             return Err(MapError::BadAddress);
         }
@@ -363,10 +537,10 @@ impl<M: TableMemory> Mapper<M> {
             table = self.next_table(table, level, virt, flags.user, alloc)?;
         }
         let slot = &mut self.mem.table(table).0[index(virt, size.level())];
-        if slot.is_present() {
+        if F::present(slot.0) {
             return Err(MapError::AlreadyMapped);
         }
-        *slot = Entry(phys | flags.leaf_bits(size != PageSize::Size4K));
+        *slot = Entry(F::leaf(phys, flags, size != PageSize::Size4K));
         Ok(())
     }
 
@@ -408,23 +582,23 @@ impl<M: TableMemory> Mapper<M> {
         let mut table = self.root;
         for level in (2..=4).rev() {
             let entry = self.mem.table(table).0[index(virt, level)];
-            if !entry.is_present() {
+            if !F::present(entry.0) {
                 return Err(MapError::BadAddress);
             }
-            if entry.is_huge() {
+            if F::large(entry.0) {
                 return Err(MapError::LargePageConflict);
             }
-            table = Frame::containing(entry.addr());
+            table = Frame::containing(F::next_table(entry.0));
         }
         let slot = &mut self.mem.table(table).0[index(virt, 1)];
-        if !slot.is_present() {
+        if !F::present(slot.0) {
             return Err(MapError::BadAddress);
         }
         // Ownership is a property of the mapping, not of the protection;
         // so are the accessed and dirty bits (the page-out's tests of a
         // page written since it was copied: `UserSpace::page_out`).
-        let kept = slot.0 & (BORROWED | ACCESSED | DIRTY);
-        *slot = Entry(slot.addr() | flags.leaf_bits(false) | kept);
+        let kept = slot.0 & (F::BORROWED | F::ACCESSED | F::DIRTY);
+        *slot = Entry(F::leaf(F::leaf_addr(slot.0, false), flags, false) | kept);
         Ok(())
     }
 
@@ -440,17 +614,17 @@ impl<M: TableMemory> Mapper<M> {
         let mut table = self.root;
         for level in (2..=4).rev() {
             let entry = self.mem.table(table).0[index(virt, level)];
-            if !entry.is_present() || entry.is_huge() {
+            if !F::present(entry.0) || F::large(entry.0) {
                 return None;
             }
-            table = Frame::containing(entry.addr());
+            table = Frame::containing(F::next_table(entry.0));
         }
         let slot = &mut self.mem.table(table).0[index(virt, 1)];
-        if !slot.is_present() {
+        if !F::present(slot.0) {
             return None;
         }
-        let frame = Frame::containing(slot.addr());
-        let owned = slot.0 & BORROWED == 0;
+        let frame = Frame::containing(F::leaf_addr(slot.0, false));
+        let owned = slot.0 & F::BORROWED == 0;
         *slot = Entry::EMPTY;
         Some((frame, owned))
     }
@@ -461,25 +635,25 @@ impl<M: TableMemory> Mapper<M> {
     /// which a few pages were touched).
     pub fn next_mapped(&mut self, mut virt: u64, end: u64) -> Option<u64> {
         'next: while virt < end {
-            if !is_canonical(virt) {
+            if !F::valid_virt(virt) {
                 return None;
             }
             let mut table = self.root;
             for level in (1..=4).rev() {
                 let entry = self.mem.table(table).0[index(virt, level)];
-                if level == 1 && entry.is_swapped() {
+                if level == 1 && is_swapped::<F>(entry.0) {
                     return Some(virt);
                 }
-                if !entry.is_present() {
+                if !F::present(entry.0) {
                     // Past what this entry would map.
                     let span = 1u64 << (12 + 9 * (level - 1));
                     virt = (virt & !(span - 1)).checked_add(span)?;
                     continue 'next;
                 }
-                if level == 1 || entry.is_huge() {
+                if level == 1 || F::large(entry.0) {
                     return Some(virt);
                 }
-                table = Frame::containing(entry.addr());
+                table = Frame::containing(F::next_table(entry.0));
             }
         }
         None
@@ -488,16 +662,16 @@ impl<M: TableMemory> Mapper<M> {
     /// The 4 KiB leaf entry for `virt`, if the tables down to it exist
     /// (and no large page is in the way).
     fn leaf_4k(&mut self, virt: u64) -> Option<&mut Entry> {
-        if !is_canonical(virt) {
+        if !F::valid_virt(virt) {
             return None;
         }
         let mut table = self.root;
         for level in (2..=4).rev() {
             let entry = self.mem.table(table).0[index(virt, level)];
-            if !entry.is_present() || entry.is_huge() {
+            if !F::present(entry.0) || F::large(entry.0) {
                 return None;
             }
-            table = Frame::containing(entry.addr());
+            table = Frame::containing(F::next_table(entry.0));
         }
         Some(&mut self.mem.table(table).0[index(virt, 1)])
     }
@@ -506,31 +680,31 @@ impl<M: TableMemory> Mapper<M> {
     /// file (a `SWAPPED` leaf).
     pub fn swapped_4k(&mut self, virt: u64) -> Option<u64> {
         let e = *self.leaf_4k(virt)?;
-        e.is_swapped().then_some(e.0 & !SWAPPED)
+        is_swapped::<F>(e.0).then_some(e.0 & !F::SWAPPED)
     }
 
     /// Replaces the present 4 KiB leaf at `virt` by a page file `token`
     /// (bit 0 clear, bit 10 free for `SWAPPED`), returning the frame it
     /// mapped and whether it was owned. The caller must flush the TLB.
     pub fn swap_out_4k(&mut self, virt: u64, token: u64) -> Option<(Frame, bool)> {
-        debug_assert!(token & (PRESENT | SWAPPED) == 0);
+        debug_assert!(token & (F::PRESENT | F::SWAPPED) == 0);
         let slot = self.leaf_4k(virt)?;
-        if !slot.is_present() {
+        if !F::present(slot.0) {
             return None;
         }
-        let frame = Frame::containing(slot.addr());
-        let owned = slot.0 & BORROWED == 0;
-        *slot = Entry(token | SWAPPED);
+        let frame = Frame::containing(F::leaf_addr(slot.0, false));
+        let owned = slot.0 & F::BORROWED == 0;
+        *slot = Entry(token | F::SWAPPED);
         Some((frame, owned))
     }
 
     /// Removes the page file token at `virt`, returning it.
     pub fn clear_swapped_4k(&mut self, virt: u64) -> Option<u64> {
         let slot = self.leaf_4k(virt)?;
-        if !slot.is_swapped() {
+        if !is_swapped::<F>(slot.0) {
             return None;
         }
-        let token = slot.0 & !SWAPPED;
+        let token = slot.0 & !F::SWAPPED;
         *slot = Entry::EMPTY;
         Some(token)
     }
@@ -540,11 +714,11 @@ impl<M: TableMemory> Mapper<M> {
     /// must flush the TLB.
     pub fn take_accessed_4k(&mut self, virt: u64) -> Option<bool> {
         let slot = self.leaf_4k(virt)?;
-        if !slot.is_present() {
+        if !F::present(slot.0) {
             return None;
         }
-        let was = slot.0 & ACCESSED != 0;
-        slot.0 &= !ACCESSED;
+        let was = slot.0 & F::ACCESSED != 0;
+        slot.0 &= !F::ACCESSED;
         Some(was)
     }
 
@@ -553,44 +727,44 @@ impl<M: TableMemory> Mapper<M> {
     /// caller must flush the TLB after clearing it.
     pub fn set_dirty_4k(&mut self, virt: u64, dirty: bool) -> Option<bool> {
         let slot = self.leaf_4k(virt)?;
-        if !slot.is_present() {
+        if !F::present(slot.0) {
             return None;
         }
-        let was = slot.0 & DIRTY != 0;
+        let was = slot.0 & F::DIRTY != 0;
         if dirty {
-            slot.0 |= DIRTY | ACCESSED;
+            slot.0 |= F::DIRTY | F::ACCESSED;
         } else {
-            slot.0 &= !DIRTY;
+            slot.0 &= !F::DIRTY;
         }
         Some(was)
     }
 
     pub fn translate(&mut self, virt: u64) -> Option<Translation> {
-        if !is_canonical(virt) {
+        if !F::valid_virt(virt) {
             return None;
         }
         let mut table = self.root;
         for level in (1..=4).rev() {
             let entry = self.mem.table(table).0[index(virt, level)];
-            if !entry.is_present() {
+            if !F::present(entry.0) {
                 return None;
             }
             let size = match level {
                 1 => Some(PageSize::Size4K),
-                2 if entry.is_huge() => Some(PageSize::Size2M),
-                3 if entry.is_huge() => Some(PageSize::Size1G),
+                2 if F::large(entry.0) => Some(PageSize::Size2M),
+                3 if F::large(entry.0) => Some(PageSize::Size1G),
                 _ => None,
             };
             if let Some(size) = size {
                 let large = size != PageSize::Size4K;
-                let base = if large { entry.large_addr() } else { entry.addr() };
+                let base = F::leaf_addr(entry.0, large);
                 return Some(Translation {
                     phys: base + (virt & (size.bytes() - 1)),
                     size,
-                    flags: PageFlags::from_leaf_bits(entry.0, large),
+                    flags: F::leaf_flags(entry.0, large),
                 });
             }
-            table = Frame::containing(entry.addr());
+            table = Frame::containing(F::next_table(entry.0));
         }
         None
     }
@@ -601,7 +775,7 @@ pub const KERNEL_HALF_START: usize = 256;
 /// Exclusive end of the user half of the address space.
 pub const USER_END: u64 = 0x0000_8000_0000_0000;
 
-impl<M: TableMemory> Mapper<M> {
+impl<M: TableMemory, F: Format> Mapper<M, F> {
     /// Makes sure every kernel-half PML4 entry points to a PDPT, so that
     /// address spaces sharing these entries see all future kernel mappings.
     pub fn populate_kernel_half(
@@ -609,10 +783,10 @@ impl<M: TableMemory> Mapper<M> {
         alloc: &mut impl FnMut() -> Option<Frame>,
     ) -> Result<(), MapError> {
         for i in KERNEL_HALF_START..ENTRIES {
-            if !self.mem.table(self.root).0[i].is_present() {
+            if !F::present(self.mem.table(self.root).0[i].0) {
                 let frame = alloc().ok_or(MapError::OutOfMemory)?;
                 *self.mem.table(frame) = PageTable::new();
-                self.mem.table(self.root).0[i] = Entry::table(frame, false);
+                self.mem.table(self.root).0[i] = Entry(F::table(frame, false));
             }
         }
         Ok(())
@@ -650,25 +824,25 @@ impl<M: TableMemory> Mapper<M> {
     ) {
         for i in 0..limit {
             let entry = self.mem.table(table).0[i];
-            if !entry.is_present() {
+            if !F::present(entry.0) {
                 continue;
             }
             let virt = base | (i as u64) << (12 + 9 * (level - 1));
             let size = match level {
                 1 => Some(PageSize::Size4K),
-                2 if entry.is_huge() => Some(PageSize::Size2M),
-                3 if entry.is_huge() => Some(PageSize::Size1G),
+                2 if F::large(entry.0) => Some(PageSize::Size2M),
+                3 if F::large(entry.0) => Some(PageSize::Size1G),
                 _ => None,
             };
             match size {
                 Some(size) => {
                     let large = size != PageSize::Size4K;
-                    let phys = if large { entry.large_addr() } else { entry.addr() };
-                    let flags = PageFlags::from_leaf_bits(entry.0, large);
+                    let phys = F::leaf_addr(entry.0, large);
+                    let flags = F::leaf_flags(entry.0, large);
                     f(virt, Translation { phys, size, flags });
                 }
                 None => {
-                    let child = Frame::containing(entry.addr());
+                    let child = Frame::containing(F::next_table(entry.0));
                     self.walk_level(child, level - 1, virt, ENTRIES, f);
                 }
             }
@@ -700,19 +874,19 @@ impl<M: TableMemory> Mapper<M> {
     ) {
         for i in 0..limit {
             let entry = self.mem.table(table).0[i];
-            if level == 1 && entry.is_swapped() {
-                free_swapped(entry.0 & !SWAPPED);
+            if level == 1 && is_swapped::<F>(entry.0) {
+                free_swapped(entry.0 & !F::SWAPPED);
                 continue;
             }
-            if !entry.is_present() {
+            if !F::present(entry.0) {
                 continue;
             }
-            if level == 1 || entry.is_huge() {
-                if entry.0 & BORROWED == 0 {
-                    free_leaf(Frame::containing(entry.addr()));
+            if level == 1 || F::large(entry.0) {
+                if entry.0 & F::BORROWED == 0 {
+                    free_leaf(Frame::containing(F::leaf_addr(entry.0, level > 1)));
                 }
             } else {
-                let child = Frame::containing(entry.addr());
+                let child = Frame::containing(F::next_table(entry.0));
                 self.free_level(child, level - 1, ENTRIES, free_table, free_leaf, free_swapped);
                 free_table(child);
             }
@@ -855,7 +1029,8 @@ mod tests {
                     cache,
                     borrowed: true,
                 };
-                assert_eq!(PageFlags::from_leaf_bits(flags.leaf_bits(large), large), flags);
+                assert_eq!(X86::leaf_flags(X86::leaf(0, flags, large), large), flags);
+                assert_eq!(Vmsa::leaf_flags(Vmsa::leaf(0, flags, large), large), flags);
             }
         }
     }
@@ -921,8 +1096,8 @@ mod tests {
         let mut table = m.root();
         for level in (2..=4).rev() {
             let e = m.mem.table(table).0[index(0x40_0000, level)];
-            assert!(e.raw() & USER != 0, "level {level} not user-accessible");
-            table = Frame::containing(e.addr());
+            assert!(e.raw() & x86::USER != 0, "level {level} not user-accessible");
+            table = Frame::containing(X86::next_table(e.raw()));
         }
     }
 
@@ -937,7 +1112,7 @@ mod tests {
                 None
             }
         };
-        let mut m = Mapper::new(FakeMemory::default(), &mut alloc).unwrap();
+        let mut m: Mapper<_> = Mapper::new(FakeMemory::default(), &mut alloc).unwrap();
         assert_eq!(
             m.map(KVIRT, 0, PageSize::Size4K, PageFlags::KERNEL_RW, &mut alloc),
             Err(MapError::OutOfMemory)
@@ -950,10 +1125,11 @@ mod tests {
         kernel.populate_kernel_half(&mut alloc).unwrap();
         let kroot = kernel.root();
         let FakeMemory(tables) = kernel.mem;
-        let mut user =
+        let mut user: Mapper<_> =
             Mapper::new_sharing_kernel_half(FakeMemory(tables), kroot, &mut alloc).unwrap();
         // A kernel mapping made later through the kernel tables is visible.
-        let mut k2 = Mapper { root: kroot, mem: FakeMemory(core::mem::take(&mut user.mem.0)) };
+        let mut k2: Mapper<_> =
+            Mapper::from_root(FakeMemory(core::mem::take(&mut user.mem.0)), kroot);
         k2.map(KVIRT, 0x1000, PageSize::Size4K, PageFlags::KERNEL_RW, &mut alloc).unwrap();
         user.mem.0 = core::mem::take(&mut k2.mem.0);
         assert_eq!(user.translate(KVIRT).unwrap().phys, 0x1000);
@@ -984,5 +1160,58 @@ mod tests {
         let mut leaves = Vec::new();
         m.destroy(&mut |_| {}, &mut |f| leaves.push(f.number()), &mut |_| {});
         assert_eq!(leaves, [5]);
+    }
+
+    fn setup_vmsa() -> (Mapper<FakeMemory, Vmsa>, impl FnMut() -> Option<Frame>) {
+        let mut next = 100;
+        let mut alloc = move || {
+            next += 1;
+            Some(Frame::from_number(next))
+        };
+        let mapper = Mapper::new(FakeMemory::default(), &mut alloc).unwrap();
+        (mapper, alloc)
+    }
+
+    /// VMSAv8-64 descriptors, bit for bit (Arm ARM: bits 1:0 page/table
+    /// 0b11, block 0b01; AttrIndx 4:2; AP 7:6; SH 9:8; AF 10; nG 11; PXN
+    /// 53; UXN 54).
+    #[test]
+    fn vmsa_descriptors() {
+        // Kernel code: read-only, executable at EL1 only, global, normal
+        // write-back (MAIR index 0), inner shareable, accessed.
+        assert_eq!(Vmsa::leaf(0x5000, PageFlags::KERNEL_RX, false), 0x0040_0000_0000_5783);
+        // Kernel data as a 2 MiB block: writable, never executable.
+        assert_eq!(Vmsa::leaf(0x4000_0000, PageFlags::KERNEL_RW, true), 0x0060_0000_4000_0701);
+        // A device page: MAIR index 3 (Uncached).
+        assert_eq!(Vmsa::leaf(0x0900_0000, PageFlags::MMIO, false), 0x0060_0000_0900_070f);
+        // A user page: EL0 access, not global, executable at EL0 only.
+        let user = PageFlags { user: true, global: false, ..PageFlags::KERNEL_RX };
+        assert_eq!(Vmsa::leaf(0x6000, user, false), 0x0020_0000_0000_6fc3);
+        // A table descriptor restricts nothing.
+        assert_eq!(Vmsa::table(Frame::from_number(7), true), 0x7003);
+    }
+
+    #[test]
+    fn vmsa_map_range_uses_blocks_and_translates() {
+        let (mut m, mut alloc) = setup_vmsa();
+        let base = 0xffff_0000_0000_0000;
+        let start = SIZE_1G - SIZE_2M - PAGE_SIZE;
+        let len = PAGE_SIZE + SIZE_2M + SIZE_1G + PAGE_SIZE;
+        let counts =
+            m.map_range(base + start, start, len, PageFlags::KERNEL_RW, &mut alloc).unwrap();
+        assert_eq!(counts, [2, 1, 1]);
+        for probe in [start, start + PAGE_SIZE, SIZE_1G + 0x1234, start + len - 1] {
+            let t = m.translate(base + probe).unwrap();
+            assert_eq!((t.phys, t.flags), (probe, PageFlags::KERNEL_RW));
+        }
+        assert_eq!(m.translate(base + SIZE_1G).unwrap().size, PageSize::Size1G);
+        assert_eq!(m.translate(base + start + len), None);
+        // A page inside a block is refused, an unmap of a page works.
+        assert_eq!(
+            m.map(base + SIZE_1G, 0, PageSize::Size4K, PageFlags::KERNEL_RW, &mut alloc),
+            Err(MapError::LargePageConflict)
+        );
+        assert_eq!(m.unmap_4k(base + start), Some(Frame::containing(start)));
+        assert_eq!(m.translate(base + start), None);
     }
 }

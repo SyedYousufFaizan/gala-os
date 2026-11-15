@@ -145,8 +145,7 @@ process's signal contexts; `compile_error!` elsewhere). WOW64's NT part
 every architecture; it runs only where the platform can enter 32-bit
 code (`set_teb32`: x86-64's compatibility mode).
 
-Limits (ROADMAP PT): `mm::paging` is x86-64's page-table format (generic
-over table access for host tests); the user thread-pointer bases keep
+Limits (ROADMAP PT): the user thread-pointer bases keep
 x86-64's names (`gs_base`, `fs_base`, `teb32`) and the FP control
 register MXCSR's. `boot` reads Limine's protocol for both: the MP
 response's layout is per architecture (`boot::MpInfo::hw_id`: x86-64's
@@ -174,9 +173,10 @@ ROADMAP AR, under way on QEMU's `virt` machine (GICv3, a PL011, virtio
 over PCIe), booted by UEFI (QEMU's own edk2 build, or AAVMF) and
 Limine's `BOOTAA64.EFI` from the same kind of ISO as x86-64's (Limine's
 EFI image carries both loaders; the ISO holds the aarch64 kernel). The
-kernel boots to its frame allocator: scenarios `arm_boot` (to
-`stop_after=frames`), `arm_fault_ud` and `arm_fault_pagefault` (the
-vectors' report); `paging::init` is the next unported step.
+kernel boots to its own page tables: scenarios `arm_boot` (to
+`stop_after=paging`), `arm_fault_ud` and `arm_fault_pagefault` (the
+vectors' report); the timer (`arch::timer::calibrate`) is the next
+unported step.
 
 - **Entry** (`arch/aarch64/entry.rs`): Limine (base revision 6) enters
   at EL1, or at EL2 with VHE (the `_EL1` register names then reach EL2's),
@@ -196,6 +196,17 @@ vectors' report); `paging::init` is the next unported step.
   2-7 are guaranteed unused); missing tables come from a pool in .bss.
   The console's PL011 (QEMU `virt`'s at 0x0900_0000, the board's fixed
   layout) is mapped this way by `serial::init`.
+- **Page tables** (`arch/aarch64/paging.rs`): the kernel's higher half
+  (TTBR1_EL1) is `mm::paging::Mapper` with the `Vmsa` encoding, built as
+  x86-64's (the HHDM of the regions Limine maps, the image per segment,
+  and the early device pages again at their addresses), then TTBR1 and
+  MAIR_EL1 are switched and EL1's TLB invalidated. MAIR holds one
+  attribute per `CacheMode` at its value (the leaves' AttrIndx); slot 0
+  stays write-back and slot 2 Device-nGnRE, so the bootloader's and
+  `early_map`'s entries keep their meaning across the switch. Device
+  mappings go in a window at 0xffff_e000_0000_0000 (`map_mmio`); a kernel
+  page's unmap invalidates it everywhere (`tlbi vaae1is`). User spaces
+  (TTBR0) are not ported.
 - **Exit**: semihosting's SYS_EXIT_EXTENDED (`hlt #0xf000`; xtask runs
   QEMU with `-semihosting-config enable=on`), with x86-64's statuses (33
   success, 35 failure). There is no ISA bus: no debug console (no event
@@ -375,9 +386,16 @@ address.
 The kernel's own address space; processes' address spaces are in
 "Virtual memory of processes" under the NT personality.
 
-`mm::paging::Mapper` implements 4-level tables (4K/2M/1G leaves, NX, PAT
-cache modes) over a `TableMemory` trait; the host tests use a fake, the
-kernel uses `arch::paging::HhdmTables`. At boot `arch::paging::init`
+`mm::paging::Mapper` implements 4-level tables (4K/2M/1G leaves) over a
+`TableMemory` trait (the host tests use a fake, the kernel
+`arch::paging::HhdmTables`) and a `Format`, the entry encoding: x86-64's
+(`X86`, the default: NX, PAT cache modes) or VMSAv8-64's with the 4 KiB
+granule (`Vmsa`: AttrIndx into MAIR, AP, PXN/UXN; aarch64, "The aarch64
+port"). Both index 48-bit addresses 9 bits a level and map blocks at
+levels 2 and 3, so the walk, the large pages and their tests are one;
+what is valid to map differs (`Format::valid_virt`: x86-64's canonical
+form, aarch64's two halves from 0 and from 0xffff_0000_0000_0000). On
+x86-64, at boot `arch::paging::init`
 programs the PAT (WB, WT, UC-, UC, WP, WC, UC-, UC), enables NXE and
 PGE, builds the kernel address space and switches CR3:
 

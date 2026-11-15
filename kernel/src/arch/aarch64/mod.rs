@@ -2,9 +2,9 @@
 //! Ported so far: the entry from Limine and the exception vectors
 //! (`entry`), the PL011 console through a device page mapped into the
 //! bootloader's tables (`serial`, `early_map`), interrupt masking and the
-//! counter (`cpu`), the exit through semihosting (`qemu`). The kernel
-//! boots to its frame allocator (the `arm_boot` scenario; ARCHITECTURE
-//! "The aarch64 port").
+//! counter (`cpu`), the exit through semihosting (`qemu`), the kernel's
+//! own page tables (`paging`). The kernel boots that far (the `arm_boot`
+//! scenario; ARCHITECTURE "The aarch64 port").
 //!
 //! The rest is still the stub the kernel's aarch64 check (`cargo clippy -p
 //! kernel --target aarch64-unknown-none`, in CI) builds against: what has

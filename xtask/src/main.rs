@@ -12264,17 +12264,20 @@ const SCENARIOS: &[Scenario] = &[
     Scenario {
         // The aarch64 kernel (ROADMAP AR) on QEMU's `virt` machine,
         // booted by UEFI and Limine's BOOTAA64.EFI (`AARCH64_SCENARIOS`):
-        // its PL011 console, the bootloader's handoff, the memory map and
-        // the frame allocator, then the boot ends where the port has got
-        // to (`stop_after`) and the kernel exits through semihosting.
+        // its PL011 console, the bootloader's handoff, the memory map, the
+        // frame allocator and its own page tables (the console still
+        // writing after the switch), then the boot ends where the port has
+        // got to (`stop_after`) and the kernel exits through semihosting.
         name: "arm_boot",
-        cmdline: "qemu_exit stop_after=frames",
+        cmdline: "qemu_exit stop_after=paging",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             "gala-os kernel",
             "firmware: UEFI aarch64",
             "memory map (",
-            "boot: stopping after boot phase frames (stop_after)",
+            "frames: ",
+            "paging: own tables at ",
+            "boot: stopping after boot phase paging (stop_after)",
         ],
     },
     Scenario {

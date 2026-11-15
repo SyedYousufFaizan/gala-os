@@ -8,10 +8,11 @@
 //! module puts in MAIR_EL1's slot 2 (Limine guarantees slots 2-7 unused).
 //! The tables the walk needs are taken from a small pool in the kernel's
 //! own .bss (its physical address from the kernel's load address); the
-//! bootloader's tables are reached through the HHDM. The port's own page
-//! tables (`paging`) map these devices again when they take over.
+//! bootloader's tables are reached through the HHDM. The kernel's own
+//! tables (`paging::init`) map these pages again at the same addresses
+//! (`mapped`), so their users keep their pointers.
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::boot::KernelAddress;
 
@@ -39,6 +40,9 @@ struct Pool([[u64; 512]; 3]);
 static mut POOL: Pool = Pool([[0; 512]; 3]);
 static POOL_USED: AtomicUsize = AtomicUsize::new(0);
 static NEXT_PAGE: AtomicUsize = AtomicUsize::new(0);
+/// The physical page behind each mapped page of `WINDOW`, in order (for
+/// `paging::init`, which maps them again in the kernel's own tables).
+static PHYS: [AtomicU64; WINDOW_PAGES] = [const { AtomicU64::new(0) }; WINDOW_PAGES];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapError {
@@ -86,11 +90,21 @@ pub fn map_device(phys: u64, hhdm: u64, kernel: KernelAddress) -> Result<u64, Ma
     let page = (phys & ADDRESS) | VALID_PAGE | (DEVICE_ATTR << 2) | AF | PXN | UXN;
     // SAFETY: the level-3 table found or made above; `index` < 512.
     unsafe { ((table + hhdm) as *mut u64).add(index as usize).write_volatile(page) };
+    PHYS[n].store(phys & ADDRESS, Ordering::Relaxed);
     // The entry was invalid before: no TLB entry to remove, only the
     // write to make visible to the walker before the first access.
     // SAFETY: barriers only.
     unsafe { core::arch::asm!("dsb ishst", "isb", options(nostack, preserves_flags)) };
     Ok(va)
+}
+
+/// The device pages mapped so far: (virtual, physical) of each.
+pub fn mapped() -> impl Iterator<Item = (u64, u64)> {
+    let n = NEXT_PAGE.load(Ordering::Relaxed).min(WINDOW_PAGES);
+    (0..n).filter_map(|i| {
+        let phys = PHYS[i].load(Ordering::Relaxed);
+        (phys != 0).then_some((WINDOW + i as u64 * PAGE, phys))
+    })
 }
 
 /// A zeroed table from the pool: its physical address.
