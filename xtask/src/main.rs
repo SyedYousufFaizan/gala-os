@@ -443,18 +443,18 @@ const PREBUILT: &[Prebuilt] = &[
         members: &["busybox"],
         excludes: &[],
     },
-    // glibc 2.39 as Ubuntu 24.04 (noble) ships it: the libc6 package of
-    // the release pocket (2.39-0ubuntu8, never changed once released;
-    // the SHA-256 is the one we measured, Ubuntu signs the archive's
-    // index, not the .deb: THIRD_PARTY.md). A Debian package (an ar
+    // glibc 2.43 as Ubuntu 26.04 LTS (resolute) ships it: the libc6
+    // package of the release pocket (2.43-2ubuntu2, never changed once
+    // released; the SHA-256 is the one in the release's signed Packages
+    // index: THIRD_PARTY.md). A Debian package (an ar
     // archive) unpacked with dpkg-deb; its members moved here by their
     // file names. The program interpreter, libc and libm that dynamically
     // linked Linux programs (user/lx's GLIBC_TESTS) load (ROADMAP LD);
     // they run only inside gala.
     Prebuilt {
         name: "glibc",
-        url: "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6_2.39-0ubuntu8_amd64.deb",
-        checksum: "af36c7ac770770fe3d3c10e85d6bc538e76e57570ba7db7d397fb9f654783ef3",
+        url: "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6_2.43-2ubuntu2_amd64.deb",
+        checksum: "c13775dc0c984403f3fcad229d14507a9f387763bd07ace1e5f93897ee6b8434",
         members: &[
             "usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
             "usr/lib/x86_64-linux-gnu/libc.so.6",
@@ -462,36 +462,36 @@ const PREBUILT: &[Prebuilt] = &[
         ],
         excludes: &[],
     },
-    // weston 13.0.0's demo clients as Ubuntu 24.04 (noble) ships them
-    // (universe, the release pocket's weston 13.0.0-4build3; the SHA-256
+    // weston 14.0.2's demo clients as Ubuntu 26.04 (resolute) ships them
+    // (universe, the release pocket's weston 14.0.2-5; the SHA-256
     // is the one in the release's signed Packages index): only
     // weston-simple-shm, a real libwayland client (ROADMAP LD step 2,
     // scenario lx_simple_shm). It needs libwayland-client and libffi
     // (below) besides glibc. Inside gala only.
     Prebuilt {
         name: "weston",
-        url: "https://archive.ubuntu.com/ubuntu/pool/universe/w/weston/weston_13.0.0-4build3_amd64.deb",
-        checksum: "bcf6f344c6d5bede9f3f601be1015b0550fa31dd8c7b3e51ac0fe34702dac73c",
+        url: "https://archive.ubuntu.com/ubuntu/pool/universe/w/weston/weston_14.0.2-5_amd64.deb",
+        checksum: "edf3509ee3b2fb0b94d45e3e090be2a5cdf0a18e4ebdfef2160d2e2b1c05090f",
         members: &["usr/bin/weston-simple-shm"],
         excludes: &[],
     },
-    // libwayland-client 1.22.0 (Ubuntu 24.04's libwayland-client0
-    // 1.22.0-2.1build1, main; SHA-256 from the signed Packages index).
+    // libwayland-client 1.24.0 (Ubuntu 26.04's libwayland-client0
+    // 1.24.0-2, main; SHA-256 from the signed Packages index).
     // The member is the soname's symbolic link: its target is kept under
     // the link's name.
     Prebuilt {
         name: "libwayland-client",
-        url: "https://archive.ubuntu.com/ubuntu/pool/main/w/wayland/libwayland-client0_1.22.0-2.1build1_amd64.deb",
-        checksum: "6af0aed41d75149bea22fa468f01eb058ffe3e35ef07ff2f13fb88a90387881d",
+        url: "https://archive.ubuntu.com/ubuntu/pool/main/w/wayland/libwayland-client0_1.24.0-2_amd64.deb",
+        checksum: "094db0e190b53872e4d5310cd5fa09ca28ee3936386cd09e5f7d13e645aa12ab",
         members: &["usr/lib/x86_64-linux-gnu/libwayland-client.so.0"],
         excludes: &[],
     },
-    // libffi 3.4.6 (Ubuntu 24.04's libffi8 3.4.6-1build1, main; SHA-256
+    // libffi 3.5.2 (Ubuntu 26.04's libffi8 3.5.2-4, main; SHA-256
     // from the signed Packages index): libwayland-client's dependency.
     Prebuilt {
         name: "libffi",
-        url: "https://archive.ubuntu.com/ubuntu/pool/main/libf/libffi/libffi8_3.4.6-1build1_amd64.deb",
-        checksum: "637e6a7744de08cd331a41f4efd0d24e6ea9064843dea9d1c6ca87bdb5f038a2",
+        url: "https://archive.ubuntu.com/ubuntu/pool/main/libf/libffi/libffi8_3.5.2-4_amd64.deb",
+        checksum: "4a7423124bbd459c0aa38b7389ec7802fa6899654767a95fc27de70967fedd48",
         members: &["usr/lib/x86_64-linux-gnu/libffi.so.8"],
         excludes: &[],
     },
@@ -595,348 +595,938 @@ struct Deb {
     /// The files used, by their paths in the package; each lands at the
     /// same path in the root. A symbolic link (a library's soname) is its
     /// target's bytes under the link's path: boot modules carry no links.
+    /// `<installed>=<in the package>` is a file its maintainer script
+    /// installs under another name with update-alternatives (libblas3's
+    /// `usr/lib/x86_64-linux-gnu/libblas.so.3`, a link through
+    /// /etc/alternatives to `blas/libblas.so.3`): the package's file at
+    /// the installed path, which is the one a minimal install has. A path
+    /// ending in `/` is a directory of the package, made empty: one a
+    /// program looks for with nothing used beneath it (GIMP's plug-ins
+    /// check that `usr/share/locale/` is there).
     files: &'static [&'static str],
 }
 
 const LINUX_ROOTS: &[LinuxRoot] = &[
     LinuxRoot {
-        // GTK 3 (3.24.41) and its whole library closure as Ubuntu 24.04
-        // builds them (ldd of libgtk-3.so.0 on Ubuntu 24.04, less glibc,
-        // libffi and libwayland-client: the "glibc" and "wayland_client"
-        // module sets), fontconfig's own fonts.conf and one font, DejaVu
-        // Sans: what user/lx/gtk_test needs (ROADMAP LD step 3, `lx_gtk`).
-        // Left out on purpose, as a minimal install of the packages would not
-        // be: icon and cursor themes (GTK 3 falls back to the icons in its
-        // own resources, libwayland-cursor to its built-in cursors), GSettings
-        // schemas and GIO modules (GLib's memory settings backend), the
-        // gdk-pixbuf loaders (PNG is built in). Of xkb-data (libxkbcommon0
-        // depends on it) only what GDK's default keymap (rules evdev, model
-        // pc105, layout us) includes: the server's own keymap comes whole with
-        // wl_keyboard.
+        // GTK 3 (3.24.52) and its whole library closure as Ubuntu 26.04 LTS
+        // (resolute) builds them, with the data a minimal install of them
+        // has and GTK opens: what user/lx/gtk_test opened under `strace -f
+        // -y` on Ubuntu 26.04, over Wayland (weston) and X11 (Xvfb), less
+        // glibc, libffi and libwayland-client (the "glibc" and
+        // "wayland_client" module sets) and the generated caches (GIO's
+        // module cache, GSettings' compiled schemas, fontconfig's and the
+        // icon theme's caches; the MIME cache is made at assembly from
+        // shared-mime-info's XML). GTK 3 loads images through glycin, whose
+        // loaders run as their own processes (`glycin-svg` for the icons'
+        // SVGs), sandboxed by bubblewrap where it can (WORKFLOW "Linux
+        // roots from Ubuntu 26.04").
         name: "gtk3",
         debs: &[
             Deb {
-                pool: "main/f/fontconfig/fontconfig-config_2.15.0-1.1ubuntu2_amd64.deb",
-                sha256: "9df0579cd298a1f2b7a40efd519c849745aecd193a09733cf4d1032284a62bbf",
-                files: &["etc/fonts/fonts.conf"],
+                pool: "main/a/adwaita-icon-theme/adwaita-icon-theme_50.0-1_all.deb",
+                sha256: "db9f11a94f993de589e7d8879664cb371eb8aefc8a2bce100d923951e4ef30c8",
+                files: &[
+                    "usr/share/icons/Adwaita/cursor.theme",
+                    "usr/share/icons/Adwaita/cursors/X_cursor",
+                    "usr/share/icons/Adwaita/cursors/alias",
+                    "usr/share/icons/Adwaita/cursors/all-resize",
+                    "usr/share/icons/Adwaita/cursors/all-scroll",
+                    "usr/share/icons/Adwaita/cursors/arrow",
+                    "usr/share/icons/Adwaita/cursors/bd_double_arrow",
+                    "usr/share/icons/Adwaita/cursors/bottom_left_corner",
+                    "usr/share/icons/Adwaita/cursors/bottom_right_corner",
+                    "usr/share/icons/Adwaita/cursors/bottom_side",
+                    "usr/share/icons/Adwaita/cursors/cell",
+                    "usr/share/icons/Adwaita/cursors/col-resize",
+                    "usr/share/icons/Adwaita/cursors/context-menu",
+                    "usr/share/icons/Adwaita/cursors/copy",
+                    "usr/share/icons/Adwaita/cursors/cross",
+                    "usr/share/icons/Adwaita/cursors/cross_reverse",
+                    "usr/share/icons/Adwaita/cursors/crosshair",
+                    "usr/share/icons/Adwaita/cursors/default",
+                    "usr/share/icons/Adwaita/cursors/diamond_cross",
+                    "usr/share/icons/Adwaita/cursors/dnd-ask",
+                    "usr/share/icons/Adwaita/cursors/dnd-move",
+                    "usr/share/icons/Adwaita/cursors/e-resize",
+                    "usr/share/icons/Adwaita/cursors/ew-resize",
+                    "usr/share/icons/Adwaita/cursors/fd_double_arrow",
+                    "usr/share/icons/Adwaita/cursors/fleur",
+                    "usr/share/icons/Adwaita/cursors/grab",
+                    "usr/share/icons/Adwaita/cursors/grabbing",
+                    "usr/share/icons/Adwaita/cursors/hand1",
+                    "usr/share/icons/Adwaita/cursors/hand2",
+                    "usr/share/icons/Adwaita/cursors/help",
+                    "usr/share/icons/Adwaita/cursors/left_ptr",
+                    "usr/share/icons/Adwaita/cursors/left_side",
+                    "usr/share/icons/Adwaita/cursors/move",
+                    "usr/share/icons/Adwaita/cursors/n-resize",
+                    "usr/share/icons/Adwaita/cursors/ne-resize",
+                    "usr/share/icons/Adwaita/cursors/nesw-resize",
+                    "usr/share/icons/Adwaita/cursors/no-drop",
+                    "usr/share/icons/Adwaita/cursors/not-allowed",
+                    "usr/share/icons/Adwaita/cursors/ns-resize",
+                    "usr/share/icons/Adwaita/cursors/nw-resize",
+                    "usr/share/icons/Adwaita/cursors/nwse-resize",
+                    "usr/share/icons/Adwaita/cursors/pointer",
+                    "usr/share/icons/Adwaita/cursors/progress",
+                    "usr/share/icons/Adwaita/cursors/question_arrow",
+                    "usr/share/icons/Adwaita/cursors/right_side",
+                    "usr/share/icons/Adwaita/cursors/row-resize",
+                    "usr/share/icons/Adwaita/cursors/s-resize",
+                    "usr/share/icons/Adwaita/cursors/sb_h_double_arrow",
+                    "usr/share/icons/Adwaita/cursors/sb_v_double_arrow",
+                    "usr/share/icons/Adwaita/cursors/se-resize",
+                    "usr/share/icons/Adwaita/cursors/sw-resize",
+                    "usr/share/icons/Adwaita/cursors/tcross",
+                    "usr/share/icons/Adwaita/cursors/text",
+                    "usr/share/icons/Adwaita/cursors/top_left_arrow",
+                    "usr/share/icons/Adwaita/cursors/top_left_corner",
+                    "usr/share/icons/Adwaita/cursors/top_right_corner",
+                    "usr/share/icons/Adwaita/cursors/top_side",
+                    "usr/share/icons/Adwaita/cursors/vertical-text",
+                    "usr/share/icons/Adwaita/cursors/w-resize",
+                    "usr/share/icons/Adwaita/cursors/wait",
+                    "usr/share/icons/Adwaita/cursors/watch",
+                    "usr/share/icons/Adwaita/cursors/xterm",
+                    "usr/share/icons/Adwaita/cursors/zoom-in",
+                    "usr/share/icons/Adwaita/cursors/zoom-out",
+                    "usr/share/icons/Adwaita/index.theme",
+                    "usr/share/icons/Adwaita/symbolic/ui/window-close-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/ui/window-maximize-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/ui/window-minimize-symbolic.svg",
+                    "usr/share/icons/default/index.theme=usr/share/icons/Adwaita/cursor.theme",
+                ],
             },
             Deb {
-                pool: "main/f/fonts-dejavu/fonts-dejavu-core_2.37-8_all.deb",
-                sha256: "40049660c194f3b8a2541fc7369efebb10e9f94bdac836a2f38fafedd10fa73a",
-                files: &["usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"],
+                pool: "main/b/bubblewrap/bubblewrap_0.11.1-1_amd64.deb",
+                sha256: "090bb705b6d49213b288f19d78be78a55a1b72843efb12eae73ab5cca0f54b8d",
+                files: &["usr/bin/bwrap"],
             },
             Deb {
-                pool: "main/a/at-spi2-core/libatk-bridge2.0-0t64_2.52.0-1build1_amd64.deb",
-                sha256: "22b7d47e3c0f7953a78d3cfd309d1b20771085de9220fbe610c0989b9e808c9b",
-                files: &["usr/lib/x86_64-linux-gnu/libatk-bridge-2.0.so.0"],
+                pool: "main/d/dconf/dconf-gsettings-backend_0.49.0-4_amd64.deb",
+                sha256: "4da7b8309d49079ebac028c1f3284df02463da451cbd5f90ea61e535534531ac",
+                files: &["usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so"],
             },
             Deb {
-                pool: "main/a/at-spi2-core/libatk1.0-0t64_2.52.0-1build1_amd64.deb",
-                sha256: "42c5d4b00954f17c2c3c4b866844f691eb8b6d57bf08b59203e65f12dc84a4f9",
-                files: &["usr/lib/x86_64-linux-gnu/libatk-1.0.so.0"],
+                pool: "main/f/fontconfig/fontconfig-config_2.17.1-3ubuntu1_amd64.deb",
+                sha256: "304cc61f61b94399453db02e1032d9f74a0bd737307acb4ed847f8da9406b8c1",
+                files: &[
+                    "etc/fonts/conf.d/10-hinting-slight.conf",
+                    "etc/fonts/conf.d/10-scale-bitmap-fonts.conf",
+                    "etc/fonts/conf.d/10-sub-pixel-rgb.conf",
+                    "etc/fonts/conf.d/10-yes-antialias.conf",
+                    "etc/fonts/conf.d/11-lcdfilter-default.conf",
+                    "etc/fonts/conf.d/20-unhint-small-vera.conf",
+                    "etc/fonts/conf.d/30-metric-aliases.conf",
+                    "etc/fonts/conf.d/40-nonlatin.conf",
+                    "etc/fonts/conf.d/45-generic.conf",
+                    "etc/fonts/conf.d/45-latin.conf",
+                    "etc/fonts/conf.d/48-spacing.conf",
+                    "etc/fonts/conf.d/49-sansserif.conf",
+                    "etc/fonts/conf.d/50-user.conf",
+                    "etc/fonts/conf.d/51-local.conf",
+                    "etc/fonts/conf.d/60-generic.conf",
+                    "etc/fonts/conf.d/60-latin.conf",
+                    "etc/fonts/conf.d/65-fonts-persian.conf",
+                    "etc/fonts/conf.d/65-nonlatin.conf",
+                    "etc/fonts/conf.d/69-unifont.conf",
+                    "etc/fonts/conf.d/70-no-bitmaps-except-emoji.conf",
+                    "etc/fonts/conf.d/80-delicious.conf",
+                    "etc/fonts/conf.d/90-synthetic.conf",
+                    "etc/fonts/fonts.conf",
+                    "usr/share/fontconfig/conf.avail/05-reset-dirs-sample.conf",
+                    "usr/share/fontconfig/conf.avail/09-autohint-if-no-hinting.conf",
+                    "usr/share/fontconfig/conf.avail/10-autohint.conf",
+                    "usr/share/fontconfig/conf.avail/10-hinting-full.conf",
+                    "usr/share/fontconfig/conf.avail/10-hinting-medium.conf",
+                    "usr/share/fontconfig/conf.avail/10-hinting-none.conf",
+                    "usr/share/fontconfig/conf.avail/10-hinting-slight.conf",
+                    "usr/share/fontconfig/conf.avail/10-no-antialias.conf",
+                    "usr/share/fontconfig/conf.avail/10-scale-bitmap-fonts.conf",
+                    "usr/share/fontconfig/conf.avail/10-sub-pixel-bgr.conf",
+                    "usr/share/fontconfig/conf.avail/10-sub-pixel-none.conf",
+                    "usr/share/fontconfig/conf.avail/10-sub-pixel-rgb.conf",
+                    "usr/share/fontconfig/conf.avail/10-sub-pixel-vbgr.conf",
+                    "usr/share/fontconfig/conf.avail/10-sub-pixel-vrgb.conf",
+                    "usr/share/fontconfig/conf.avail/10-unhinted.conf",
+                    "usr/share/fontconfig/conf.avail/10-yes-antialias.conf",
+                    "usr/share/fontconfig/conf.avail/11-lcdfilter-default.conf",
+                    "usr/share/fontconfig/conf.avail/11-lcdfilter-legacy.conf",
+                    "usr/share/fontconfig/conf.avail/11-lcdfilter-light.conf",
+                    "usr/share/fontconfig/conf.avail/11-lcdfilter-none.conf",
+                    "usr/share/fontconfig/conf.avail/20-unhint-small-vera.conf",
+                    "usr/share/fontconfig/conf.avail/25-unhint-nonlatin.conf",
+                    "usr/share/fontconfig/conf.avail/30-metric-aliases.conf",
+                    "usr/share/fontconfig/conf.avail/35-lang-normalize.conf",
+                    "usr/share/fontconfig/conf.avail/40-nonlatin.conf",
+                    "usr/share/fontconfig/conf.avail/45-generic.conf",
+                    "usr/share/fontconfig/conf.avail/45-latin.conf",
+                    "usr/share/fontconfig/conf.avail/48-guessfamily.conf",
+                    "usr/share/fontconfig/conf.avail/48-spacing.conf",
+                    "usr/share/fontconfig/conf.avail/49-sansserif.conf",
+                    "usr/share/fontconfig/conf.avail/50-user.conf",
+                    "usr/share/fontconfig/conf.avail/51-local.conf",
+                    "usr/share/fontconfig/conf.avail/53-monospace-lcd-filter.conf",
+                    "usr/share/fontconfig/conf.avail/60-generic.conf",
+                    "usr/share/fontconfig/conf.avail/60-latin.conf",
+                    "usr/share/fontconfig/conf.avail/65-fonts-persian.conf",
+                    "usr/share/fontconfig/conf.avail/65-khmer.conf",
+                    "usr/share/fontconfig/conf.avail/65-nonlatin.conf",
+                    "usr/share/fontconfig/conf.avail/69-unifont.conf",
+                    "usr/share/fontconfig/conf.avail/70-force-bitmaps.conf",
+                    "usr/share/fontconfig/conf.avail/70-no-bitmaps-and-emoji.conf",
+                    "usr/share/fontconfig/conf.avail/70-no-bitmaps-except-emoji.conf",
+                    "usr/share/fontconfig/conf.avail/70-no-bitmaps.conf",
+                    "usr/share/fontconfig/conf.avail/70-yes-bitmaps.conf",
+                    "usr/share/fontconfig/conf.avail/80-delicious.conf",
+                    "usr/share/fontconfig/conf.avail/90-synthetic.conf",
+                ],
             },
             Deb {
-                pool: "main/a/at-spi2-core/libatspi2.0-0t64_2.52.0-1build1_amd64.deb",
-                sha256: "d686ace4080eca9c2d6ce8de69392a5ac56c846701894c0858922d4ce341a1d7",
-                files: &["usr/lib/x86_64-linux-gnu/libatspi.so.0"],
+                pool: "main/f/fonts-dejavu/fonts-dejavu-core_2.37-8build1_all.deb",
+                sha256: "f4606b12eb41ddf7932d3a1ebc2019f9bbf90d0824943a2dc0c77a00f43019f2",
+                files: &[
+                    "etc/fonts/conf.avail/20-unhint-small-dejavu-lgc-sans.conf",
+                    "etc/fonts/conf.avail/20-unhint-small-dejavu-lgc-serif.conf",
+                    "etc/fonts/conf.avail/20-unhint-small-dejavu-sans.conf",
+                    "etc/fonts/conf.avail/20-unhint-small-dejavu-serif.conf",
+                    "etc/fonts/conf.avail/57-dejavu-sans.conf",
+                    "etc/fonts/conf.avail/57-dejavu-serif.conf",
+                    "etc/fonts/conf.avail/58-dejavu-lgc-sans.conf",
+                    "etc/fonts/conf.avail/58-dejavu-lgc-serif.conf",
+                    "etc/fonts/conf.d/20-unhint-small-dejavu-lgc-sans.conf",
+                    "etc/fonts/conf.d/20-unhint-small-dejavu-lgc-serif.conf",
+                    "etc/fonts/conf.d/20-unhint-small-dejavu-sans.conf",
+                    "etc/fonts/conf.d/20-unhint-small-dejavu-serif.conf",
+                    "etc/fonts/conf.d/57-dejavu-sans.conf",
+                    "etc/fonts/conf.d/57-dejavu-serif.conf",
+                    "etc/fonts/conf.d/58-dejavu-lgc-sans.conf",
+                    "etc/fonts/conf.d/58-dejavu-lgc-serif.conf",
+                    "usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                    "usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                ],
             },
             Deb {
-                pool: "main/u/util-linux/libblkid1_2.39.3-9ubuntu6_amd64.deb",
-                sha256: "47433bcaf43d1c6ed2e2acbc7dc70f6d6ed149e64f12d25b2ddb714a56c4e8dd",
-                files: &["usr/lib/x86_64-linux-gnu/libblkid.so.1"],
+                pool: "main/f/fonts-dejavu/fonts-dejavu-mono_2.37-8build1_all.deb",
+                sha256: "bf5ad873961972ea8f1299ef99c1854715e68d9aa798830fb78c5b222ddeb4b9",
+                files: &[
+                    "etc/fonts/conf.avail/20-unhint-small-dejavu-lgc-sans-mono.conf",
+                    "etc/fonts/conf.avail/20-unhint-small-dejavu-sans-mono.conf",
+                    "etc/fonts/conf.avail/57-dejavu-sans-mono.conf",
+                    "etc/fonts/conf.avail/58-dejavu-lgc-sans-mono.conf",
+                    "etc/fonts/conf.d/20-unhint-small-dejavu-lgc-sans-mono.conf",
+                    "etc/fonts/conf.d/20-unhint-small-dejavu-sans-mono.conf",
+                    "etc/fonts/conf.d/57-dejavu-sans-mono.conf",
+                    "etc/fonts/conf.d/58-dejavu-lgc-sans-mono.conf",
+                ],
             },
             Deb {
-                pool: "main/b/brotli/libbrotli1_1.1.0-2build2_amd64.deb",
-                sha256: "74492419b8fda803774b8c9acef6afc5d2f9ff31782635aae212906adae7b277",
+                pool: "main/g/glycin/glycin-loaders_2.1.1+ds-0ubuntu1_amd64.deb",
+                sha256: "2b94910793dddd6cc6cc689bea65c526e3c3e3dfd2125f4464c239fc6e5856d4",
+                files: &[
+                    "usr/libexec/glycin-loaders/2+/glycin-svg",
+                    "usr/share/glycin-loaders/2+/conf.d/glycin-heif.conf",
+                    "usr/share/glycin-loaders/2+/conf.d/glycin-image-rs.conf",
+                    "usr/share/glycin-loaders/2+/conf.d/glycin-jxl.conf",
+                    "usr/share/glycin-loaders/2+/conf.d/glycin-svg.conf",
+                ],
+            },
+            Deb {
+                pool: "main/h/hicolor-icon-theme/hicolor-icon-theme_0.18-2build1_all.deb",
+                sha256: "d05726c4a4dc15079ed2bd6ef633e7d6dca4c4be20296148b1c558dbd5a6c570",
+                files: &["usr/share/icons/hicolor/index.theme"],
+            },
+            Deb {
+                pool: "main/a/at-spi2-core/libatk-bridge2.0-0t64_2.60.0-1_amd64.deb",
+                sha256: "01a202477896e89cb3d202086fa4e84b19d21527da146e52272d601b672ed763",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libatk-bridge-2.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libatk-bridge-2.0.so.0.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/a/at-spi2-core/libatk1.0-0t64_2.60.0-1_amd64.deb",
+                sha256: "c79169fe159a1810c941a36630d5e2687ffed9fb399d06780c45a5fe68815eab",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libatk-1.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libatk-1.0.so.0.26009.1",
+                ],
+            },
+            Deb {
+                pool: "main/g/gcc-16/libatomic1_16-20260322-1ubuntu1_amd64.deb",
+                sha256: "82fa61135e7154d7958feaa91ec1808a688eb1e0e06822ab35e99e2480feb148",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libatomic.so.1",
+                    "usr/lib/x86_64-linux-gnu/libatomic.so.1.2.0",
+                ],
+            },
+            Deb {
+                pool: "main/a/at-spi2-core/libatspi2.0-0t64_2.60.0-1_amd64.deb",
+                sha256: "7a221510a5f9a67e2f871176b6636dce13fcee85236f591553017b9ba5eb3bf5",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libatspi.so.0",
+                    "usr/lib/x86_64-linux-gnu/libatspi.so.0.0.1",
+                ],
+            },
+            Deb {
+                pool: "main/u/util-linux/libblkid1_2.41.3-3ubuntu2_amd64.deb",
+                sha256: "f2caf1f807c0b203e5f4545c3010ac34b2dd5f546704e5b1b9c62a41d483771e",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libblkid.so.1",
+                    "usr/lib/x86_64-linux-gnu/libblkid.so.1.1.0",
+                ],
+            },
+            Deb {
+                pool: "main/b/brotli/libbrotli1_1.2.0-3build1_amd64.deb",
+                sha256: "858242571fc2585c1f8eb83ae01d020f0f4a92679d0de8fe31146f6687bdd84a",
                 files: &[
                     "usr/lib/x86_64-linux-gnu/libbrotlicommon.so.1",
+                    "usr/lib/x86_64-linux-gnu/libbrotlicommon.so.1.2.0",
                     "usr/lib/x86_64-linux-gnu/libbrotlidec.so.1",
+                    "usr/lib/x86_64-linux-gnu/libbrotlidec.so.1.2.0",
                 ],
             },
             Deb {
-                pool: "main/libb/libbsd/libbsd0_0.12.1-1build1_amd64.deb",
-                sha256: "8e97b7d541416512a81e7845c5f21910344c9c5c610893cf265d3298e0caad6b",
-                files: &["usr/lib/x86_64-linux-gnu/libbsd.so.0"],
+                pool: "main/libb/libbsd/libbsd0_0.12.2-2build2_amd64.deb",
+                sha256: "62019928a6baeaba8d12d2d4cb7c1e4c9a9550a1eb4541b8de0cacfeae1d09e3",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libbsd.so.0",
+                    "usr/lib/x86_64-linux-gnu/libbsd.so.0.12.2",
+                ],
             },
             Deb {
-                pool: "main/b/bzip2/libbz2-1.0_1.0.8-5.1_amd64.deb",
-                sha256: "695132af8a40fe417f7d4e5ea742d64521c04e069442a4719c2bd0f10ab93d94",
-                files: &["usr/lib/x86_64-linux-gnu/libbz2.so.1.0"],
+                pool: "main/b/bzip2/libbz2-1.0_1.0.8-6build2_amd64.deb",
+                sha256: "387910c6d79c39c47d83ca729b84c0d30c674a340e3b290ec7b6df3288c19f9a",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libbz2.so.1.0",
+                    "usr/lib/x86_64-linux-gnu/libbz2.so.1.0.4",
+                ],
             },
             Deb {
-                pool: "main/c/cairo/libcairo-gobject2_1.18.0-3build1_amd64.deb",
-                sha256: "f5483cbe43455fc9e9cba7f0e166bd0a731c02db2902ba562719848f72e8c403",
-                files: &["usr/lib/x86_64-linux-gnu/libcairo-gobject.so.2"],
+                pool: "main/c/cairo/libcairo-gobject2_1.18.4-3_amd64.deb",
+                sha256: "1d48661d59bb164fc27e88bb8e6a8dab0cdfdbf35ea5d2bbf3ebffe849a38822",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libcairo-gobject.so.2",
+                    "usr/lib/x86_64-linux-gnu/libcairo-gobject.so.2.11804.4",
+                ],
             },
             Deb {
-                pool: "main/c/cairo/libcairo2_1.18.0-3build1_amd64.deb",
-                sha256: "96950b306889ff6e4248bb937b0a3b56e72dacf643fe732214ce375f0f6bbb36",
-                files: &["usr/lib/x86_64-linux-gnu/libcairo.so.2"],
+                pool: "main/c/cairo/libcairo2_1.18.4-3_amd64.deb",
+                sha256: "525ab7b5ad6529ea35aa09308ddd1fd2325c85ad70e7483ba66b526d8ee9f7a7",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libcairo.so.2",
+                    "usr/lib/x86_64-linux-gnu/libcairo.so.2.11804.4",
+                ],
             },
             Deb {
-                pool: "main/libc/libcap2/libcap2_2.66-5ubuntu2_amd64.deb",
-                sha256: "a6cce0b5f149707a6359e4f03a05fb7417c5e1d3fde9e12c651e804b4c479bbb",
-                files: &["usr/lib/x86_64-linux-gnu/libcap.so.2"],
+                pool: "main/libc/libcap2/libcap2_2.75-10ubuntu2_amd64.deb",
+                sha256: "150603a0792b1d22aa0bde0a26c27b413018c799284003e4b43cba587a5b3a18",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libcap.so.2",
+                    "usr/lib/x86_64-linux-gnu/libcap.so.2.75",
+                ],
             },
             Deb {
-                pool: "main/libd/libdatrie/libdatrie1_0.2.13-3build1_amd64.deb",
-                sha256: "1ae164e40e413eac4fbd38ce1c6ef9591f7a03278ad9076d71fa29258727f447",
-                files: &["usr/lib/x86_64-linux-gnu/libdatrie.so.1"],
+                pool: "main/libd/libdatrie/libdatrie1_0.2.14-1_amd64.deb",
+                sha256: "1ba5a9190119370912ec5955c8129cdf2780a098ed6c80e9ecca05cc515bd039",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libdatrie.so.1",
+                    "usr/lib/x86_64-linux-gnu/libdatrie.so.1.4.1",
+                ],
             },
             Deb {
-                pool: "main/d/dbus/libdbus-1-3_1.14.10-4ubuntu4_amd64.deb",
-                sha256: "bbb55111182a44d0fe97a84120407e17bb6e23d41e2670d73aa78f619e29efa2",
-                files: &["usr/lib/x86_64-linux-gnu/libdbus-1.so.3"],
+                pool: "main/d/dbus/libdbus-1-3_1.16.2-2ubuntu4_amd64.deb",
+                sha256: "af7be2be588d15a16c696ab43ba3e92bd5f9a6850e8780234059b02a67716e58",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libdbus-1.so.3",
+                    "usr/lib/x86_64-linux-gnu/libdbus-1.so.3.38.3",
+                ],
             },
             Deb {
-                pool: "main/libe/libepoxy/libepoxy0_1.5.10-1build1_amd64.deb",
-                sha256: "e2e754da4e7fb89021476b093cb5ebe9b1859a688fa37739809e529627d39f1f",
-                files: &["usr/lib/x86_64-linux-gnu/libepoxy.so.0"],
+                pool: "main/libd/libdrm/libdrm-amdgpu1_2.4.131-1_amd64.deb",
+                sha256: "f992d3b87be69d160d433626e2144f6446946143cb83bdc71adef71766783de0",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libdrm_amdgpu.so.1",
+                    "usr/lib/x86_64-linux-gnu/libdrm_amdgpu.so.1.131.0",
+                ],
             },
             Deb {
-                pool: "main/e/expat/libexpat1_2.6.1-2build1_amd64.deb",
-                sha256: "730b29497212289cda8a3139e693a3538af0cb57846c24f807d1bb293a591c5e",
-                files: &["usr/lib/x86_64-linux-gnu/libexpat.so.1"],
+                pool: "main/libd/libdrm/libdrm-intel1_2.4.131-1_amd64.deb",
+                sha256: "77411c3b93c8756862a18ccaa4413a65777f40819abdd1468954ba859c8aa740",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libdrm_intel.so.1",
+                    "usr/lib/x86_64-linux-gnu/libdrm_intel.so.1.131.0",
+                ],
             },
             Deb {
-                pool: "main/f/fontconfig/libfontconfig1_2.15.0-1.1ubuntu2_amd64.deb",
-                sha256: "a2bc05cfef021fdb84285036f98eda5ebec3c4b7a378f5aa2bdba5c4d3d8d586",
-                files: &["usr/lib/x86_64-linux-gnu/libfontconfig.so.1"],
+                pool: "main/libd/libdrm/libdrm2_2.4.131-1_amd64.deb",
+                sha256: "b87e6f715d0795a88b53fbe268004a1acbd0d728da0cc0ab9108aff5ab4e1929",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libdrm.so.2",
+                    "usr/lib/x86_64-linux-gnu/libdrm.so.2.131.0",
+                ],
             },
             Deb {
-                pool: "main/f/freetype/libfreetype6_2.13.2+dfsg-1build3_amd64.deb",
-                sha256: "321dda934f62fa8af08529a8c4c34b0ec040f172c0a945dce10b8be6f1014917",
-                files: &["usr/lib/x86_64-linux-gnu/libfreetype.so.6"],
+                pool: "main/libe/libedit/libedit2_3.1-20251016-1_amd64.deb",
+                sha256: "22338fcbcaae99f67ca7b2e20d1730bc29d3c02bcd2414e457f99be96442ee29",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libedit.so.2",
+                    "usr/lib/x86_64-linux-gnu/libedit.so.2.0.76",
+                ],
             },
             Deb {
-                pool: "main/f/fribidi/libfribidi0_1.0.13-3build1_amd64.deb",
-                sha256: "6cd50259d39ce0dfafee2632c6268538e6a02590e77161a133e9683af346dd1d",
-                files: &["usr/lib/x86_64-linux-gnu/libfribidi.so.0"],
+                pool: "main/e/elfutils/libelf1t64_0.194-4_amd64.deb",
+                sha256: "c2feae172b14d2a8317348023c5e0b6572314c097a9f7b8225c62b0988cc8d92",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libelf-0.194.so",
+                    "usr/lib/x86_64-linux-gnu/libelf.so.1",
+                ],
             },
             Deb {
-                pool: "main/libg/libgcrypt20/libgcrypt20_1.10.3-2build1_amd64.deb",
-                sha256: "ff32bae487706ba6ca646b5b72d89b935e3b8b2811d02e4ad7360cb97d90e2d0",
-                files: &["usr/lib/x86_64-linux-gnu/libgcrypt.so.20"],
+                pool: "main/libe/libepoxy/libepoxy0_1.5.10-2build1_amd64.deb",
+                sha256: "2f4525535b2c7c6d61cc5c131f1cb3f5c0d70177ccf550a05f80d12016dfcfdf",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libepoxy.so.0",
+                    "usr/lib/x86_64-linux-gnu/libepoxy.so.0.0.0",
+                ],
             },
             Deb {
-                pool: "main/g/gdk-pixbuf/libgdk-pixbuf-2.0-0_2.42.10+dfsg-3ubuntu3_amd64.deb",
-                sha256: "d9779cdbb11e5fb6056b39868b689bd2e6a152f60d7fa54fcf7113942eedab24",
-                files: &["usr/lib/x86_64-linux-gnu/libgdk_pixbuf-2.0.so.0"],
+                pool: "main/e/expat/libexpat1_2.7.4-1_amd64.deb",
+                sha256: "ef78089497946219cac03209d951bbfff93480104e791b770a7bf6429452e475",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libexpat.so.1",
+                    "usr/lib/x86_64-linux-gnu/libexpat.so.1.11.2",
+                ],
             },
             Deb {
-                pool: "main/g/glib2.0/libglib2.0-0t64_2.80.0-6ubuntu1_amd64.deb",
-                sha256: "629359e915f4466cf9cb0fa6c38270d9af1e03e28fab557ce31977d5ab34f13d",
+                pool: "main/libf/libffi/libffi8_3.5.2-4_amd64.deb",
+                sha256: "4a7423124bbd459c0aa38b7389ec7802fa6899654767a95fc27de70967fedd48",
+                files: &["usr/lib/x86_64-linux-gnu/libffi.so.8.2.0"],
+            },
+            Deb {
+                pool: "main/f/fontconfig/libfontconfig1_2.17.1-3ubuntu1_amd64.deb",
+                sha256: "72ba4fc43155566b46442b741a6892d5d1f1581ba58cdfd037aabf47ad9080f7",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libfontconfig.so.1",
+                    "usr/lib/x86_64-linux-gnu/libfontconfig.so.1.16.1",
+                ],
+            },
+            Deb {
+                pool: "main/f/freetype/libfreetype6_2.14.2+dfsg-1_amd64.deb",
+                sha256: "a76ad9102039122ef72b01c9c364e7d8967331414cbe19151c01d1391ff9fe25",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libfreetype.so.6",
+                    "usr/lib/x86_64-linux-gnu/libfreetype.so.6.20.5",
+                ],
+            },
+            Deb {
+                pool: "main/f/fribidi/libfribidi0_1.0.16-5_amd64.deb",
+                sha256: "47fb50e96401a46c06d5122cd04cc42316f65530b9f868d2d450576a379d5d34",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libfribidi.so.0",
+                    "usr/lib/x86_64-linux-gnu/libfribidi.so.0.4.0",
+                ],
+            },
+            Deb {
+                pool: "main/g/gcc-16/libgcc-s1_16-20260322-1ubuntu1_amd64.deb",
+                sha256: "2fb4d81c14fdf34251639ae82f5181f9f98480ea16125d535571ac1be9db3065",
+                files: &["usr/lib/x86_64-linux-gnu/libgcc_s.so.1"],
+            },
+            Deb {
+                pool: "main/g/gdk-pixbuf/libgdk-pixbuf-2.0-0_2.44.5+dfsg-4ubuntu1_amd64.deb",
+                sha256: "ccd902384546225842384de0c46dad4670ccdda17b697bed4518610ed2e08e89",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgdk_pixbuf-2.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgdk_pixbuf-2.0.so.0.4400.5",
+                ],
+            },
+            Deb {
+                pool: "main/libg/libglvnd/libgl1_1.7.0-3_amd64.deb",
+                sha256: "83ec3a454b28e947a6886e9ae8167e129e25d7a2fd741aaffcdca76eddff5955",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libGL.so.1",
+                    "usr/lib/x86_64-linux-gnu/libGL.so.1.7.0",
+                ],
+            },
+            Deb {
+                pool: "main/m/mesa/libgl1-mesa-dri_26.0.3-1ubuntu1_amd64.deb",
+                sha256: "8bd0ad7943526487b4e21161a2d55566dd78ffa32448c801662bddba55bd7576",
+                files: &["usr/share/drirc.d/00-mesa-defaults.conf"],
+            },
+            Deb {
+                pool: "main/g/glib2.0/libglib2.0-0t64_2.88.0-1_amd64.deb",
+                sha256: "8883a2bd236e54af0af33d7115835929c959bc50fd02ba63496ab6908b0c204a",
                 files: &[
                     "usr/lib/x86_64-linux-gnu/libgio-2.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgio-2.0.so.0.8800.0",
                     "usr/lib/x86_64-linux-gnu/libglib-2.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libglib-2.0.so.0.8800.0",
                     "usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0.8800.0",
                     "usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0.8800.0",
                 ],
             },
             Deb {
-                pool: "main/libg/libgpg-error/libgpg-error0_1.47-3build2_amd64.deb",
-                sha256: "81a30b5888e0af43b72bfdbdb44209b82e521eadf8848ff201542e6d258f6a1f",
-                files: &["usr/lib/x86_64-linux-gnu/libgpg-error.so.0"],
-            },
-            Deb {
-                pool: "main/g/graphite2/libgraphite2-3_1.3.14-2build1_amd64.deb",
-                sha256: "e2a91c59a2b26649ed0b331bedab0c92e56cc2021cce27df1080089edaad7aba",
-                files: &["usr/lib/x86_64-linux-gnu/libgraphite2.so.3"],
-            },
-            Deb {
-                pool: "main/g/gtk+3.0/libgtk-3-0t64_3.24.41-4ubuntu1_amd64.deb",
-                sha256: "011d0688aeb8e40fb146b6d6cd3d892e2a81b1e181320bcf2bf7e2d7206ae156",
+                pool: "main/libg/libglvnd/libglvnd0_1.7.0-3_amd64.deb",
+                sha256: "db2cd8cff67e3e210f5223dfe41f000efd4d3d887ab05bda2e88c4a622f12b36",
                 files: &[
-                    "usr/lib/x86_64-linux-gnu/libgdk-3.so.0",
-                    "usr/lib/x86_64-linux-gnu/libgtk-3.so.0",
+                    "usr/lib/x86_64-linux-gnu/libGLdispatch.so.0",
+                    "usr/lib/x86_64-linux-gnu/libGLdispatch.so.0.0.0",
                 ],
             },
             Deb {
-                pool: "main/h/harfbuzz/libharfbuzz0b_8.3.0-2build2_amd64.deb",
-                sha256: "d6f7eea2244f98aa0463a056680d4629476bf624767ede301560e24add686b5c",
-                files: &["usr/lib/x86_64-linux-gnu/libharfbuzz.so.0"],
+                pool: "main/m/mesa/libglx-mesa0_26.0.3-1ubuntu1_amd64.deb",
+                sha256: "8b9c5841ebea4df8c6e2ca67c527addd48c3dee0c1d5686414ff7b5e6ad5fcf5",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libGLX_mesa.so.0",
+                    "usr/lib/x86_64-linux-gnu/libGLX_mesa.so.0.0.0",
+                ],
             },
             Deb {
-                pool: "main/libj/libjpeg-turbo/libjpeg-turbo8_2.1.5-2ubuntu2_amd64.deb",
-                sha256: "f68b5b23bc8a1688fb787d2aed7e2cdf895a73022f6a5025e183162dac4500b2",
-                files: &["usr/lib/x86_64-linux-gnu/libjpeg.so.8"],
+                pool: "main/libg/libglvnd/libglx0_1.7.0-3_amd64.deb",
+                sha256: "e0b75c32f773201ebca2184d94dfc34f6e09470c7cf6e425d48b270e516fd909",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libGLX.so.0",
+                    "usr/lib/x86_64-linux-gnu/libGLX.so.0.0.0",
+                ],
             },
             Deb {
-                pool: "main/l/lz4/liblz4-1_1.9.4-1build1_amd64.deb",
-                sha256: "b9b69dedb126755f063396a6d3a3361066f9661f1c21cf5635cdd5ff6605796a",
-                files: &["usr/lib/x86_64-linux-gnu/liblz4.so.1"],
+                pool: "main/g/glycin/libglycin-2-0_2.1.1+ds-0ubuntu1_amd64.deb",
+                sha256: "99b6836d1068436e7f92cc3a7b2c2c0efddeea12dc50c16a727f45bc044d4393",
+                files: &["usr/lib/x86_64-linux-gnu/libglycin-2.so.0"],
             },
             Deb {
-                pool: "main/x/xz-utils/liblzma5_5.6.1+really5.4.5-1_amd64.deb",
-                sha256: "28851b3997e4ba74bb3197bd58796bd3041c204c21df85fe0ddafdcaced647f0",
-                files: &["usr/lib/x86_64-linux-gnu/liblzma.so.5"],
+                pool: "main/g/graphite2/libgraphite2-3_1.3.14-11ubuntu1_amd64.deb",
+                sha256: "6899c78615e681af21b88f00ac6b5b3966319093bc0bb7073ab1ed2e80192cf5",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgraphite2.so.3",
+                    "usr/lib/x86_64-linux-gnu/libgraphite2.so.3.2.1",
+                ],
             },
             Deb {
-                pool: "main/libm/libmd/libmd0_1.1.0-2build1_amd64.deb",
-                sha256: "77f8cdbf03a43656bbf6604e18bd16834fc8bf2c949d4fbdf24ac297869b667a",
-                files: &["usr/lib/x86_64-linux-gnu/libmd.so.0"],
+                pool: "main/g/gtk+3.0/libgtk-3-0t64_3.24.52-0ubuntu1_amd64.deb",
+                sha256: "d03b766dd7ba2becf66cf21424bb441af4dbf62841b314af2720df74d95bda1a",
+                files: &[
+                    "etc/gtk-3.0/settings.ini",
+                    "usr/lib/x86_64-linux-gnu/libgdk-3.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgdk-3.so.0.2420.32",
+                    "usr/lib/x86_64-linux-gnu/libgtk-3.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgtk-3.so.0.2420.32",
+                ],
             },
             Deb {
-                pool: "main/u/util-linux/libmount1_2.39.3-9ubuntu6_amd64.deb",
-                sha256: "ccf07f3dfdda05311e66882d420140e32aeceaaa17725a0956214d81f5944995",
-                files: &["usr/lib/x86_64-linux-gnu/libmount.so.1"],
+                pool: "main/h/harfbuzz/libharfbuzz0b_12.3.2-2_amd64.deb",
+                sha256: "ec93ea39ddeb5a98179b60eab4af234b6c676f1958106645d1f4b19280d4cd09",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libharfbuzz.so.0",
+                    "usr/lib/x86_64-linux-gnu/libharfbuzz.so.0.61232.0",
+                ],
             },
             Deb {
-                pool: "main/p/pango1.0/libpango-1.0-0_1.52.1+ds-1build1_amd64.deb",
-                sha256: "09dfa5c881ab273ec6bc1830adcefdc407fcd619316e68fb26ca3a23d0fc9f54",
-                files: &["usr/lib/x86_64-linux-gnu/libpango-1.0.so.0"],
+                pool: "main/l/lcms2/liblcms2-2_2.17-1_amd64.deb",
+                sha256: "6beb06e118c5a49abc312d029d6dc1ba47009e51a284d598bf394465522292f2",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/liblcms2.so.2",
+                    "usr/lib/x86_64-linux-gnu/liblcms2.so.2.0.17",
+                ],
             },
             Deb {
-                pool: "main/p/pango1.0/libpangocairo-1.0-0_1.52.1+ds-1build1_amd64.deb",
-                sha256: "98cf5fc9076c2911fe20dfc1e41cd8f686a2bb5d539b1105fab18105b0db1376",
-                files: &["usr/lib/x86_64-linux-gnu/libpangocairo-1.0.so.0"],
+                pool: "main/l/llvm-toolchain-21/libllvm21_21.1.8-6ubuntu1_amd64.deb",
+                sha256: "9e758998dcb4aa27abbe64f2dee7bc490d9eb0721afa334a82a2b1bf6c7648f9",
+                files: &["usr/lib/x86_64-linux-gnu/libLLVM.so.21.1"],
             },
             Deb {
-                pool: "main/p/pango1.0/libpangoft2-1.0-0_1.52.1+ds-1build1_amd64.deb",
-                sha256: "cc6bc9d86ef5f329edacaa4895232d8a9b8f95c5cbc77c3c460a3f64cecc213d",
-                files: &["usr/lib/x86_64-linux-gnu/libpangoft2-1.0.so.0"],
+                pool: "main/libm/libmd/libmd0_1.1.0-2build4_amd64.deb",
+                sha256: "da684bb562e167721ae38366586aaee0b4cc580b9ee6d0220128b15ef9c5be75",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libmd.so.0",
+                    "usr/lib/x86_64-linux-gnu/libmd.so.0.1.0",
+                ],
             },
             Deb {
-                pool: "main/p/pcre2/libpcre2-8-0_10.42-4ubuntu2_amd64.deb",
-                sha256: "bb38c38adb4ef548f2851b5cf7f70bbdbcb27d582c17550aa053edb9e4098d84",
-                files: &["usr/lib/x86_64-linux-gnu/libpcre2-8.so.0"],
+                pool: "main/u/util-linux/libmount1_2.41.3-3ubuntu2_amd64.deb",
+                sha256: "c0bd8dbe186941f2aaf2b1536d1b48084a7ceda68369afb7f66391b9bcacba36",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libmount.so.1",
+                    "usr/lib/x86_64-linux-gnu/libmount.so.1.1.0",
+                ],
             },
             Deb {
-                pool: "main/p/pixman/libpixman-1-0_0.42.2-1build1_amd64.deb",
-                sha256: "d9c2931c4c424615eeab9dd5ae08bfc608b84e803c1d3ccddf319270db213421",
-                files: &["usr/lib/x86_64-linux-gnu/libpixman-1.so.0"],
+                pool: "main/p/pango1.0/libpango-1.0-0_1.57.0-1_amd64.deb",
+                sha256: "309f30a8ea77e0264a3c8b66811188f5b788fe87b33be3cafd97c8f221235591",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpango-1.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libpango-1.0.so.0.5700.0",
+                ],
             },
             Deb {
-                pool: "main/libp/libpng1.6/libpng16-16t64_1.6.43-5build1_amd64.deb",
-                sha256: "128d505038cc19dfc218658562ca5917ec242b79e6e2bbfb65ee27f297a53924",
-                files: &["usr/lib/x86_64-linux-gnu/libpng16.so.16"],
+                pool: "main/p/pango1.0/libpangocairo-1.0-0_1.57.0-1_amd64.deb",
+                sha256: "a989e666bb0d64636a10a1253c949f92a282782d79d1725e0e1acc17282909a5",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpangocairo-1.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libpangocairo-1.0.so.0.5700.0",
+                ],
             },
             Deb {
-                pool: "main/libs/libselinux/libselinux1_3.5-2ubuntu2_amd64.deb",
-                sha256: "c0fe6dfac61d458f3e65c4a2bf6a920030a97d2429e33d0b405a8c4a63ef2864",
+                pool: "main/p/pango1.0/libpangoft2-1.0-0_1.57.0-1_amd64.deb",
+                sha256: "c1e08ebf03feded26a42a0f07f94789e5995b402d704d2faafdc86fffda0b28b",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpangoft2-1.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libpangoft2-1.0.so.0.5700.0",
+                ],
+            },
+            Deb {
+                pool: "main/libp/libpciaccess/libpciaccess0_0.18.1-1ubuntu4_amd64.deb",
+                sha256: "685b89a66f0bf31d5e011d99af3cb110c44844cea0d62ae461e777da66350059",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpciaccess.so.0",
+                    "usr/lib/x86_64-linux-gnu/libpciaccess.so.0.11.1",
+                ],
+            },
+            Deb {
+                pool: "main/p/pcre2/libpcre2-8-0_10.46-1build1_amd64.deb",
+                sha256: "3e116766f1a7b149994d4745556023d993d26401223d1595520a991d4ba737fb",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpcre2-8.so.0",
+                    "usr/lib/x86_64-linux-gnu/libpcre2-8.so.0.14.0",
+                ],
+            },
+            Deb {
+                pool: "main/p/pixman/libpixman-1-0_0.46.4-1_amd64.deb",
+                sha256: "55a274db32d4824a1f1a48c42e959fe4293a4e4b545d400d89949cfabe160cc3",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpixman-1.so.0",
+                    "usr/lib/x86_64-linux-gnu/libpixman-1.so.0.46.4",
+                ],
+            },
+            Deb {
+                pool: "main/libp/libpng1.6/libpng16-16t64_1.6.57-1_amd64.deb",
+                sha256: "e3af297b2131aea35eab7e2751b4158ec7ae4ffb6d746043199f766fc727744f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpng16.so.16",
+                    "usr/lib/x86_64-linux-gnu/libpng16.so.16.57.0",
+                ],
+            },
+            Deb {
+                pool: "main/libr/librsvg/librsvg2-2_2.61.3+dfsg-3_amd64.deb",
+                sha256: "af1d01163b01f45a027054c3e0bcdadf01d5d318b8b9ffdcaa13c01ec4e2f2e7",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/librsvg-2.so.2",
+                    "usr/lib/x86_64-linux-gnu/librsvg-2.so.2.61.3",
+                ],
+            },
+            Deb {
+                pool: "main/libs/libseccomp/libseccomp2_2.6.0-2ubuntu5_amd64.deb",
+                sha256: "c5e4b198f251da0ede226fd179830bd8767482821a1773f835358f726795cb16",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libseccomp.so.2",
+                    "usr/lib/x86_64-linux-gnu/libseccomp.so.2.6.0",
+                ],
+            },
+            Deb {
+                pool: "main/libs/libselinux/libselinux1_3.9-4build1_amd64.deb",
+                sha256: "3ce3aea44b2ec00780c48b1b8e1f7e672166ec3ccac14b0eae8890e55983061e",
                 files: &["usr/lib/x86_64-linux-gnu/libselinux.so.1"],
             },
             Deb {
-                pool: "main/s/systemd/libsystemd0_255.4-1ubuntu8_amd64.deb",
-                sha256: "64ba97fddff491b86597e93b078e2fe3256cb80f9a113ae9d8dd1361f01b84ed",
-                files: &["usr/lib/x86_64-linux-gnu/libsystemd.so.0"],
+                pool: "main/l/lm-sensors/libsensors5_3.6.2-2build1_amd64.deb",
+                sha256: "9249cd2be68acd7b589030df72a457b89fadea6c426002b00648ad2d153d9748",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libsensors.so.5",
+                    "usr/lib/x86_64-linux-gnu/libsensors.so.5.0.0",
+                ],
             },
             Deb {
-                pool: "main/libt/libthai/libthai0_0.1.29-2build1_amd64.deb",
-                sha256: "5ada7045c5f84a4b774e6449151800aa6470e8d01dc9d6124ef4a44ae6af5508",
-                files: &["usr/lib/x86_64-linux-gnu/libthai.so.0"],
+                pool: "main/g/gcc-16/libstdc++6_16-20260322-1ubuntu1_amd64.deb",
+                sha256: "a32b9ad585e39bdc7bd15d1eae6293461e6d466859a1dd2f7862d1e40f89b9d8",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libstdc++.so.6",
+                    "usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.35",
+                ],
             },
             Deb {
-                pool: "main/w/wayland/libwayland-cursor0_1.22.0-2.1build1_amd64.deb",
-                sha256: "29c20da27e8e37c984cf0518635c11cd0441f4cb6a2919a9f6eee1809171d327",
-                files: &["usr/lib/x86_64-linux-gnu/libwayland-cursor.so.0"],
+                pool: "main/s/systemd/libsystemd0_259.5-0ubuntu3_amd64.deb",
+                sha256: "a93b416fd58067a14061763bfc9a23d18b0d4e0914b9a678ff7795e02f71d532",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libsystemd.so.0",
+                    "usr/lib/x86_64-linux-gnu/libsystemd.so.0.42.0",
+                ],
             },
             Deb {
-                pool: "main/w/wayland/libwayland-egl1_1.22.0-2.1build1_amd64.deb",
-                sha256: "76cd17d2776428e0a0551b8f8fd954eeb3d39ca8ed2f88a38a5e4ce3ce3b2f16",
-                files: &["usr/lib/x86_64-linux-gnu/libwayland-egl.so.1"],
+                pool: "main/libt/libthai/libthai0_0.1.30-1_amd64.deb",
+                sha256: "c06f206be1ef7aa8208110b38945205ebc742dd777cbb39142baa555fe61390a",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libthai.so.0",
+                    "usr/lib/x86_64-linux-gnu/libthai.so.0.3.2",
+                ],
             },
             Deb {
-                pool: "main/libx/libx11/libx11-6_1.8.7-1build1_amd64.deb",
-                sha256: "397f84347476a3c5786b39f3ff6f0f82866eb3d8be6d2ad3efeadf019efe5b80",
-                files: &["usr/lib/x86_64-linux-gnu/libX11.so.6"],
+                pool: "main/n/ncurses/libtinfo6_6.6+20251231-1_amd64.deb",
+                sha256: "42705a701a98d84c203c6f96f08c6fd6a29a1ef978683e1ffbf0e27535b20ddb",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libtinfo.so.6",
+                    "usr/lib/x86_64-linux-gnu/libtinfo.so.6.6",
+                ],
             },
             Deb {
-                pool: "main/libx/libxau/libxau6_1.0.9-1build6_amd64.deb",
-                sha256: "e40d29f1d1a62393bacaedebe0da3d9006084152a9f7e5e029293f08ce1c5c80",
-                files: &["usr/lib/x86_64-linux-gnu/libXau.so.6"],
+                pool: "main/w/wayland/libwayland-client0_1.24.0-2_amd64.deb",
+                sha256: "094db0e190b53872e4d5310cd5fa09ca28ee3936386cd09e5f7d13e645aa12ab",
+                files: &["usr/lib/x86_64-linux-gnu/libwayland-client.so.0.24.0"],
             },
             Deb {
-                pool: "main/libx/libxcb/libxcb-render0_1.15-1ubuntu2_amd64.deb",
-                sha256: "7d83a0668b1a693b5ea2e496206e8371fb6beda4c54a2b4b3902005915c272c5",
-                files: &["usr/lib/x86_64-linux-gnu/libxcb-render.so.0"],
+                pool: "main/w/wayland/libwayland-cursor0_1.24.0-2_amd64.deb",
+                sha256: "941affa9ef61b0cca5cfac1fab13e8e78168af306709df4adf546c76be82a1de",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libwayland-cursor.so.0",
+                    "usr/lib/x86_64-linux-gnu/libwayland-cursor.so.0.24.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxcb/libxcb-shm0_1.15-1ubuntu2_amd64.deb",
-                sha256: "229d1280d459f1ba44c22939d3f9b61d9d20932d9a646b3fe4ce50be4cdf2325",
-                files: &["usr/lib/x86_64-linux-gnu/libxcb-shm.so.0"],
+                pool: "main/w/wayland/libwayland-egl1_1.24.0-2_amd64.deb",
+                sha256: "692358c252186b132f6807548cffffe6f358d5b2139e8d57d0763b1f3ba28c61",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libwayland-egl.so.1",
+                    "usr/lib/x86_64-linux-gnu/libwayland-egl.so.1.24.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxcb/libxcb1_1.15-1ubuntu2_amd64.deb",
-                sha256: "e1c6611d11ad7398326f1bf028afc34c3b14c51d917a3426b966ed4b9687fa58",
-                files: &["usr/lib/x86_64-linux-gnu/libxcb.so.1"],
+                pool: "main/libx/libx11/libx11-6_1.8.13-1_amd64.deb",
+                sha256: "7e643e76063b94df9159c8b8fd4b8bf53d2fbf119c9889a5cc6842b6be272e4f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libX11.so.6",
+                    "usr/lib/x86_64-linux-gnu/libX11.so.6.4.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxcomposite/libxcomposite1_0.4.5-1build3_amd64.deb",
-                sha256: "a12d5d9ae70b798cbbf284080eae32b87367561fc9c24492f641b8860ac0f308",
-                files: &["usr/lib/x86_64-linux-gnu/libXcomposite.so.1"],
+                pool: "main/libx/libx11/libx11-xcb1_1.8.13-1_amd64.deb",
+                sha256: "e20ab288f2f756800ae25e7a827ae70aee64272f692dd3cb8f706764b6767de9",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libX11-xcb.so.1",
+                    "usr/lib/x86_64-linux-gnu/libX11-xcb.so.1.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxcursor/libxcursor1_1.2.1-1build1_amd64.deb",
-                sha256: "1a4beee621454e42fe0d2f4e1633611126e43d891f0aec28e4a06744f6e9f04d",
-                files: &["usr/lib/x86_64-linux-gnu/libXcursor.so.1"],
+                pool: "main/libx/libxau/libxau6_1.0.11-1build2_amd64.deb",
+                sha256: "6c0b2dd4654db30449754e6e1adf84a34d8a8d7dddeb75f8c9c463ad86645274",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXau.so.6",
+                    "usr/lib/x86_64-linux-gnu/libXau.so.6.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxdamage/libxdamage1_1.1.6-1build1_amd64.deb",
-                sha256: "6891faf325e996ebd28ef53ebb9c043dc96f67327500490affc3e89d366d35ed",
-                files: &["usr/lib/x86_64-linux-gnu/libXdamage.so.1"],
+                pool: "main/libx/libxcb/libxcb-dri3-0_1.17.0-2ubuntu1_amd64.deb",
+                sha256: "2e0e3916c647a74e081621f385aa296dab3052b2582b0781d9fbea2f15696ef4",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxcb-dri3.so.0",
+                    "usr/lib/x86_64-linux-gnu/libxcb-dri3.so.0.1.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxdmcp/libxdmcp6_1.1.3-0ubuntu6_amd64.deb",
-                sha256: "bcd336fce11ce2a45f34d0f95e6980af22529f22147e8f98c156e5cee8ee42bb",
-                files: &["usr/lib/x86_64-linux-gnu/libXdmcp.so.6"],
+                pool: "main/libx/libxcb/libxcb-glx0_1.17.0-2ubuntu1_amd64.deb",
+                sha256: "857c34618ae56b2577d8d439cf86f80375582626193efaa3229c6767106a1a20",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxcb-glx.so.0",
+                    "usr/lib/x86_64-linux-gnu/libxcb-glx.so.0.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxext/libxext6_1.3.4-1build2_amd64.deb",
-                sha256: "45783969a9ece9d7b7b733b8c60981584c53c6bc5ee3b42d295d2f80d1285679",
-                files: &["usr/lib/x86_64-linux-gnu/libXext.so.6"],
+                pool: "main/libx/libxcb/libxcb-present0_1.17.0-2ubuntu1_amd64.deb",
+                sha256: "64f23e7166461758d158220305e93a98fe75c570b68f96303a1c2395a58d5d7d",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxcb-present.so.0",
+                    "usr/lib/x86_64-linux-gnu/libxcb-present.so.0.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxfixes/libxfixes3_6.0.0-2build1_amd64.deb",
-                sha256: "0ee1015cccd063249e01c0cd0bf45f513c8ac9a1e5e485070c12e69192455e4a",
-                files: &["usr/lib/x86_64-linux-gnu/libXfixes.so.3"],
+                pool: "main/libx/libxcb/libxcb-randr0_1.17.0-2ubuntu1_amd64.deb",
+                sha256: "78977a067ec1d59bb4ded1b35835d0ba70e6538aac1ea7edefe413795aaa0d4f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxcb-randr.so.0",
+                    "usr/lib/x86_64-linux-gnu/libxcb-randr.so.0.1.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxi/libxi6_1.8.1-1build1_amd64.deb",
-                sha256: "0ea7acb5e8a8ce4d6653b30e03a319bfe136db7bfb5ee7cad34c2aa1272ea8d9",
-                files: &["usr/lib/x86_64-linux-gnu/libXi.so.6"],
+                pool: "main/libx/libxcb/libxcb-render0_1.17.0-2ubuntu1_amd64.deb",
+                sha256: "2bdd10dd88c99523a62bfcc2b71b59fdf93ee396e8baf617c76fc3ec38f39bde",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxcb-render.so.0",
+                    "usr/lib/x86_64-linux-gnu/libxcb-render.so.0.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxinerama/libxinerama1_1.1.4-3build1_amd64.deb",
-                sha256: "c8c93a3efdbb06e314f41bf48af4ca3652e4a3826bab5b9e00887660e619f239",
-                files: &["usr/lib/x86_64-linux-gnu/libXinerama.so.1"],
+                pool: "main/libx/libxcb/libxcb-shm0_1.17.0-2ubuntu1_amd64.deb",
+                sha256: "e70d52936aabd7a90e9cd8af0f54ca050cde244f8382ffc5524ba65117c199c4",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxcb-shm.so.0",
+                    "usr/lib/x86_64-linux-gnu/libxcb-shm.so.0.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxkbcommon/libxkbcommon0_1.6.0-1build1_amd64.deb",
-                sha256: "2b9caeb423efb540296a1cb20b872cc630c23908407ecb5c1c787a617622d664",
-                files: &["usr/lib/x86_64-linux-gnu/libxkbcommon.so.0"],
+                pool: "main/libx/libxcb/libxcb-sync1_1.17.0-2ubuntu1_amd64.deb",
+                sha256: "8883f5e6badab24cb7487390bf1a888bb714e406f6c799345c33e4b69a8f3112",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxcb-sync.so.1",
+                    "usr/lib/x86_64-linux-gnu/libxcb-sync.so.1.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxrandr/libxrandr2_1.5.2-2build1_amd64.deb",
-                sha256: "f2955a5e594f5724b58ad241d9231ea191cb36574a0d5e5ca6b661cd41d6256d",
-                files: &["usr/lib/x86_64-linux-gnu/libXrandr.so.2"],
+                pool: "main/libx/libxcb/libxcb-xfixes0_1.17.0-2ubuntu1_amd64.deb",
+                sha256: "00c1381b61e2e5b8a78e89b15818a214a8f44f1fae6a9ddd95e7c61de8ea33d2",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxcb-xfixes.so.0",
+                    "usr/lib/x86_64-linux-gnu/libxcb-xfixes.so.0.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxrender/libxrender1_0.9.10-1.1build1_amd64.deb",
-                sha256: "d70bd831aebe8d4834b5dd2ed98df26dd6bd27f1042c47543bd7f66df1ae22ea",
-                files: &["usr/lib/x86_64-linux-gnu/libXrender.so.1"],
+                pool: "main/libx/libxcb/libxcb1_1.17.0-2ubuntu1_amd64.deb",
+                sha256: "069e64705e4a5721a223b4d22643bbaeaa63a6efbb56ebd3d7c4a31c4a26fa1c",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxcb.so.1",
+                    "usr/lib/x86_64-linux-gnu/libxcb.so.1.1.0",
+                ],
             },
             Deb {
-                pool: "main/libz/libzstd/libzstd1_1.5.5+dfsg2-2build1_amd64.deb",
-                sha256: "4dcc3ba9606a5837a55248d08162a5b426dd621f75c0eb24d86409e0d0e71d52",
-                files: &["usr/lib/x86_64-linux-gnu/libzstd.so.1"],
+                pool: "main/libx/libxcomposite/libxcomposite1_0.4.6-1build1_amd64.deb",
+                sha256: "b8557d5aba1e575acfb169f47e798c449c8a5ca05846861f1480724d4cfc5ce3",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXcomposite.so.1",
+                    "usr/lib/x86_64-linux-gnu/libXcomposite.so.1.0.0",
+                ],
             },
             Deb {
-                pool: "main/z/zlib/zlib1g_1.3.dfsg-3.1ubuntu2_amd64.deb",
-                sha256: "0b93d16d7498f092fa3070fbbad28cdbc6b3d640f1a7681b96fc37f20d1219f1",
-                files: &["usr/lib/x86_64-linux-gnu/libz.so.1"],
+                pool: "main/libx/libxcursor/libxcursor1_1.2.3-1build1_amd64.deb",
+                sha256: "0f3d9816a3a557590ca1b31f2548b1988ad7ec9de976bad07cc24cc7d69b4ee7",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXcursor.so.1",
+                    "usr/lib/x86_64-linux-gnu/libXcursor.so.1.0.2",
+                ],
             },
-            // gdk-pixbuf (which depends on it) picks an image's loader by its
-            // MIME type through GIO, which reads the MIME database's mime.cache:
-            // made at installation from this XML (`update_mime_database`).
             Deb {
-                pool: "main/s/shared-mime-info/shared-mime-info_2.4-4_amd64.deb",
-                sha256: "7a774ea291ab99bfa987866c6b68e825531eeea7c8a732dd47d14cf480453fda",
+                pool: "main/libx/libxdamage/libxdamage1_1.1.7-1_amd64.deb",
+                sha256: "dd751597c6216105774a93769972d1cb6dad5fd1ba91f090197d7acc85c406cb",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXdamage.so.1",
+                    "usr/lib/x86_64-linux-gnu/libXdamage.so.1.1.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxdmcp/libxdmcp6_1.1.5-2_amd64.deb",
+                sha256: "d5d51e67063ff11e81698d8ee90bab5af763dc0a793929f33712bb74e7633768",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXdmcp.so.6",
+                    "usr/lib/x86_64-linux-gnu/libXdmcp.so.6.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxext/libxext6_1.3.4-1build3_amd64.deb",
+                sha256: "b867ba9daa9437ba3f18cba9646d9e3db55e5197bd4feb53184b1414c05210ca",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXext.so.6",
+                    "usr/lib/x86_64-linux-gnu/libXext.so.6.4.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxfixes/libxfixes3_6.0.0-2build2_amd64.deb",
+                sha256: "f3a71f6aa12000480c419e44f3aa5bdca7eb862b720d0307661b4e886db1c5f8",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXfixes.so.3",
+                    "usr/lib/x86_64-linux-gnu/libXfixes.so.3.1.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxi/libxi6_1.8.2-2_amd64.deb",
+                sha256: "b975dd89cac8c32a3cf622e1b7f5434db59f37eda87dfee399d0806d9953db0a",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXi.so.6",
+                    "usr/lib/x86_64-linux-gnu/libXi.so.6.1.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxinerama/libxinerama1_1.1.4-3build2_amd64.deb",
+                sha256: "02d3dce422acc3ac9b5491f47acdd07bc7c3f78ce193865f2920d38b10fbadf5",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXinerama.so.1",
+                    "usr/lib/x86_64-linux-gnu/libXinerama.so.1.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxkbcommon/libxkbcommon0_1.13.1-1_amd64.deb",
+                sha256: "7988d2375d10277ab4a54641aa6181accfaf3f5d25e48b050bf42a9583d4f926",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxkbcommon.so.0",
+                    "usr/lib/x86_64-linux-gnu/libxkbcommon.so.0.13.1",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxml2/libxml2-16_2.15.2+dfsg-0.1_amd64.deb",
+                sha256: "f0c87cee9a1fb871e66698dc05fe38e0a3e7232eb961b690a8e7dc26f9753813",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxml2.so.16",
+                    "usr/lib/x86_64-linux-gnu/libxml2.so.16.1.2",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxrandr/libxrandr2_1.5.4-1build1_amd64.deb",
+                sha256: "d0052315ac1417234777c0872568a86fce4d3a3316c041e5a2200da70f43a855",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXrandr.so.2",
+                    "usr/lib/x86_64-linux-gnu/libXrandr.so.2.2.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxrender/libxrender1_0.9.12-1build1_amd64.deb",
+                sha256: "60b2f01e8124318e2a11049b82c764fd4c05c21adba11312e93ab116d6594f1e",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXrender.so.1",
+                    "usr/lib/x86_64-linux-gnu/libXrender.so.1.3.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxres/libxres1_1.2.1-1build2_amd64.deb",
+                sha256: "c7794a754880ef7bde4a73c0257dd48d8e3f387ee1618ba97f8e5cf5cdd7c80f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXRes.so.1",
+                    "usr/lib/x86_64-linux-gnu/libXRes.so.1.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxshmfence/libxshmfence1_1.3.3-1build1_amd64.deb",
+                sha256: "85d6b6883a35e1a3b78af3dda6bb6b843c06cbead030a00d9de7d31a8077d562",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxshmfence.so.1",
+                    "usr/lib/x86_64-linux-gnu/libxshmfence.so.1.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxxf86vm/libxxf86vm1_1.1.4-2_amd64.deb",
+                sha256: "ff01ae50526c23c6c747e1efd98ee3785a1d28458e865277fc367c565bb94703",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXxf86vm.so.1",
+                    "usr/lib/x86_64-linux-gnu/libXxf86vm.so.1.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/libz/libzstd/libzstd1_1.5.7+dfsg-3_amd64.deb",
+                sha256: "34365d611ccf1f717f90a92fbe52ed96ae1829ab9be363c68a83563322797f8f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libzstd.so.1",
+                    "usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
+                ],
+            },
+            Deb {
+                pool: "main/m/mesa/mesa-libgallium_26.0.3-1ubuntu1_amd64.deb",
+                sha256: "997c3342fd8e74d61621d98b903122b7c34be687c886fb86edeeb96abb4600c0",
+                files: &["usr/lib/x86_64-linux-gnu/libgallium-26.0.3-1ubuntu1.so"],
+            },
+            Deb {
+                pool: "main/s/shared-mime-info/shared-mime-info_2.4-5build3_amd64.deb",
+                sha256: "da2eb52074c56dc60f6e446166ad799baa9a53e619971debd033e99ed37f158f",
                 files: &["usr/share/mime/packages/freedesktop.org.xml"],
             },
             Deb {
-                pool: "main/x/xkeyboard-config/xkb-data_2.41-2ubuntu1_all.deb",
-                sha256: "5f0a5188398b606d723f1bed48ee38c11eaeb98357ab29a3bf33c451056815d1",
+                pool: "main/x/xkeyboard-config/xkb-data_2.46-2_all.deb",
+                sha256: "a24f82b33020836444593a7ffbed959458852e28cfe16de2ff95bcbdcfbdb2d3",
                 files: &[
                     "usr/share/X11/xkb/compat/accessx",
                     "usr/share/X11/xkb/compat/basic",
@@ -966,232 +1556,2438 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
                     "usr/share/X11/xkb/types/mousekeys",
                     "usr/share/X11/xkb/types/numpad",
                     "usr/share/X11/xkb/types/pc",
+                    "usr/share/xkeyboard-config-2/compat/accessx",
+                    "usr/share/xkeyboard-config-2/compat/basic",
+                    "usr/share/xkeyboard-config-2/compat/caps",
+                    "usr/share/xkeyboard-config-2/compat/complete",
+                    "usr/share/xkeyboard-config-2/compat/iso9995",
+                    "usr/share/xkeyboard-config-2/compat/ledcaps",
+                    "usr/share/xkeyboard-config-2/compat/lednum",
+                    "usr/share/xkeyboard-config-2/compat/ledscroll",
+                    "usr/share/xkeyboard-config-2/compat/level5",
+                    "usr/share/xkeyboard-config-2/compat/misc",
+                    "usr/share/xkeyboard-config-2/compat/mousekeys",
+                    "usr/share/xkeyboard-config-2/compat/xfree86",
+                    "usr/share/xkeyboard-config-2/keycodes/aliases",
+                    "usr/share/xkeyboard-config-2/keycodes/evdev",
+                    "usr/share/xkeyboard-config-2/rules/evdev",
+                    "usr/share/xkeyboard-config-2/symbols/inet",
+                    "usr/share/xkeyboard-config-2/symbols/keypad",
+                    "usr/share/xkeyboard-config-2/symbols/pc",
+                    "usr/share/xkeyboard-config-2/symbols/srvr_ctrl",
+                    "usr/share/xkeyboard-config-2/symbols/us",
+                    "usr/share/xkeyboard-config-2/types/basic",
+                    "usr/share/xkeyboard-config-2/types/complete",
+                    "usr/share/xkeyboard-config-2/types/extra",
+                    "usr/share/xkeyboard-config-2/types/iso9995",
+                    "usr/share/xkeyboard-config-2/types/level5",
+                    "usr/share/xkeyboard-config-2/types/mousekeys",
+                    "usr/share/xkeyboard-config-2/types/numpad",
+                    "usr/share/xkeyboard-config-2/types/pc",
+                ],
+            },
+            Deb {
+                pool: "main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1ubuntu3_amd64.deb",
+                sha256: "c45bbbf9c87457d90b8ba38720c5f01b9388c380d40f303c26f5c4953932da26",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libz.so.1",
+                    "usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
                 ],
             },
         ],
     },
     LinuxRoot {
-        // X11 through Xwayland (ROADMAP LD step 5, `lx_xterm`): Ubuntu 24.04's
-        // Xwayland 23.2.6, xkbcomp (Xwayland runs it through `/bin/sh -c` to
-        // compile each keymap), dash as /bin/sh, and xterm 390, with the
-        // libraries of theirs the "gtk3" root lacks (shipped with it: libX11,
-        // libxcb, fontconfig and friends are there). Xwayland runs with
-        // `-shm`: libgbm, libdrm, libGL and libdecor are linked but not used
-        // (no glamor, no rootful decorations). Of xkb-data, the geometry the
-        // default keymap names (the rest is the "gtk3" root's); X's core
-        // fonts are Xwayland's built-ins ("fixed" and "cursor"), which xterm's
-        // default font is. libresolv is glibc's (libtirpc needs it).
+        // X11 through Xwayland (ROADMAP LD step 5, `lx_xterm`): Ubuntu 26.04's
+        // Xwayland 24.1.10, xkbcomp (Xwayland runs it through `/bin/sh -c` to
+        // compile each keymap), dash as /bin/sh, xterm 407 and twm (the
+        // xdesktop session's), with what they opened under `strace -f -y` on
+        // Ubuntu 26.04 that the "gtk3" root lacks: rootless Xwayland with
+        // `-shm` and an xterm, rootful Xwayland with `-decorate`, twm and an
+        // xterm. Mesa's DRI driver (`swrast_dri.so`, with gallium and LLVM:
+        // 185 MB) was moved aside for the trace: Xwayland then runs without
+        // GLX, as gala's has (`-shm`, no glamor).
         name: "x11",
         debs: &[
             Deb {
-                pool: "main/x/xwayland/xwayland_23.2.6-1_amd64.deb",
-                sha256: "50c42bd751b33b617954ed7264ef03d18750d78b20b62359e7d8c6f5aa205ce3",
-                files: &["usr/bin/Xwayland"],
-            },
-            // A distribution's desktop in one window (LD step 6, `lx_xdesktop`):
-            // twm, X.Org's window manager (its libraries are xterm's), and
-            // coreutils' sleep for the session script.
-            // Xlib's locale database, the C locale's part: without it Xlib
-            // warns that the locale is not supported and xterm finds no
-            // input method (stderr lines real Linux does not print).
-            Deb {
-                pool: "main/libx/libx11/libx11-data_1.8.7-1build1_all.deb",
-                sha256: "9ae01f7747e7f479394c697c55acf11d3baf139e8e54b7c4adfb55ef9c50de08",
-                files: &[
-                    "usr/share/X11/locale/locale.alias",
-                    "usr/share/X11/locale/locale.dir",
-                    "usr/share/X11/locale/compose.dir",
-                    "usr/share/X11/locale/C/XLC_LOCALE",
-                    "usr/share/X11/locale/C/XI18N_OBJS",
-                    "usr/share/X11/locale/C/Compose",
-                ],
-            },
-            Deb {
-                pool: "universe/t/twm/twm_1.0.10-1build2_amd64.deb",
-                sha256: "29517224de67d2dcd27be2e4cde9394e9aad5d3507491b053c2b3b4f895af9c2",
-                files: &["usr/bin/twm"],
-            },
-            Deb {
-                pool: "main/c/coreutils/coreutils_9.4-3ubuntu6_amd64.deb",
-                sha256: "0d19c3e94f04ff1aafde46701fe1783da0a068a4904adc3794c30140f1aaeb8f",
-                files: &["usr/bin/sleep"],
-            },
-            Deb {
-                pool: "main/x/x11-xkb-utils/x11-xkb-utils_7.7+8build2_amd64.deb",
-                sha256: "69df4191e165f8b89d067f6234fcce89a4923d27d1e66dd92e6d63d6da93cdb0",
-                files: &["usr/bin/xkbcomp"],
-            },
-            Deb {
-                pool: "universe/x/xterm/xterm_390-1ubuntu3_amd64.deb",
-                sha256: "3541b6956d6c4be71db7b66ec91985bd5eb128fb130e806f1c879f9d94a97c72",
-                // Its desktop entry: the start menu lists it as one of the
-                // distribution's applications (LD step 7, `linux_menu`).
-                files: &["usr/bin/xterm", "usr/share/applications/debian-xterm.desktop"],
-            },
-            Deb {
-                pool: "main/d/dash/dash_0.5.12-6ubuntu5_amd64.deb",
-                sha256: "e97728d8deaa51300255f0572bbd68b9549e0894a184c056dc420fc4e0ba0781",
+                pool: "main/d/dash/dash_0.5.12-12ubuntu3_amd64.deb",
+                sha256: "563091a9b615a5a59951c2cc4478163d099df366a051113e8ce5bb2baab7f0c8",
                 files: &["usr/bin/sh"],
             },
             Deb {
-                pool: "main/g/glibc/libc6_2.39-0ubuntu8_amd64.deb",
-                sha256: "af36c7ac770770fe3d3c10e85d6bc538e76e57570ba7db7d397fb9f654783ef3",
+                pool: "main/g/glibc/libc6_2.43-2ubuntu2_amd64.deb",
+                sha256: "c13775dc0c984403f3fcad229d14507a9f387763bd07ace1e5f93897ee6b8434",
                 files: &["usr/lib/x86_64-linux-gnu/libresolv.so.2"],
             },
             Deb {
-                pool: "main/x/xkeyboard-config/xkb-data_2.41-2ubuntu1_all.deb",
-                sha256: "5f0a5188398b606d723f1bed48ee38c11eaeb98357ab29a3bf33c451056815d1",
-                files: &["usr/share/X11/xkb/geometry/pc"],
+                pool: "main/e/e2fsprogs/libcom-err2_1.47.2-3ubuntu4_amd64.deb",
+                sha256: "180b6ea0b9c07d4fd2ede79e29ee8eca830cd9384f856507e28dc24d1d3ae514",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libcom_err.so.2",
+                    "usr/lib/x86_64-linux-gnu/libcom_err.so.2.1",
+                ],
             },
             Deb {
-                pool: "main/libg/libglvnd/libgl1_1.7.0-1build1_amd64.deb",
-                sha256: "e2b2fadeb883f073b566ad1d7874f6702397514d258473e96152a89d4d502a09",
-                files: &["usr/lib/x86_64-linux-gnu/libGL.so.1"],
+                pool: "main/libd/libdecor-0/libdecor-0-0_0.2.5-1_amd64.deb",
+                sha256: "23ea4cd788fe5bf9883fd125dd1ac973db807b9a888dae70abde5bb9d2584de1",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libdecor-0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libdecor-0.so.0.200.5",
+                ],
             },
             Deb {
-                pool: "main/libg/libglvnd/libglx0_1.7.0-1build1_amd64.deb",
-                sha256: "aa4953182f30abde90cb5b072e83d7286b557b325769b8686196a7bd396d8795",
-                files: &["usr/lib/x86_64-linux-gnu/libGLX.so.0"],
+                pool: "main/libe/libei/libei1_1.5.0-3_amd64.deb",
+                sha256: "d3b0b40cb7cf3686c0aaebf6e6b4e11c8903d295fb9b5ffc9e66d99cf8448f7b",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libei.so.1",
+                    "usr/lib/x86_64-linux-gnu/libei.so.1.5.0",
+                ],
             },
             Deb {
-                pool: "main/libg/libglvnd/libglvnd0_1.7.0-1build1_amd64.deb",
-                sha256: "33f5e07c74f73c2bfb44086ae0f9e6da52acd6c104d30ffe8fd768d8253d5e82",
-                files: &["usr/lib/x86_64-linux-gnu/libGLdispatch.so.0"],
+                pool: "main/libf/libfontenc/libfontenc1_1.1.8-1build2_amd64.deb",
+                sha256: "1fab0e125d793da45d91b346c334c496776d69709a7ea78c3b34d5db6db69eab",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libfontenc.so.1",
+                    "usr/lib/x86_64-linux-gnu/libfontenc.so.1.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxfont/libxfont2_2.0.6-1build1_amd64.deb",
-                sha256: "1d5653c395f17f48473fce56cdab30eed16aac017359e6d2c34bc402d85197a0",
-                files: &["usr/lib/x86_64-linux-gnu/libXfont2.so.2"],
+                pool: "main/m/mesa/libgbm1_26.0.3-1ubuntu1_amd64.deb",
+                sha256: "8cb40b0bf0f2399825e85d03aa35c6069ce567686c14476175d45768cfcad0f3",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgbm.so.1",
+                    "usr/lib/x86_64-linux-gnu/libgbm.so.1.0.0",
+                ],
             },
             Deb {
-                pool: "main/libf/libfontenc/libfontenc1_1.1.8-1build1_amd64.deb",
-                sha256: "0c5d57211cac9659e7f4c856f5e1922c4a522fe8bcf5776e9707b2811f965702",
-                files: &["usr/lib/x86_64-linux-gnu/libfontenc.so.1"],
+                pool: "main/libg/libgcrypt20/libgcrypt20_1.12.0-2_amd64.deb",
+                sha256: "e063b7f814fe20453a8d8f7954aed902e539b36b3ba7e6c00074829f1ce1a174",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgcrypt.so.20",
+                    "usr/lib/x86_64-linux-gnu/libgcrypt.so.20.7.0",
+                ],
             },
             Deb {
-                pool: "main/libd/libdecor-0/libdecor-0-0_0.2.2-1build2_amd64.deb",
-                sha256: "64bf085d16e504e9ed39b91d2a46748fb8881ad7f3603fbacef6c11c04aa7064",
-                files: &["usr/lib/x86_64-linux-gnu/libdecor-0.so.0"],
+                pool: "main/libg/libgpg-error/libgpg-error0_1.58-2_amd64.deb",
+                sha256: "02d02854c5f9cc2cc47b8c4bb6a468c16df1bc2c4627cf83bd1dab0bff6d0263",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgpg-error.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgpg-error.so.0.41.1",
+                ],
             },
             Deb {
-                pool: "main/libd/libdrm/libdrm2_2.4.120-2build1_amd64.deb",
-                sha256: "f5fb4e7ce17921cc466fb7911abf91495ffb181b36772f68e2e82cb621703112",
-                files: &["usr/lib/x86_64-linux-gnu/libdrm.so.2"],
+                pool: "main/k/krb5/libgssapi-krb5-2_1.22.1-2ubuntu4_amd64.deb",
+                sha256: "e9329ba8c8c92b6cb10e3adf8bb75ed6289ada8e4f395550b3f1dc84f251f7ac",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgssapi_krb5.so.2",
+                    "usr/lib/x86_64-linux-gnu/libgssapi_krb5.so.2.2",
+                ],
             },
             Deb {
-                pool: "main/m/mesa/libgbm1_24.0.5-1ubuntu1_amd64.deb",
-                sha256: "bffad21d2383429d6dbec8395ba8d8476a0ed69e7e0b1c3ef2f27da99211b200",
-                files: &["usr/lib/x86_64-linux-gnu/libgbm.so.1"],
+                pool: "main/libi/libice/libice6_1.1.1-1build1_amd64.deb",
+                sha256: "d755a3f99a4895165703aad60ff15cf931e04da41b35facb15393d7d4b2c0242",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libICE.so.6",
+                    "usr/lib/x86_64-linux-gnu/libICE.so.6.3.0",
+                ],
             },
             Deb {
-                pool: "main/libt/libtirpc/libtirpc3t64_1.3.4+ds-1.1build1_amd64.deb",
-                sha256: "3a3cd37160399ab235fdf2f13159fd288940abb9660e0ed1afb418b44c73d43a",
-                files: &["usr/lib/x86_64-linux-gnu/libtirpc.so.3"],
+                pool: "main/k/krb5/libk5crypto3_1.22.1-2ubuntu4_amd64.deb",
+                sha256: "f8a985e1bc63f943db0ca9ada3309edfda4042a3023e36d80c6cf3e9591c557b",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libk5crypto.so.3",
+                    "usr/lib/x86_64-linux-gnu/libk5crypto.so.3.1",
+                ],
             },
             Deb {
-                pool: "main/k/krb5/libgssapi-krb5-2_1.20.1-6ubuntu2_amd64.deb",
-                sha256: "0e22fb29a907ef6deeb56543bcbf9f736500cb37da2e3a6257c1bedf7c0783db",
-                files: &["usr/lib/x86_64-linux-gnu/libgssapi_krb5.so.2"],
+                pool: "main/k/keyutils/libkeyutils1_1.6.3-6ubuntu3_amd64.deb",
+                sha256: "ea7d3cc642ffe2459c35a85c894f80e92499b9eba13bdcb225e0aa751c0970be",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libkeyutils.so.1",
+                    "usr/lib/x86_64-linux-gnu/libkeyutils.so.1.10",
+                ],
             },
             Deb {
-                pool: "main/k/krb5/libkrb5-3_1.20.1-6ubuntu2_amd64.deb",
-                sha256: "10ab284396a94349aa319c7c0a59cc747c5d75ba8b81e0ffcbdae96d8d8a2a78",
-                files: &["usr/lib/x86_64-linux-gnu/libkrb5.so.3"],
+                pool: "main/k/krb5/libkrb5-3_1.22.1-2ubuntu4_amd64.deb",
+                sha256: "bcba1775a914698ba5270f0febb1c47a3fceede86b17c574550d84e0b581dc0f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libkrb5.so.3",
+                    "usr/lib/x86_64-linux-gnu/libkrb5.so.3.3",
+                ],
             },
             Deb {
-                pool: "main/k/krb5/libk5crypto3_1.20.1-6ubuntu2_amd64.deb",
-                sha256: "212318ab9c98e151cfd331b9310827d43316dcf33e1e0e8d3d9fc2b3fbd88cfb",
-                files: &["usr/lib/x86_64-linux-gnu/libk5crypto.so.3"],
+                pool: "main/k/krb5/libkrb5support0_1.22.1-2ubuntu4_amd64.deb",
+                sha256: "f9cfb4ba27d0745cbfc7c064cc68f15ea3d6b144a4fd1da9c5f83fe30008aef7",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libkrb5support.so.0",
+                    "usr/lib/x86_64-linux-gnu/libkrb5support.so.0.1",
+                ],
             },
             Deb {
-                pool: "main/e/e2fsprogs/libcom-err2_1.47.0-2.4~exp1ubuntu4_amd64.deb",
-                sha256: "c95d59cad331f88ddffa3a85f1119bac98dd956916af642c60dd66a485ee97df",
-                files: &["usr/lib/x86_64-linux-gnu/libcom_err.so.2"],
+                pool: "main/libe/libei/liboeffis1_1.5.0-3_amd64.deb",
+                sha256: "8c64c961da0fb331554f02c416865d7ae6d1c9499959dc4b799b693183780e34",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/liboeffis.so.1",
+                    "usr/lib/x86_64-linux-gnu/liboeffis.so.1.5.0",
+                ],
             },
             Deb {
-                pool: "main/k/krb5/libkrb5support0_1.20.1-6ubuntu2_amd64.deb",
-                sha256: "5a6aa4d7f11ccad8f4bdfbce5e718827875d9440b1fb3d40c82dff0d9edb6e9b",
-                files: &["usr/lib/x86_64-linux-gnu/libkrb5support.so.0"],
+                pool: "main/libs/libsm/libsm6_1.2.6-1build1_amd64.deb",
+                sha256: "8f0d18029ed6918c8a422c8108d5efe6bc3a0e264dc65844b47132aad426536c",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libSM.so.6",
+                    "usr/lib/x86_64-linux-gnu/libSM.so.6.0.1",
+                ],
             },
             Deb {
-                pool: "main/k/keyutils/libkeyutils1_1.6.3-3build1_amd64.deb",
-                sha256: "0679f198b0128179e46cdf956fb2022c23c758664c00bc8efa0382d509683a8a",
-                files: &["usr/lib/x86_64-linux-gnu/libkeyutils.so.1"],
+                pool: "main/libt/libtirpc/libtirpc3t64_1.3.7-0.1_amd64.deb",
+                sha256: "a6c68bbbcbaf2941aee004e581289958c690d17b867be510940a82df2a5572c1",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libtirpc.so.3",
+                    "usr/lib/x86_64-linux-gnu/libtirpc.so.3.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxcvt/libxcvt0_0.1.2-1build1_amd64.deb",
-                sha256: "73215b31e1585e042aa2b9dc97cf4dfcfc6287fb0f6eca8bcab0b1f30a51c8e7",
-                files: &["usr/lib/x86_64-linux-gnu/libxcvt.so.0"],
+                pool: "main/libu/libutempter/libutempter0_1.2.1-4build1_amd64.deb",
+                sha256: "8f0f912d0108286b99a953bd0f6febb41187bdf8608fa11ac3af026a6d8b6771",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libutempter.so.0",
+                    "usr/lib/x86_64-linux-gnu/libutempter.so.1.2.1",
+                    "usr/lib/x86_64-linux-gnu/utempter/utempter",
+                ],
             },
             Deb {
-                pool: "main/libx/libxshmfence/libxshmfence1_1.3-1build5_amd64.deb",
-                sha256: "bc6de4bfaf9050a8ba83d4bcfb114131b081084a7972c03417f8523d52b5c742",
-                files: &["usr/lib/x86_64-linux-gnu/libxshmfence.so.1"],
+                pool: "main/u/util-linux/libuuid1_2.41.3-3ubuntu2_amd64.deb",
+                sha256: "ea9d94da2fb6564391145f3a9630c140c8dd771a38ae753983e8dc55cc22e102",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libuuid.so.1",
+                    "usr/lib/x86_64-linux-gnu/libuuid.so.1.3.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxkbfile/libxkbfile1_1.1.0-1build4_amd64.deb",
-                sha256: "22ac5b7dca740e606261cebdfaf1a07738e92ad3d123570694374ddb4d5afea2",
-                files: &["usr/lib/x86_64-linux-gnu/libxkbfile.so.1"],
+                pool: "main/libx/libx11/libx11-data_1.8.13-1_all.deb",
+                sha256: "8188c233d59dc419205c314ef8f230fc83ca7a3e7e9b9671f18b469fd3e428ae",
+                files: &[
+                    "usr/share/X11/locale/C/XLC_LOCALE",
+                    "usr/share/X11/locale/compose.dir",
+                    "usr/share/X11/locale/iso8859-1/Compose",
+                    "usr/share/X11/locale/locale.alias",
+                    "usr/share/X11/locale/locale.dir",
+                ],
             },
             Deb {
-                pool: "main/libx/libxaw/libxaw7_1.0.14-1build2_amd64.deb",
-                sha256: "2a9cdc82ecf566de76e05394efc604c9cced49e12c28b10e1ca101062b47bac0",
-                files: &["usr/lib/x86_64-linux-gnu/libXaw.so.7"],
+                pool: "main/libx/libxaw/libxaw7_1.0.16-1build1_amd64.deb",
+                sha256: "8771b09a2ed641887411b9c5e10621440972340710fa4a8e015f062e5a7f5930",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXaw.so.7",
+                    "usr/lib/x86_64-linux-gnu/libXaw7.so.7.0.0",
+                ],
             },
             Deb {
-                pool: "main/libx/libxmu/libxmu6_1.1.3-3build2_amd64.deb",
-                sha256: "05c13bce0e9a80139dfa72cc8e7a695b4f7d58b1884423929eade62179d99853",
-                files: &["usr/lib/x86_64-linux-gnu/libXmu.so.6"],
+                pool: "main/libx/libxcvt/libxcvt0_0.1.3-1build1_amd64.deb",
+                sha256: "3660c17f9a96c3fe1edd81b2795a17d273b3da39444f2d39f715ebd85cabe6ff",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxcvt.so.0",
+                    "usr/lib/x86_64-linux-gnu/libxcvt.so.0.1.3",
+                ],
             },
             Deb {
-                pool: "main/libx/libxt/libxt6t64_1.2.1-1.2build1_amd64.deb",
-                sha256: "2e4317d5ae1a45e517771ea0b8d93519b5f915ab08983facecd480d64dbd1489",
-                files: &["usr/lib/x86_64-linux-gnu/libXt.so.6"],
+                pool: "main/libx/libxfont/libxfont2_2.0.6-2_amd64.deb",
+                sha256: "d47fa48e08c31a57443a062c9f8623ffe9837700ab292b7e94151bedc022af1f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXfont2.so.2",
+                    "usr/lib/x86_64-linux-gnu/libXfont2.so.2.0.0",
+                ],
             },
             Deb {
-                pool: "main/libi/libice/libice6_1.0.10-1build3_amd64.deb",
-                sha256: "ad1edb5303574fee154e487947177e5bd15363aa71b92f78f5a2a7145fdb81c5",
-                files: &["usr/lib/x86_64-linux-gnu/libICE.so.6"],
+                pool: "main/x/xft/libxft2_2.3.6-1build2_amd64.deb",
+                sha256: "a6ad7fd2294e8e04d553919b5beed0269ebc6f73d41261ed1059c7fde83227f0",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXft.so.2",
+                    "usr/lib/x86_64-linux-gnu/libXft.so.2.3.6",
+                ],
             },
             Deb {
-                pool: "main/libs/libsm/libsm6_1.2.3-1build3_amd64.deb",
-                sha256: "1d27ebc381b499075a28c504be4d7d424c63b6866354736ac7f8d25813860cdf",
-                files: &["usr/lib/x86_64-linux-gnu/libSM.so.6"],
+                pool: "main/libx/libxkbfile/libxkbfile1_1.1.0-1build5_amd64.deb",
+                sha256: "40bf42bc549b5d1f848e2ce8c1bafc9777e0fd4b943bbff922dd340f7ab3f5d7",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxkbfile.so.1",
+                    "usr/lib/x86_64-linux-gnu/libxkbfile.so.1.0.2",
+                ],
             },
             Deb {
-                pool: "main/libx/libxpm/libxpm4_3.5.17-1build2_amd64.deb",
-                sha256: "ad9d9cb9be156d8b80c12735ecb4aae57e5501280a9f952749e8b71a7e5f9c97",
-                files: &["usr/lib/x86_64-linux-gnu/libXpm.so.4"],
+                pool: "main/libx/libxmu/libxmu6_1.1.3-4_amd64.deb",
+                sha256: "15e9c3a2bd4132a2873b339b4af578dd19462f1eee705b025f656ea548aba19f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXmu.so.6",
+                    "usr/lib/x86_64-linux-gnu/libXmu.so.6.2.0",
+                ],
             },
             Deb {
-                pool: "main/x/xft/libxft2_2.3.6-1build1_amd64.deb",
-                sha256: "b4f4f3255c0b8773b260c61cbe20ee7c63799cfc0e4e389fa58375dd480b093a",
-                files: &["usr/lib/x86_64-linux-gnu/libXft.so.2"],
+                pool: "main/libx/libxpm/libxpm4_3.5.17-1build3_amd64.deb",
+                sha256: "6016d743494fca51d029b07d3eabac0c774dd2ba1ec3ea9f4288c47c89474ac6",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXpm.so.4",
+                    "usr/lib/x86_64-linux-gnu/libXpm.so.4.11.0",
+                ],
             },
             Deb {
-                pool: "main/libu/libutempter/libutempter0_1.2.1-3build1_amd64.deb",
-                sha256: "46c0dfbfeca19ba0773398d654b7e7225b178f26b414f0e2f8250519551bfb32",
-                files: &["usr/lib/x86_64-linux-gnu/libutempter.so.0"],
+                pool: "main/libx/libxt/libxt6t64_1.2.1-1.3build1_amd64.deb",
+                sha256: "b4255d5aea7986fa06ae3a3599f9e5c38a58ded1c3b79cfaf3c2959ad160eeff",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXt.so.6",
+                    "usr/lib/x86_64-linux-gnu/libXt.so.6.0.0",
+                ],
             },
             Deb {
-                pool: "main/n/ncurses/libtinfo6_6.4+20240113-1ubuntu2_amd64.deb",
-                sha256: "53e1e1753729d04cf65b05e6e58abe06e2bb76cc07eff0e1b2a638a638ca209b",
-                files: &["usr/lib/x86_64-linux-gnu/libtinfo.so.6"],
+                pool: "main/n/ncurses/ncurses-base_6.6+20251231-1_all.deb",
+                sha256: "c36efa1e8456f40595f910047d2ebae8f51dcb918ca91c2da94ff733a00630a7",
+                files: &["usr/share/terminfo/x/xterm"],
             },
             Deb {
-                pool: "main/u/util-linux/libuuid1_2.39.3-9ubuntu6_amd64.deb",
-                sha256: "4ba2c3a10469d1ab8e01a9af8e39093ed43addada658c04737287c5f91a1645b",
-                files: &["usr/lib/x86_64-linux-gnu/libuuid.so.1"],
+                pool: "main/r/rust-coreutils/rust-coreutils_0.8.0-0ubuntu3_amd64.deb",
+                sha256: "c5c87994f543e3a771803e8cffce87a7e4e133dda59318bd874f58aaf40ac91f",
+                files: &[
+                    "usr/bin/sleep=usr/lib/cargo/bin/coreutils/sleep",
+                    "usr/share/coreutils/locales/uucore/en-US.ftl",
+                ],
             },
             Deb {
-                pool: "main/w/wayland/libwayland-server0_1.22.0-2.1build1_amd64.deb",
-                sha256: "edbfa4b6857691ae922cc768a753fab230eee9e956aa2ce4f2eaa8d9ad777dca",
-                files: &["usr/lib/x86_64-linux-gnu/libwayland-server.so.0"],
+                pool: "universe/t/twm/twm_1.0.10-1build3_amd64.deb",
+                sha256: "9adcabbcdb21ed3df715fd83ef8d752b64e3b00a85276c70fd0c2464c03ae8bd",
+                files: &["usr/bin/twm"],
             },
             Deb {
-                pool: "main/libx/libxcb/libxcb-randr0_1.15-1ubuntu2_amd64.deb",
-                sha256: "b5cb519823a05a617b543dc9b6a9289b7648b20048244abe021caa706309835a",
-                files: &["usr/lib/x86_64-linux-gnu/libxcb-randr.so.0"],
+                pool: "main/x/x11-xkb-utils/x11-xkb-utils_7.7+9build1_amd64.deb",
+                sha256: "f17d61317a9f0db99db7a2c7b81d462a35008c85089fb573d2175ed504f6157b",
+                files: &["usr/bin/xkbcomp"],
+            },
+            Deb {
+                pool: "main/x/xkeyboard-config/xkb-data_2.46-2_all.deb",
+                sha256: "a24f82b33020836444593a7ffbed959458852e28cfe16de2ff95bcbdcfbdb2d3",
+                files: &[
+                    "usr/share/X11/xkb/geometry/pc",
+                    "usr/share/xkeyboard-config-2/geometry/pc",
+                ],
+            },
+            Deb {
+                pool: "universe/x/xterm/xterm_407-1ubuntu1_amd64.deb",
+                sha256: "152cef8061050bb3428e3078208bc94187b57a6885a851094c26ad77e9db9169",
+                // Its desktop entry: the start menu lists it as Ubuntu's
+                // application (linux_menu; xterm itself never opens it).
+                files: &[
+                    "etc/X11/app-defaults/XTerm",
+                    "usr/bin/xterm",
+                    "usr/share/applications/debian-xterm.desktop",
+                ],
+            },
+            Deb {
+                pool: "main/x/xwayland/xwayland_24.1.10-1_amd64.deb",
+                sha256: "f620802e59cb10a4d66e0ed2abf16ad425be1ab2b7a3deef1c2b367647c2c7a5",
+                files: &["usr/bin/Xwayland"],
+            },
+        ],
+    },
+    LinuxRoot {
+        // GIMP 3.2.2 (ROADMAP LD step 9) as Ubuntu 26.04 builds it: a GTK 3
+        // program, with GEGL 0.4.70 and babl 0.1.124 (their operation and
+        // extension modules, each in its x86_64 variants: they pick one by
+        // the CPU's features), gimp-data's scripts, brushes, patterns and
+        // gradients (Script-Fu's scripts name some as defaults) and system
+        // gimprc, and the libraries of theirs the "gtk3" and "x11" roots
+        // lack. Of its plug-ins only script-fu and file-png, and not the
+        // goat-exercises extension (demo plug-ins, one in Python): a start
+        // queries every plug-in it finds, each a process, and
+        // `lx_gimp_batch` uses these two. The list is what
+        // `gimp-console-3.2` and those two opened on Ubuntu 26.04 under
+        // `strace -f -y` as uid 1000, with what its window opened over
+        // Wayland (WORKFLOW "GIMP"), less the busybox applets' coreutils and
+        // GEGL's probe of graphviz's `dot`; GTK's GSettings schemas
+        // (compiled at assembly) and GIMP's whole icon theme (Default: its
+        // menus and docks use icons a short session does not open, and GTK
+        // aborts on a missing one).
+        name: "gimp",
+        debs: &[
+            Deb {
+                pool: "main/a/adwaita-icon-theme/adwaita-icon-theme_50.0-1_all.deb",
+                sha256: "db9f11a94f993de589e7d8879664cb371eb8aefc8a2bce100d923951e4ef30c8",
+                files: &[
+                    "usr/share/icons/Adwaita/16x16/devices/",
+                    "usr/share/icons/Adwaita/symbolic/actions/edit-find-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/devices/drive-harddisk-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/places/user-desktop-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/places/user-home-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/places/user-trash-symbolic.svg",
+                    "usr/share/icons/Adwaita/symbolic/ui/pan-down-symbolic.svg",
+                ],
+            },
+            Deb {
+                pool: "main/f/fonts-urw-base35/fonts-urw-base35_20200910-8build1_all.deb",
+                sha256: "be59254289c670d5c6580ce381995292aa05c9dd4bc5fa65b9dbaa527b55adda",
+                files: &[
+                    "etc/fonts/conf.d/61-urw-bookman.conf",
+                    "etc/fonts/conf.d/61-urw-c059.conf",
+                    "etc/fonts/conf.d/61-urw-d050000l.conf",
+                    "etc/fonts/conf.d/61-urw-fallback-backwards.conf",
+                    "etc/fonts/conf.d/61-urw-fallback-generics.conf",
+                    "etc/fonts/conf.d/61-urw-gothic.conf",
+                    "etc/fonts/conf.d/61-urw-nimbus-mono-ps.conf",
+                    "etc/fonts/conf.d/61-urw-nimbus-roman.conf",
+                    "etc/fonts/conf.d/61-urw-nimbus-sans.conf",
+                    "etc/fonts/conf.d/61-urw-p052.conf",
+                    "etc/fonts/conf.d/61-urw-standard-symbols-ps.conf",
+                    "etc/fonts/conf.d/61-urw-z003.conf",
+                    "usr/share/fontconfig/conf.avail/urw-bookman.conf",
+                    "usr/share/fontconfig/conf.avail/urw-c059.conf",
+                    "usr/share/fontconfig/conf.avail/urw-d050000l.conf",
+                    "usr/share/fontconfig/conf.avail/urw-fallback-backwards.conf",
+                    "usr/share/fontconfig/conf.avail/urw-fallback-generics.conf",
+                    "usr/share/fontconfig/conf.avail/urw-gothic.conf",
+                    "usr/share/fontconfig/conf.avail/urw-nimbus-mono-ps.conf",
+                    "usr/share/fontconfig/conf.avail/urw-nimbus-roman.conf",
+                    "usr/share/fontconfig/conf.avail/urw-nimbus-sans.conf",
+                    "usr/share/fontconfig/conf.avail/urw-p052.conf",
+                    "usr/share/fontconfig/conf.avail/urw-standard-symbols-ps.conf",
+                    "usr/share/fontconfig/conf.avail/urw-z003.conf",
+                    "usr/share/fonts/X11/",
+                    "usr/share/fonts/X11/Type1/",
+                    "usr/share/fonts/opentype/urw-base35/NimbusMonoPS-Regular.otf",
+                    "usr/share/fonts/opentype/urw-base35/NimbusSans-Bold.otf",
+                    "usr/share/fonts/opentype/urw-base35/NimbusSans-Italic.otf",
+                    "usr/share/fonts/opentype/urw-base35/NimbusSans-Regular.otf",
+                    "usr/share/fonts/type1/",
+                    "usr/share/fonts/type1/urw-base35/",
+                ],
+            },
+            Deb {
+                pool: "universe/g/gimp/gimp_3.2.2-1_amd64.deb",
+                sha256: "b7e75b9cb6554048adae11ea658b7fd07ed04dc3913460ff108e8bc6b2742519",
+                files: &[
+                    "usr/bin/gimp-3.2",
+                    "usr/bin/gimp-console-3.2",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/environ/default.env",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/extensions/",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/interpreters/default.interp",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libcolor-selector-cmyk.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libcolor-selector-water.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libcolor-selector-wheel.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libcontroller-linux-input.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libcontroller-midi.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libdisplay-filter-aces-rrt.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libdisplay-filter-clip-warning.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libdisplay-filter-color-blind.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libdisplay-filter-gamma.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/modules/libdisplay-filter-high-contrast.so",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/plug-ins/file-png/file-png",
+                    "usr/lib/x86_64-linux-gnu/gimp/3.0/plug-ins/script-fu/script-fu",
+                ],
+            },
+            Deb {
+                pool: "universe/g/gimp/gimp-data_3.2.2-1_all.deb",
+                sha256: "f771973a2427be5e2cfaf033e48a5373880046e55707f0f62ab01329ee189372",
+                files: &[
+                    "etc/gimp/3.0/controllerrc",
+                    "etc/gimp/3.0/gimp.css",
+                    "etc/gimp/3.0/gimprc",
+                    "etc/gimp/3.0/sessionrc",
+                    "etc/gimp/3.0/templaterc",
+                    "etc/gimp/3.0/toolrc",
+                    "etc/gimp/3.0/unitrc",
+                    "usr/share/gimp/3.0/brushes/Basic/1-pixel.vbr",
+                    "usr/share/gimp/3.0/brushes/Basic/Block-01.vbr",
+                    "usr/share/gimp/3.0/brushes/Basic/Block-02.vbr",
+                    "usr/share/gimp/3.0/brushes/Basic/Block-03.vbr",
+                    "usr/share/gimp/3.0/brushes/Basic/Hardness-025.vbr",
+                    "usr/share/gimp/3.0/brushes/Basic/Hardness-050.vbr",
+                    "usr/share/gimp/3.0/brushes/Basic/Hardness-075.vbr",
+                    "usr/share/gimp/3.0/brushes/Basic/Hardness-100.vbr",
+                    "usr/share/gimp/3.0/brushes/Basic/Star.vbr",
+                    "usr/share/gimp/3.0/brushes/Basic/pixel.gbr",
+                    "usr/share/gimp/3.0/brushes/Fun/GEGL-goat.gih",
+                    "usr/share/gimp/3.0/brushes/Fun/Wilber.gih",
+                    "usr/share/gimp/3.0/brushes/Fun/pepper.gbr",
+                    "usr/share/gimp/3.0/brushes/Legacy/confetti.gbr",
+                    "usr/share/gimp/3.0/brushes/Legacy/confetti.gih",
+                    "usr/share/gimp/3.0/brushes/Legacy/vine.gih",
+                    "usr/share/gimp/3.0/brushes/Media/Acrylic-01.gih",
+                    "usr/share/gimp/3.0/brushes/Media/Acrylic-02.gih",
+                    "usr/share/gimp/3.0/brushes/Media/Acrylic-03.gih",
+                    "usr/share/gimp/3.0/brushes/Media/Acrylic-04.gih",
+                    "usr/share/gimp/3.0/brushes/Media/Acrylic-05.gih",
+                    "usr/share/gimp/3.0/brushes/Media/Bristles-01.gbr",
+                    "usr/share/gimp/3.0/brushes/Media/Bristles-02.gbr",
+                    "usr/share/gimp/3.0/brushes/Media/Bristles-03.gbr",
+                    "usr/share/gimp/3.0/brushes/Media/Oils-01.gbr",
+                    "usr/share/gimp/3.0/brushes/Media/Oils-02.gbr",
+                    "usr/share/gimp/3.0/brushes/Media/Oils-03.gbr",
+                    "usr/share/gimp/3.0/brushes/Sketch/Chalk-01.gih",
+                    "usr/share/gimp/3.0/brushes/Sketch/Chalk-02.gih",
+                    "usr/share/gimp/3.0/brushes/Sketch/Chalk-03.gih",
+                    "usr/share/gimp/3.0/brushes/Sketch/Charcoal-01.gbr",
+                    "usr/share/gimp/3.0/brushes/Sketch/Charcoal-02.gbr",
+                    "usr/share/gimp/3.0/brushes/Sketch/Charcoal-03.gih",
+                    "usr/share/gimp/3.0/brushes/Sketch/Pencil-01.gih",
+                    "usr/share/gimp/3.0/brushes/Sketch/Pencil-02.gih",
+                    "usr/share/gimp/3.0/brushes/Sketch/Pencil-03.gih",
+                    "usr/share/gimp/3.0/brushes/Sketch/Pencil-Scratch.gbr",
+                    "usr/share/gimp/3.0/brushes/Splatters/Grunge-01.gih",
+                    "usr/share/gimp/3.0/brushes/Splatters/Sparks-Hose.gih",
+                    "usr/share/gimp/3.0/brushes/Splatters/Splats-01.gih",
+                    "usr/share/gimp/3.0/brushes/Splatters/Splats-02.gih",
+                    "usr/share/gimp/3.0/brushes/Splatters/Sponge-01.gbr",
+                    "usr/share/gimp/3.0/brushes/Splatters/Sponge-02.gbr",
+                    "usr/share/gimp/3.0/brushes/Texture/Cell-01.gbr",
+                    "usr/share/gimp/3.0/brushes/Texture/Cell-02.gbr",
+                    "usr/share/gimp/3.0/brushes/Texture/Grass.gih",
+                    "usr/share/gimp/3.0/brushes/Texture/Hatch-Pen-01.gbr",
+                    "usr/share/gimp/3.0/brushes/Texture/Smoke.gbr",
+                    "usr/share/gimp/3.0/brushes/Texture/Stone-Work-01.gih",
+                    "usr/share/gimp/3.0/brushes/Texture/Texture-01.gbr",
+                    "usr/share/gimp/3.0/brushes/Texture/Texture-02.gbr",
+                    "usr/share/gimp/3.0/brushes/Texture/Texture-Hose-01.gih",
+                    "usr/share/gimp/3.0/brushes/Texture/Texture-Hose-02.gih",
+                    "usr/share/gimp/3.0/brushes/Texture/Texture-Hose-03.gih",
+                    "usr/share/gimp/3.0/brushes/Texture/Vegetation-01.gbr",
+                    "usr/share/gimp/3.0/brushes/Texture/Vegetation-02.gih",
+                    "usr/share/gimp/3.0/dynamics/Basic-Dynamics.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Basic/Basic-Simple.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Basic/Dynamics-Random.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Basic/Negative-Size-Pressure.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Basic/Pen-Generic.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Basic/Pencil-Generic.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Basic/Pencil-Shader.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Basic/Pressure-Opacity.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Basic/Pressure-Size.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Color-From-Gradient.gdyn",
+                    "usr/share/gimp/3.0/dynamics/FX/Confetti.gdyn",
+                    "usr/share/gimp/3.0/dynamics/FX/Perspective.gdyn",
+                    "usr/share/gimp/3.0/dynamics/FX/Speed_Size_Opacity.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Fade-Tapering.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Random-Color.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Tilt-Angle.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Track-Direction.gdyn",
+                    "usr/share/gimp/3.0/dynamics/Velocity-Tapering.gdyn",
+                    "usr/share/gimp/3.0/gradients/Abstract_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Abstract_2.ggr",
+                    "usr/share/gimp/3.0/gradients/Abstract_3.ggr",
+                    "usr/share/gimp/3.0/gradients/Aneurism.ggr",
+                    "usr/share/gimp/3.0/gradients/Blinds.ggr",
+                    "usr/share/gimp/3.0/gradients/Blue_Green.ggr",
+                    "usr/share/gimp/3.0/gradients/Browns.ggr",
+                    "usr/share/gimp/3.0/gradients/Brushed_Aluminium.ggr",
+                    "usr/share/gimp/3.0/gradients/Burning_Paper.ggr",
+                    "usr/share/gimp/3.0/gradients/Burning_Transparency.ggr",
+                    "usr/share/gimp/3.0/gradients/CD.ggr",
+                    "usr/share/gimp/3.0/gradients/CD_Half.ggr",
+                    "usr/share/gimp/3.0/gradients/Caribbean_Blues.ggr",
+                    "usr/share/gimp/3.0/gradients/Coffee.ggr",
+                    "usr/share/gimp/3.0/gradients/Cold_Steel.ggr",
+                    "usr/share/gimp/3.0/gradients/Cold_Steel_2.ggr",
+                    "usr/share/gimp/3.0/gradients/Crown_molding.ggr",
+                    "usr/share/gimp/3.0/gradients/Dark_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Deep_Sea.ggr",
+                    "usr/share/gimp/3.0/gradients/Default.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Glow_Angular_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Glow_Radial_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Glow_Radial_2.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Glow_Radial_3.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Glow_Radial_4.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Radial_101.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Radial_102.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Radial_103.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Rays_Radial_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Rays_Radial_2.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Rays_Size_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Flare_Sizefac_101.ggr",
+                    "usr/share/gimp/3.0/gradients/Four_bars.ggr",
+                    "usr/share/gimp/3.0/gradients/Full_saturation_spectrum_CCW.ggr",
+                    "usr/share/gimp/3.0/gradients/Full_saturation_spectrum_CW.ggr",
+                    "usr/share/gimp/3.0/gradients/Golden.ggr",
+                    "usr/share/gimp/3.0/gradients/Greens.ggr",
+                    "usr/share/gimp/3.0/gradients/Horizon_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Horizon_2.ggr",
+                    "usr/share/gimp/3.0/gradients/Incandescent.ggr",
+                    "usr/share/gimp/3.0/gradients/Land_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Land_and_Sea.ggr",
+                    "usr/share/gimp/3.0/gradients/Metallic_Something.ggr",
+                    "usr/share/gimp/3.0/gradients/Nauseating_Headache.ggr",
+                    "usr/share/gimp/3.0/gradients/Neon_Cyan.ggr",
+                    "usr/share/gimp/3.0/gradients/Neon_Green.ggr",
+                    "usr/share/gimp/3.0/gradients/Neon_Yellow.ggr",
+                    "usr/share/gimp/3.0/gradients/Pastel_Rainbow.ggr",
+                    "usr/share/gimp/3.0/gradients/Pastels.ggr",
+                    "usr/share/gimp/3.0/gradients/Purples.ggr",
+                    "usr/share/gimp/3.0/gradients/Radial_Eyeball_Blue.ggr",
+                    "usr/share/gimp/3.0/gradients/Radial_Eyeball_Brown.ggr",
+                    "usr/share/gimp/3.0/gradients/Radial_Eyeball_Green.ggr",
+                    "usr/share/gimp/3.0/gradients/Radial_Glow_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Radial_Rainbow_Hoop.ggr",
+                    "usr/share/gimp/3.0/gradients/Rounded_edge.ggr",
+                    "usr/share/gimp/3.0/gradients/Shadows_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Shadows_2.ggr",
+                    "usr/share/gimp/3.0/gradients/Shadows_3.ggr",
+                    "usr/share/gimp/3.0/gradients/Skyline.ggr",
+                    "usr/share/gimp/3.0/gradients/Skyline_polluted.ggr",
+                    "usr/share/gimp/3.0/gradients/Square_Wood_Frame.ggr",
+                    "usr/share/gimp/3.0/gradients/Sunrise.ggr",
+                    "usr/share/gimp/3.0/gradients/Three_bars_sin.ggr",
+                    "usr/share/gimp/3.0/gradients/Tropical_Colors.ggr",
+                    "usr/share/gimp/3.0/gradients/Tube_Red.ggr",
+                    "usr/share/gimp/3.0/gradients/Wood_1.ggr",
+                    "usr/share/gimp/3.0/gradients/Wood_2.ggr",
+                    "usr/share/gimp/3.0/gradients/Yellow_Contrast.ggr",
+                    "usr/share/gimp/3.0/gradients/Yellow_Orange.ggr",
+                    "usr/share/gimp/3.0/gradients/gimp-obsolete-files/French_flag.ggr",
+                    "usr/share/gimp/3.0/gradients/gimp-obsolete-files/French_flag_smooth.ggr",
+                    "usr/share/gimp/3.0/gradients/gimp-obsolete-files/German_flag.ggr",
+                    "usr/share/gimp/3.0/gradients/gimp-obsolete-files/German_flag_smooth.ggr",
+                    "usr/share/gimp/3.0/gradients/gimp-obsolete-files/Mexican_flag.ggr",
+                    "usr/share/gimp/3.0/gradients/gimp-obsolete-files/Mexican_flag_smooth.ggr",
+                    "usr/share/gimp/3.0/gradients/gimp-obsolete-files/Romanian_flag.ggr",
+                    "usr/share/gimp/3.0/gradients/gimp-obsolete-files/Romanian_flag_smooth.ggr",
+                    "usr/share/gimp/3.0/icons/Default/64x64/apps/",
+                    "usr/share/gimp/3.0/icons/Default/64x64/apps/gimp-frame.png",
+                    "usr/share/gimp/3.0/icons/Default/64x64/apps/gimp-texture.png",
+                    "usr/share/gimp/3.0/icons/Default/index.theme",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/dialog-error-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/dialog-error.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/dialog-information-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/dialog-information.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/dialog-question-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/dialog-question.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/dialog-warning-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/dialog-warning.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-new-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-new.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-open-recent-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-open-recent.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-open-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-open.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-print-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-print.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-revert-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-revert.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-save-as-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-save-as.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-save-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/document-save.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-clear-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-clear.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-copy-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-copy.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-cut-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-cut.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-delete-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-delete.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-paste-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-paste.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-redo-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-redo.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-undo-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/edit-undo.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/folder-new-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/folder-new.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/folder-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/folder.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-indent-more-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-indent-more.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-justify-center-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-justify-center.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-justify-fill-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-justify-fill.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-justify-left-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-justify-left.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-justify-right-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-justify-right.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-text-direction-ltr-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-text-direction-ltr.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-text-direction-rtl-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/format-text-direction-rtl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-anchor-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-anchor.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-attach-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-attach.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-business-card-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-business-card.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-cap-butt-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-cap-butt.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-cap-round-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-cap-round.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-cap-square-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-cap-square.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-center-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-center.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-alpha-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-alpha.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-blue-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-blue.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-gray-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-gray.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-green-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-green.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-indexed-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-indexed.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-red-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-red.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channel.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channels-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-channels.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-char-picker-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-char-picker.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-clipboard-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-clipboard.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-close-all-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-close-all.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-close-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-close.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-cmyk-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-cmyk.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-pick-from-screen-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-pick-from-screen.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-picker-black-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-picker-black.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-picker-gray-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-picker-gray.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-picker-white-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-picker-white.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-space-linear-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-space-linear.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-space-non-linear-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-space-non-linear.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-space-perceptual-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-space-perceptual.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-triangle-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-triangle.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-water-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-color-water.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-colormap-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-colormap.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-controller-keyboard-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-controller-keyboard.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-controller-linux-input-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-controller-linux-input.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-controller-midi-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-controller-midi.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-controller-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-controller-wheel-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-controller-wheel.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-controller.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-convert-grayscale-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-convert-grayscale.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-convert-indexed-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-convert-indexed.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-convert-rgb-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-convert-rgb.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-cursor-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-cursor.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-curve-free-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-curve-free.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-curve-point-corner-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-curve-point-corner.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-curve-point-smooth-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-curve-point-smooth.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-curve-smooth-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-curve-smooth.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-dashboard-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-dashboard.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-default-colors-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-default-colors.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-detach-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-detach.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-device-status-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-device-status.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-clip-warning-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-clip-warning.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-colorblind-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-colorblind.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-contrast-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-contrast.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-gamma-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-gamma.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-lcms-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-lcms.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-proof-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-proof.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-filter.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-display.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-duplicate-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-duplicate.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-dynamics-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-dynamics.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-effects-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-effects.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-even-horizontal-gap-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-even-horizontal-gap.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-even-vertical-gap-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-even-vertical-gap.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-file-manager-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-file-manager.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-floating-selection-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-floating-selection.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gegl-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gegl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-bilinear-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-bilinear.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-conical-asymmetric-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-conical-asymmetric.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-conical-symmetric-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-conical-symmetric.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-linear-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-linear.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-radial-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-radial.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-shapeburst-angular-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-shapeburst-angular.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-shapeburst-dimpled-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-shapeburst-dimpled.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-shapeburst-spherical-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-shapeburst-spherical.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-spiral-anticlockwise-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-spiral-anticlockwise.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-spiral-clockwise-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-spiral-clockwise.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-square-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gradient-square.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-east-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-east.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-north-east-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-north-east.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-north-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-north-west-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-north-west.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-north.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-south-east-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-south-east.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-south-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-south-west-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-south-west.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-south.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-west-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-gravity-west.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-grid-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-grid.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-group-layer-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-group-layer.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-hcenter-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-hcenter.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-hchain-broken-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-hchain-broken.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-hchain-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-hchain.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-hfill-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-hfill.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-histogram-linear-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-histogram-linear.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-histogram-logarithmic-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-histogram-logarithmic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-histogram-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-histogram.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-image-open-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-image-open.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-image-reload-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-image-reload.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-image-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-image.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-images-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-images.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-input-device-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-input-device.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-invert-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-invert.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-join-bevel-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-join-bevel.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-join-miter-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-join-miter.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-join-round-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-join-round.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-landscape-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-landscape.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layer-mask-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layer-mask.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layer-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layer-to-imagesize-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layer-to-imagesize.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layer.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layers-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-layers.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-letter-spacing-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-letter-spacing.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-line-spacing-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-line-spacing.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-linked-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-linked.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-list-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-list.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-alpha-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-alpha.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-content-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-content.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-multi-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-multi.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-path-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-path.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-position-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-position.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-visibility-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock-visibility.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-lock.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-marker-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-marker.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-menu-left-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-menu-left.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-menu-right-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-menu-right.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-merge-down-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-merge-down.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-move-to-screen-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-move-to-screen.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-navigation-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-navigation.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-paste-as-new-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-paste-as-new.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-paste-into-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-paste-into.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-path-stroke-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-path-stroke.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-path-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-path.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-paths-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-paths.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pattern-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pattern.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-center-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-center.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-east-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-east.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-north-east-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-north-east.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-north-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-north-west-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-north-west.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-north.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-south-east-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-south-east.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-south-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-south-west-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-south-west.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-south.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-west-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-pivot-west.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-plugin-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-plugin.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-portrait-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-portrait.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-color-management-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-color-management.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-controllers-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-controllers.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-default-grid-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-default-grid.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-display-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-display.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-brushes-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-brushes.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-dynamics-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-dynamics.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-environ-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-environ.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-fonts-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-fonts.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-gradients-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-gradients.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-icon-themes-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-icon-themes.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-interp-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-interp.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-modules-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-modules.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-mypaint-brushes-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-mypaint-brushes.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-palettes-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-palettes.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-patterns-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-patterns.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-plug-ins-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-plug-ins.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-scripts-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-scripts.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-themes-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-themes.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-tool-presets-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders-tool-presets.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-folders.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-help-system-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-help-system.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-icon-theme-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-icon-theme.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-image-title-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-image-title.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-image-windows-appearance-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-image-windows-appearance.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-image-windows-snapping-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-image-windows-snapping.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-image-windows-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-image-windows.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-import-export-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-import-export.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-input-devices-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-input-devices.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-interface-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-interface.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-new-image-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-new-image.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-playground-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-playground.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-system-resources-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-system-resources.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-theme-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-theme.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-tool-options-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-tool-options.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-toolbox-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-toolbox.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-window-management-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-prefs-window-management.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-quick-mask-off-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-quick-mask-off.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-quick-mask-on-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-quick-mask-on.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-reset-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-reset.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-reshow-filter-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-reshow-filter.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-resize-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-resize.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-rotate-180-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-rotate-180.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-sample-point-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-sample-point.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-scale-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-scale.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-add-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-add.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-all-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-all.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-border-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-border.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-grow-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-grow.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-intersect-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-intersect.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-none-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-none.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-replace-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-replace.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-shrink-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-shrink.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-stroke-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-stroke.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-subtract-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-subtract.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-to-channel-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-to-channel.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-to-path-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection-to-path.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-selection.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-shape-circle-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-shape-circle.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-shape-diamond-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-shape-diamond.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-shape-square-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-shape-square.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-shred-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-shred.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-smartphone-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-smartphone.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-swap-colors-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-swap-colors.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-symmetry-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-symmetry.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-template-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-template.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-text-dir-ttb-ltr-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-text-dir-ttb-ltr-upright-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-text-dir-ttb-ltr-upright.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-text-dir-ttb-ltr.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-text-dir-ttb-rtl-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-text-dir-ttb-rtl-upright-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-text-dir-ttb-rtl-upright.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-text-dir-ttb-rtl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-text-layer-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-text-layer.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-toggle-off-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-toggle-off.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-toggle-on-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-toggle-on.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-toilet-paper-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-toilet-paper.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-airbrush-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-airbrush.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-align-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-align.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-blur-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-blur.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-brightness-contrast-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-brightness-contrast.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-bucket-fill-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-bucket-fill.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-by-color-select-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-by-color-select.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-cage-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-cage.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-clone-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-clone.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-color-balance-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-color-balance.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-color-picker-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-color-picker.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-color-temperature-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-color-temperature.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-colorize-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-colorize.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-crop-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-crop.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-curves-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-curves.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-desaturate-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-desaturate.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-dodge-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-dodge.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-ellipse-select-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-ellipse-select.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-eraser-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-eraser.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-exposure-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-exposure.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-flip-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-flip.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-foreground-select-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-foreground-select.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-free-select-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-free-select.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-fuzzy-select-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-fuzzy-select.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-gradient-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-gradient.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-handle-transform-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-handle-transform.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-heal-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-heal.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-hue-saturation-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-hue-saturation.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-ink-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-ink.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-iscissors-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-iscissors.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-levels-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-levels.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-measure-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-measure.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-move-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-move.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-mypaint-brush-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-mypaint-brush.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-n-point-deformation-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-n-point-deformation.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-offset-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-offset.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-options-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-options.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-paint-select-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-paint-select.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-paintbrush-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-paintbrush.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-path-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-path.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-pencil-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-pencil.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-perspective-clone-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-perspective-clone.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-perspective-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-perspective.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-posterize-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-posterize.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-preset-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-preset.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-rect-select-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-rect-select.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-rotate-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-rotate.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-scale-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-scale.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-seamless-clone-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-seamless-clone.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-shadows-highlights-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-shadows-highlights.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-shear-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-shear.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-smudge-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-smudge.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-text-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-text.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-threshold-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-threshold.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-transform-3d-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-transform-3d.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-unified-transform-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-unified-transform.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-warp-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-warp.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-zoom-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tool-zoom.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tools-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-tools.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-transform-3d-camera-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-transform-3d-camera.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-transform-3d-move-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-transform-3d-move.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-transform-3d-rotate-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-transform-3d-rotate.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-transparency-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-transparency.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-undo-history-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-undo-history.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-user-manual-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-user-manual.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-vcenter-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-vcenter.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-vchain-broken-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-vchain-broken.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-vchain-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-vchain.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-vfill-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-vfill.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-video-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-video.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-visible-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-visible.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-web-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-web.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-wilber-eek-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-wilber-eek.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-zoom-follow-window-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gimp-zoom-follow-window.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-bottom-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-bottom.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-down-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-down.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-first-rtl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-first-symbolic-rtl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-first-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-first.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-home-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-home.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-last-rtl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-last-symbolic-rtl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-last-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-last.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-next-rtl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-next-symbolic-rtl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-next-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-next.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-previous-rtl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-previous-symbolic-rtl.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-previous-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-previous.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-top-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-top.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-up-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/go-up.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-cancel-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-cancel.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-edit-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-edit.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-no-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-no.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-ok-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-ok.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-select-color-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-select-color.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-select-font-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-select-font.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-yes-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/gtk-yes.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/help-about-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/help-about.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/image-missing-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/image-missing.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/list-add-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/list-add.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/list-remove-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/list-remove.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-optical-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-optical.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-playback-pause-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-playback-pause.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-playback-start-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-playback-start.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-record-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-record.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-seek-backward-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-seek-backward.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-skip-backward-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-skip-backward.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-skip-forward-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/media-skip-forward.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/object-flip-horizontal-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/object-flip-horizontal.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/object-flip-vertical-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/object-flip-vertical.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/object-rotate-left-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/object-rotate-left.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/object-rotate-right-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/object-rotate-right.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/preferences-system-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/preferences-system.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/process-stop-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/process-stop.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/system-run-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/system-run.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/view-fullscreen-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/view-fullscreen.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/view-refresh-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/view-refresh.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/view-shrink-wrap-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/view-shrink-wrap.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/view-zoom-fill-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/view-zoom-fill.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/window-new-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/window-new.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/zoom-fit-best-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/zoom-fit-best.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/zoom-in-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/zoom-in.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/zoom-original-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/zoom-original.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/zoom-out-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/apps/zoom-out.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/logo/unisize/gimp-wilber-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/Default/scalable/logo/unisize/gimp-wilber.svg",
+                    "usr/share/gimp/3.0/icons/Legacy/index.theme",
+                    "usr/share/gimp/3.0/icons/hicolor/index.theme",
+                    "usr/share/gimp/3.0/icons/hicolor/scalable/actions/switch-off-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/hicolor/scalable/actions/switch-on-symbolic.svg",
+                    "usr/share/gimp/3.0/icons/hicolor/scalable/status/",
+                    "usr/share/gimp/3.0/images/gimp-splash.png",
+                    "usr/share/gimp/3.0/menus/image-menu.ui",
+                    "usr/share/gimp/3.0/palettes/Bears.gpl",
+                    "usr/share/gimp/3.0/palettes/Bgold.gpl",
+                    "usr/share/gimp/3.0/palettes/Blues.gpl",
+                    "usr/share/gimp/3.0/palettes/Borders.gpl",
+                    "usr/share/gimp/3.0/palettes/Browns_And_Yellows.gpl",
+                    "usr/share/gimp/3.0/palettes/Caramel.gpl",
+                    "usr/share/gimp/3.0/palettes/Cascade.gpl",
+                    "usr/share/gimp/3.0/palettes/China.gpl",
+                    "usr/share/gimp/3.0/palettes/Coldfire.gpl",
+                    "usr/share/gimp/3.0/palettes/Cool_Colors.gpl",
+                    "usr/share/gimp/3.0/palettes/Cranes.gpl",
+                    "usr/share/gimp/3.0/palettes/Dark_pastels.gpl",
+                    "usr/share/gimp/3.0/palettes/Default.gpl",
+                    "usr/share/gimp/3.0/palettes/Ega.gpl",
+                    "usr/share/gimp/3.0/palettes/Firecode.gpl",
+                    "usr/share/gimp/3.0/palettes/Gold.gpl",
+                    "usr/share/gimp/3.0/palettes/GrayViolet.gpl",
+                    "usr/share/gimp/3.0/palettes/Grayblue.gpl",
+                    "usr/share/gimp/3.0/palettes/Grays.gpl",
+                    "usr/share/gimp/3.0/palettes/Greens.gpl",
+                    "usr/share/gimp/3.0/palettes/Hilite.gpl",
+                    "usr/share/gimp/3.0/palettes/Khaki.gpl",
+                    "usr/share/gimp/3.0/palettes/Lights.gpl",
+                    "usr/share/gimp/3.0/palettes/Muted.gpl",
+                    "usr/share/gimp/3.0/palettes/Named_Colors.gpl",
+                    "usr/share/gimp/3.0/palettes/News3.gpl",
+                    "usr/share/gimp/3.0/palettes/Op2.gpl",
+                    "usr/share/gimp/3.0/palettes/Paintjet.gpl",
+                    "usr/share/gimp/3.0/palettes/Pastels.gpl",
+                    "usr/share/gimp/3.0/palettes/Plasma.gpl",
+                    "usr/share/gimp/3.0/palettes/Reds.gpl",
+                    "usr/share/gimp/3.0/palettes/Reds_And_Purples.gpl",
+                    "usr/share/gimp/3.0/palettes/Royal.gpl",
+                    "usr/share/gimp/3.0/palettes/Tango.gpl",
+                    "usr/share/gimp/3.0/palettes/Topographic.gpl",
+                    "usr/share/gimp/3.0/palettes/Visibone.gpl",
+                    "usr/share/gimp/3.0/palettes/Visibone_2.gpl",
+                    "usr/share/gimp/3.0/palettes/Volcano.gpl",
+                    "usr/share/gimp/3.0/palettes/Warm_Colors.gpl",
+                    "usr/share/gimp/3.0/palettes/Web.gpl",
+                    "usr/share/gimp/3.0/patterns/Animal/leather.pat",
+                    "usr/share/gimp/3.0/patterns/Animal/leopard.pat",
+                    "usr/share/gimp/3.0/patterns/Fabric/burlap.pat",
+                    "usr/share/gimp/3.0/patterns/Food/choc_swirl.pat",
+                    "usr/share/gimp/3.0/patterns/Food/java.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/3dgreen.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/Stripes1px.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/Stripes2px.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/blue.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/bluegrid.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/bluesquares.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/blueweb.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/fibers.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/nops.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/pastel.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/qube1.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/recessed.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/redcube.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/sm_squares.pat",
+                    "usr/share/gimp/3.0/patterns/Legacy/warning.pat",
+                    "usr/share/gimp/3.0/patterns/Paper/crinklepaper.pat",
+                    "usr/share/gimp/3.0/patterns/Paper/paper.pat",
+                    "usr/share/gimp/3.0/patterns/Plant/leaves.pat",
+                    "usr/share/gimp/3.0/patterns/Sky/lightning.pat",
+                    "usr/share/gimp/3.0/patterns/Sky/sky.pat",
+                    "usr/share/gimp/3.0/patterns/Sky/starfield.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/Craters.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/Moonfoot.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/amethyst.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/brick.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/cracked.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/granite1.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/ground1.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/marble1.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/marble2.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/marble3.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/pink_marble.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/rock.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/slate.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/stone33.pat",
+                    "usr/share/gimp/3.0/patterns/Stone/terra.pat",
+                    "usr/share/gimp/3.0/patterns/Water/electric.pat",
+                    "usr/share/gimp/3.0/patterns/Water/ice.pat",
+                    "usr/share/gimp/3.0/patterns/Water/pool.pat",
+                    "usr/share/gimp/3.0/patterns/Water/rain.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/bark.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/burlwood.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/corkboard.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/parque1.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/parque2.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/parque3.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/pine.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/walnut.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/wood1.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/wood2.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/wood3.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/wood4.pat",
+                    "usr/share/gimp/3.0/patterns/Wood/wood5.pat",
+                    "usr/share/gimp/3.0/scripts/add-bevel.scm",
+                    "usr/share/gimp/3.0/scripts/addborder.scm",
+                    "usr/share/gimp/3.0/scripts/blend-anim.scm",
+                    "usr/share/gimp/3.0/scripts/burn-in-anim.scm",
+                    "usr/share/gimp/3.0/scripts/carve-it.scm",
+                    "usr/share/gimp/3.0/scripts/chrome-it.scm",
+                    "usr/share/gimp/3.0/scripts/circuit.scm",
+                    "usr/share/gimp/3.0/scripts/clothify.scm",
+                    "usr/share/gimp/3.0/scripts/coffee.scm",
+                    "usr/share/gimp/3.0/scripts/difference-clouds.scm",
+                    "usr/share/gimp/3.0/scripts/distress-selection.scm",
+                    "usr/share/gimp/3.0/scripts/drop-shadow.scm",
+                    "usr/share/gimp/3.0/scripts/font-map.scm",
+                    "usr/share/gimp/3.0/scripts/fuzzyborder.scm",
+                    "usr/share/gimp/3.0/scripts/gimp-online.scm",
+                    "usr/share/gimp/3.0/scripts/gradient-example.scm",
+                    "usr/share/gimp/3.0/scripts/guides-from-selection.scm",
+                    "usr/share/gimp/3.0/scripts/guides-new-percent.scm",
+                    "usr/share/gimp/3.0/scripts/guides-new.scm",
+                    "usr/share/gimp/3.0/scripts/guides-remove-all.scm",
+                    "usr/share/gimp/3.0/scripts/images/beavis.jpg",
+                    "usr/share/gimp/3.0/scripts/images/texture.jpg",
+                    "usr/share/gimp/3.0/scripts/images/texture1.jpg",
+                    "usr/share/gimp/3.0/scripts/images/texture2.jpg",
+                    "usr/share/gimp/3.0/scripts/images/texture3.jpg",
+                    "usr/share/gimp/3.0/scripts/lava.scm",
+                    "usr/share/gimp/3.0/scripts/line-nova.scm",
+                    "usr/share/gimp/3.0/scripts/mkbrush.scm",
+                    "usr/share/gimp/3.0/scripts/old-photo.scm",
+                    "usr/share/gimp/3.0/scripts/palette-export.scm",
+                    "usr/share/gimp/3.0/scripts/paste-as-brush.scm",
+                    "usr/share/gimp/3.0/scripts/paste-as-pattern.scm",
+                    "usr/share/gimp/3.0/scripts/perspective-shadow.scm",
+                    "usr/share/gimp/3.0/scripts/reverse-layers.scm",
+                    "usr/share/gimp/3.0/scripts/ripply-anim.scm",
+                    "usr/share/gimp/3.0/scripts/round-corners.scm",
+                    "usr/share/gimp/3.0/scripts/script-fu-set-cmap.scm",
+                    "usr/share/gimp/3.0/scripts/script-fu-util.scm",
+                    "usr/share/gimp/3.0/scripts/scriptfu-init/init.scm",
+                    "usr/share/gimp/3.0/scripts/scriptfu-init/plug-in-compat.scm",
+                    "usr/share/gimp/3.0/scripts/scriptfu-init/script-fu-compat.scm",
+                    "usr/share/gimp/3.0/scripts/selection-round.scm",
+                    "usr/share/gimp/3.0/scripts/slide.scm",
+                    "usr/share/gimp/3.0/scripts/spinning-globe.scm",
+                    "usr/share/gimp/3.0/scripts/tileblur.scm",
+                    "usr/share/gimp/3.0/scripts/unsharp-mask.scm",
+                    "usr/share/gimp/3.0/scripts/waves-anim.scm",
+                    "usr/share/gimp/3.0/scripts/weave.scm",
+                    "usr/share/gimp/3.0/scripts/xach-effect.scm",
+                    "usr/share/gimp/3.0/tags/gimp-tags-default.xml",
+                    "usr/share/gimp/3.0/themes/Default/common-dark.css",
+                    "usr/share/gimp/3.0/themes/Default/common.css",
+                    "usr/share/gimp/3.0/themes/Default/gimp-dark.css",
+                    "usr/share/gimp/3.0/themes/Default/gimp-gray.css",
+                    "usr/share/gimp/3.0/themes/Default/gimp-light.css",
+                    "usr/share/gimp/3.0/themes/Default/ui/separator-handle-h-dark.svg",
+                    "usr/share/gimp/3.0/themes/Default/ui/separator-handle-v-dark.svg",
+                    "usr/share/gimp/3.0/themes/System/gimp.css",
+                    "usr/share/gimp/3.0/tool-presets/Crop/16_10.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/16_9.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/3_2-Landscape.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/3_2-Portrait.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/4_3-Landscape.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/4_3-Portrait.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Crop/Square.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Crop-16-9.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Crop-Composition.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/FX-Confetti.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/FX-Radial-Softlight.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Fill-Paper.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Glow-Lights.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Smooth-Clone.gtp",
+                    "usr/share/gimp/3.0/tool-presets/FX/Vignette.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Airbrush-Color-From-Gradient.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Airbrush.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Basic-Knife.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Basic-Round-Detail.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Basic-Round.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Bristles.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Eraser-Hard.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Noise.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Paintbrush-Color-From-Gradient.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Pencil-Color-From-Gradient.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Smudge-Rough.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Smudge-Soft.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Soft-Oil.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Splatters.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Structure.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Paint/Vegetal.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Selection/Circle-200px.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Selection/Feathered-Selection.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Blue-Pen.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Eraser-Soft.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Ink-Smooth.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Ink-Thin.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Pencil-Soft.gtp",
+                    "usr/share/gimp/3.0/tool-presets/Sketch/Pencil.gtp",
+                    "usr/share/icons/hicolor/16x16/apps/gimp.png",
+                    "usr/share/icons/hicolor/256x256/apps/gimp.png",
+                    "usr/share/icons/hicolor/32x32/apps/gimp.png",
+                    "usr/share/icons/hicolor/48x48/apps/gimp.png",
+                    "usr/share/icons/hicolor/64x64/apps/gimp.png",
+                    "usr/share/icons/hicolor/scalable/apps/gimp.svg",
+                    "usr/share/locale/",
+                ],
+            },
+            Deb {
+                pool: "main/a/at-spi2-core/gir1.2-atk-1.0_2.60.0-1_amd64.deb",
+                sha256: "20f60cf374a7850568707b4481db549481b0ffa7a577010076e1e6170e166a5c",
+                files: &["usr/lib/x86_64-linux-gnu/girepository-1.0/Atk-1.0.typelib"],
+            },
+            Deb {
+                pool: "universe/b/babl/gir1.2-babl-0.1_0.1.124-1_amd64.deb",
+                sha256: "e164330b80c5c6a76eeae8acfea07b25c47e8f1801e4416bdd28c1fbd980b0b1",
+                files: &["usr/lib/x86_64-linux-gnu/girepository-1.0/Babl-0.1.typelib"],
+            },
+            Deb {
+                pool: "main/g/gobject-introspection/gir1.2-freedesktop_1.86.0-6build1_amd64.deb",
+                sha256: "b03241fd8fcee4ee829ebfecadf28799ec7da36c2e0ab49f2626def937a1f4b6",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/cairo-1.0.typelib",
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/freetype2-2.0.typelib",
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/xlib-2.0.typelib",
+                ],
+            },
+            Deb {
+                pool: "main/g/gdk-pixbuf/gir1.2-gdkpixbuf-2.0_2.44.5+dfsg-4ubuntu1_amd64.deb",
+                sha256: "58a8f3f358a96d0039671c697a8241781fc95f70593aafef78b7d09625305d13",
+                files: &["usr/lib/x86_64-linux-gnu/girepository-1.0/GdkPixbuf-2.0.typelib"],
+            },
+            Deb {
+                pool: "universe/g/gegl/gir1.2-gegl-0.4_0.4.70-1_amd64.deb",
+                sha256: "24c8eea81eaed2a2691453af28f3b7e667518e86b2430c6afc908f629d843cb3",
+                files: &["usr/lib/x86_64-linux-gnu/girepository-1.0/Gegl-0.4.typelib"],
+            },
+            Deb {
+                pool: "main/g/gexiv2/gir1.2-gexiv2-0.10_0.14.6-2_amd64.deb",
+                sha256: "50b9cc7f6d5f613bf9f58c08f884841a7fbfd61bc6c1e2234d5afe4ba62a354e",
+                files: &["usr/lib/x86_64-linux-gnu/girepository-1.0/GExiv2-0.10.typelib"],
+            },
+            Deb {
+                pool: "universe/g/gimp/gir1.2-gimp-3.0_3.2.2-1_amd64.deb",
+                sha256: "c39bbc0dbf5bcd3b384ca13bb1e77d508ef85ce438f07eb460734ac46a1e82b1",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/Gimp-3.0.typelib",
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/GimpUi-3.0.typelib",
+                ],
+            },
+            Deb {
+                pool: "main/g/glib2.0/gir1.2-glib-2.0_2.88.0-1_amd64.deb",
+                sha256: "b4b0b4822f5cae347a6ed288adb60a8ebb2f9ea9ee66469e4a810f48b89a87aa",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/GLib-2.0.typelib",
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/GModule-2.0.typelib",
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/GObject-2.0.typelib",
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/Gio-2.0.typelib",
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/GioUnix-2.0.typelib",
+                ],
+            },
+            Deb {
+                pool: "main/g/gtk+3.0/gir1.2-gtk-3.0_3.24.52-0ubuntu1_amd64.deb",
+                sha256: "d6d33238376565ea10358c946a1eb1dd1d638a0ffd7b4399c3871244d53811f5",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/Gdk-3.0.typelib",
+                    "usr/lib/x86_64-linux-gnu/girepository-1.0/Gtk-3.0.typelib",
+                ],
+            },
+            Deb {
+                pool: "main/h/harfbuzz/gir1.2-harfbuzz-0.0_12.3.2-2_amd64.deb",
+                sha256: "e91702d05c014768a85814efde45133b0e1a75faf1c8ff51a31563644229ffc6",
+                files: &["usr/lib/x86_64-linux-gnu/girepository-1.0/HarfBuzz-0.0.typelib"],
+            },
+            Deb {
+                pool: "main/p/pango1.0/gir1.2-pango-1.0_1.57.0-1_amd64.deb",
+                sha256: "799885145fe5982478fc53ce0206072a7dd402d6e42f5f7a951a78e9e49bcb84",
+                files: &["usr/lib/x86_64-linux-gnu/girepository-1.0/Pango-1.0.typelib"],
+            },
+            Deb {
+                pool: "main/g/glycin/glycin-loaders_2.1.1+ds-0ubuntu1_amd64.deb",
+                sha256: "2b94910793dddd6cc6cc689bea65c526e3c3e3dfd2125f4464c239fc6e5856d4",
+                files: &["usr/libexec/glycin-loaders/2+/glycin-image-rs"],
+            },
+            Deb {
+                pool: "main/h/hicolor-icon-theme/hicolor-icon-theme_0.18-2build1_all.deb",
+                sha256: "d05726c4a4dc15079ed2bd6ef633e7d6dca4c4be20296148b1c558dbd5a6c570",
+                files: &["usr/share/icons/hicolor/scalable/actions/"],
+            },
+            Deb {
+                pool: "main/a/acl/libacl1_2.3.2-2_amd64.deb",
+                sha256: "77f8d49c031182bbd6c4fe4ec9ad49edb5d4607f2dac795fc6932dce0e8f541e",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libacl.so.1",
+                    "usr/lib/x86_64-linux-gnu/libacl.so.1.1.2302",
+                ],
+            },
+            Deb {
+                pool: "universe/s/suitesparse/libamd3_7.12.2+dfsg-1ubuntu1_amd64.deb",
+                sha256: "13dbd6bd4bbd19745b1196993eaa4d3fba5efa2e8f262ed01aec222a20cd8904",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libamd.so.3",
+                    "usr/lib/x86_64-linux-gnu/libamd.so.3.3.4",
+                ],
+            },
+            Deb {
+                pool: "main/a/apparmor/libapparmor1_5.0.0~beta1-0ubuntu7_amd64.deb",
+                sha256: "78e66b3c6096e05898796ccb454c7089af6d360e042cf8cc5a5e535a924b8cad",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libapparmor.so.1",
+                    "usr/lib/x86_64-linux-gnu/libapparmor.so.1.29.4",
+                ],
+            },
+            Deb {
+                pool: "main/a/appstream/libappstream5_1.1.2-1_amd64.deb",
+                sha256: "7269ad98c70e9696ba3b8d78ca2c876224acfd0b2a3bb960e7f23a2c8d2207cb",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libappstream.so.1.1.2",
+                    "usr/lib/x86_64-linux-gnu/libappstream.so.5",
+                ],
+            },
+            Deb {
+                pool: "main/liba/libarchive/libarchive13t64_3.8.5-1ubuntu2_amd64.deb",
+                sha256: "b3102c29375ebd01f71243e93cf55525ab3a5b359d07fbf62e995971754596da",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libarchive.so.13",
+                    "usr/lib/x86_64-linux-gnu/libarchive.so.13.8.5",
+                ],
+            },
+            Deb {
+                pool: "main/a/alsa-lib/libasound2t64_1.2.15.3-1ubuntu1_amd64.deb",
+                sha256: "bf19fe95f14e25c770fcdbe5e70e7d44bb4a9b1bedf58f239e86d4c677b7d10a",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libasound.so.2",
+                    "usr/lib/x86_64-linux-gnu/libasound.so.2.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/liba/libassuan/libassuan9_3.0.2-2build1_amd64.deb",
+                sha256: "5ff0d3cfbca10a8f0e0e47b7d8adeb01645d0542caf02775e820e1c983a47058",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libassuan.so.9",
+                    "usr/lib/x86_64-linux-gnu/libassuan.so.9.0.2",
+                ],
+            },
+            Deb {
+                pool: "main/liba/libasyncns/libasyncns0_0.8-7_amd64.deb",
+                sha256: "952ea8a8d01a4fe98ff8379553a7a3764492897464c2684105f76ebb6b19939a",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libasyncns.so.0",
+                    "usr/lib/x86_64-linux-gnu/libasyncns.so.0.3.1",
+                ],
+            },
+            Deb {
+                pool: "main/a/attr/libattr1_2.5.2-4_amd64.deb",
+                sha256: "195ca7b0ca6c91c4b4b9e17baf98b98143e3a14a0571f1613f04b318b9799510",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libattr.so.1",
+                    "usr/lib/x86_64-linux-gnu/libattr.so.1.1.2502",
+                ],
+            },
+            Deb {
+                pool: "universe/b/babl/libbabl-0.1-0_0.1.124-1_amd64.deb",
+                sha256: "f4340699b47140c407d02b6f77fd439695d6b7e65b2dda173ba04fa7cb5f2aa9",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/CIE.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/HCY.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/HSL.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/HSV.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/avx2-int8.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/cairo.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/double.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/fast-float.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/float.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/formats.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/gegl-fixups.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/gggl-lies.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/gggl-table-lies.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/gggl-table.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/gggl.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/gimp-8bit.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/grey.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/half.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/naive-CMYK.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/oklab.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/simple.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/sse-half.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/sse2-float.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/sse2-int16.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/sse2-int8.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/sse4-int8.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/two-table.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/u16.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/u32.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-CIE.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-cairo.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-double.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-float.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-gegl-fixups.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-gggl-lies.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-gggl.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-grey.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-simple.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-u16.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-u32.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/x86-64-v3-ycbcr.so",
+                    "usr/lib/x86_64-linux-gnu/babl-0.1/ycbcr.so",
+                    "usr/lib/x86_64-linux-gnu/libbabl-0.1.so.0",
+                    "usr/lib/x86_64-linux-gnu/libbabl-0.1.so.0.223.1",
+                ],
+            },
+            Deb {
+                pool: "main/l/lapack/libblas3_3.12.1-7ubuntu1_amd64.deb",
+                sha256: "09cfdecf627a16e180938d81cb4208c519097f2434744ea6c93c919fa2049578",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/blas/libblas.so.3.12.1",
+                    "usr/lib/x86_64-linux-gnu/libblas.so.3=usr/lib/x86_64-linux-gnu/blas/libblas.so.3.12.1",
+                ],
+            },
+            Deb {
+                pool: "main/g/glibc/libc6_2.43-2ubuntu2_amd64.deb",
+                sha256: "c13775dc0c984403f3fcad229d14507a9f387763bd07ace1e5f93897ee6b8434",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/gconv/gconv-modules.cache",
+                    "usr/lib/x86_64-linux-gnu/libmvec.so.1",
+                    "usr/lib64/",
+                ],
+            },
+            Deb {
+                pool: "universe/s/suitesparse/libcamd3_7.12.2+dfsg-1ubuntu1_amd64.deb",
+                sha256: "b252ee4b751f93bd4f5aab2104bcb6f2fdcd4dc33f79c96a33e100c6775440c7",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libcamd.so.3",
+                    "usr/lib/x86_64-linux-gnu/libcamd.so.3.3.5",
+                ],
+            },
+            Deb {
+                pool: "universe/s/suitesparse/libccolamd3_7.12.2+dfsg-1ubuntu1_amd64.deb",
+                sha256: "c4e6693e4cc65bd149998eee3717f58c01faee33fa29ebbf2047d61110d595f3",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libccolamd.so.3",
+                    "usr/lib/x86_64-linux-gnu/libccolamd.so.3.3.5",
+                ],
+            },
+            Deb {
+                pool: "universe/s/suitesparse/libcholmod5_7.12.2+dfsg-1ubuntu1_amd64.deb",
+                sha256: "9f9ec58b6d56d92f6b9d1d00d9ac32bc91708e4a808f0583d4097cf3fcbc45c8",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libcholmod.so.5",
+                    "usr/lib/x86_64-linux-gnu/libcholmod.so.5.3.4",
+                ],
+            },
+            Deb {
+                pool: "main/s/suitesparse/libcolamd3_7.12.2+dfsg-1ubuntu1_amd64.deb",
+                sha256: "3eeaf8fe60c500c555382b65ab030bb9fbc25badd8370dab38349a401131468d",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libcolamd.so.3",
+                    "usr/lib/x86_64-linux-gnu/libcolamd.so.3.3.5",
+                ],
+            },
+            Deb {
+                pool: "main/c/curl/libcurl3t64-gnutls_8.18.0-1ubuntu2_amd64.deb",
+                sha256: "866fd07f5d3367fa42f1b0957007478b110f30918c08bedff566a2d6217bc3da",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libcurl-gnutls.so.4",
+                    "usr/lib/x86_64-linux-gnu/libcurl-gnutls.so.4.8.0",
+                ],
+            },
+            Deb {
+                pool: "main/libd/libdeflate/libdeflate0_1.23-2ubuntu1_amd64.deb",
+                sha256: "40ee517cffd3730405be6ae30826533bec0ddf8773bb7ac2cccd22a57acafc25",
+                files: &["usr/lib/x86_64-linux-gnu/libdeflate.so.0"],
+            },
+            Deb {
+                pool: "main/e/exiv2/libexiv2-28_0.28.8+dfsg-1_amd64.deb",
+                sha256: "d6ce2c1699dcbccf64a5c90c1774ac143c757ca9ab737d9609456e3aed06a97f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libexiv2.so.0.28.8",
+                    "usr/lib/x86_64-linux-gnu/libexiv2.so.28",
+                ],
+            },
+            Deb {
+                pool: "main/f/flac/libflac14_1.5.0+ds-5_amd64.deb",
+                sha256: "ea6cbd9399a646b073d36d8d33444f39f9f1dd63f5fa8cd18906573f51cc305b",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libFLAC.so.14",
+                    "usr/lib/x86_64-linux-gnu/libFLAC.so.14.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/libf/libfyaml/libfyaml0_0.9.4-1_amd64.deb",
+                sha256: "fb93f8517a7fbabbe890fe6c35f4854f2890547d2b5b76532ee60060d4de94cd",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libfyaml.so.0",
+                    "usr/lib/x86_64-linux-gnu/libfyaml.so.0.0.0",
+                ],
+            },
+            Deb {
+                pool: "universe/g/gegl/libgegl-0.4-0t64_0.4.70-1_amd64.deb",
+                sha256: "759759c275dfc4adab36e2c38db2f9837122703acf753ead7ef7d17a37bb96fd",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/exr-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/exr-save.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-common-cxx-x86_64-v2.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-common-cxx-x86_64-v3.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-common-cxx.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-common-gpl3-x86_64-v2.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-common-gpl3-x86_64-v3.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-common-gpl3.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-common-x86_64-v2.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-common-x86_64-v3.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-common.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-core.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-generated-x86_64-v2.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-generated-x86_64-v3.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-generated.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-transformops-x86_64-v2.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gegl-transformops-x86_64-v3.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/gif-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/jpg-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/jpg-save.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/lcms-from-profile.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/matting-levin.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/npd.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/npy-save.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/path.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/pdf-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/pixbuf-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/pixbuf-save.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/png-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/png-save.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/ppm-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/ppm-save.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/raw-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/rgbe-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/rgbe-save.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/sdl2-display.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/seamless-clone-compose.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/seamless-clone.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/svg-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/text.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/tiff-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/tiff-save.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/transformops.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/v4l.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/vector-fill.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/vector-stroke.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/webp-load.so",
+                    "usr/lib/x86_64-linux-gnu/gegl-0.4/webp-save.so",
+                    "usr/lib/x86_64-linux-gnu/libgegl-0.4.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgegl-0.4.so.0.469.1",
+                    "usr/lib/x86_64-linux-gnu/libgegl-npd-0.4.so",
+                    "usr/lib/x86_64-linux-gnu/libgegl-sc-0.4.so",
+                ],
+            },
+            Deb {
+                pool: "main/g/gexiv2/libgexiv2-2_0.14.6-2_amd64.deb",
+                sha256: "fa4a4d6c5c108396d7c1b218ea6a11b9948672fadaf0463a4a8df70d836b3c79",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgexiv2.so.2",
+                    "usr/lib/x86_64-linux-gnu/libgexiv2.so.2.14.6",
+                ],
+            },
+            Deb {
+                pool: "main/g/gcc-16/libgfortran5_16-20260322-1ubuntu1_amd64.deb",
+                sha256: "3f028ea56be008c74d197006d65faa320e29824837dd111c8f76b84f6bb578d2",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgfortran.so.5",
+                    "usr/lib/x86_64-linux-gnu/libgfortran.so.5.0.0",
+                ],
+            },
+            Deb {
+                pool: "universe/g/gimp/libgimp-3.0-0_3.2.2-1_amd64.deb",
+                sha256: "f652fdf9f402af6276b358de5970f10890194c6e4025e0bff8384d1b714785ed",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgimp-3.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgimp-3.0.so.0.200.2",
+                    "usr/lib/x86_64-linux-gnu/libgimp-scriptfu-3.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgimp-scriptfu-3.0.so.0.200.2",
+                    "usr/lib/x86_64-linux-gnu/libgimpbase-3.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgimpbase-3.0.so.0.200.2",
+                    "usr/lib/x86_64-linux-gnu/libgimpcolor-3.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgimpcolor-3.0.so.0.200.2",
+                    "usr/lib/x86_64-linux-gnu/libgimpconfig-3.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgimpconfig-3.0.so.0.200.2",
+                    "usr/lib/x86_64-linux-gnu/libgimpmath-3.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgimpmath-3.0.so.0.200.2",
+                    "usr/lib/x86_64-linux-gnu/libgimpmodule-3.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgimpmodule-3.0.so.0.200.2",
+                    "usr/lib/x86_64-linux-gnu/libgimpthumb-3.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgimpthumb-3.0.so.0.200.2",
+                    "usr/lib/x86_64-linux-gnu/libgimpui-3.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgimpui-3.0.so.0.200.2",
+                    "usr/lib/x86_64-linux-gnu/libgimpwidgets-3.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgimpwidgets-3.0.so.0.200.2",
+                ],
+            },
+            Deb {
+                pool: "main/g/gobject-introspection/libgirepository-1.0-1_1.86.0-6build1_amd64.deb",
+                sha256: "c795b1be91db3db57c31786523929815f01a461951132dd7570b4579a861d27f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgirepository-1.0.so.1",
+                    "usr/lib/x86_64-linux-gnu/libgirepository-1.0.so.1.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/g/gmp/libgmp10_6.3.0+dfsg-5ubuntu2_amd64.deb",
+                sha256: "a9bbe9d4a4bcd5875bbd0f53e67c379bc881d1c1a80522d51dfb4b107cc31819",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgmp.so.10",
+                    "usr/lib/x86_64-linux-gnu/libgmp.so.10.5.0",
+                ],
+            },
+            Deb {
+                pool: "main/g/gnutls28/libgnutls30t64_3.8.12-2ubuntu1_amd64.deb",
+                sha256: "0068e6a881ab327aff6c0f57357de7f397cb43302a39b10015123c1914f14d2e",
+                files: &[
+                    "etc/gnutls/config",
+                    "usr/lib/x86_64-linux-gnu/libgnutls.so.30",
+                    "usr/lib/x86_64-linux-gnu/libgnutls.so.30.41.1",
+                ],
+            },
+            Deb {
+                pool: "main/g/gcc-16/libgomp1_16-20260322-1ubuntu1_amd64.deb",
+                sha256: "add19738c63794d2aa9ac529d3b8aebe2e88980faecb6c1c59f07aefd6c3c314",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgomp.so.1",
+                    "usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/g/gpgme1.0/libgpgme45_2.0.1-2build1_amd64.deb",
+                sha256: "b95f81d26bd4922510eb58a08f9c0bf143781cb23a907ce9ede7a3b1c6024be6",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgpgme.so.45",
+                    "usr/lib/x86_64-linux-gnu/libgpgme.so.45.0.1",
+                ],
+            },
+            Deb {
+                pool: "main/g/gpgmepp/libgpgmepp7_2.0.0-2_amd64.deb",
+                sha256: "3dd75723159c2c171382f836e491d83d71f5fdf7a58c9f6754d85ff0c725b761",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgpgmepp.so.7",
+                    "usr/lib/x86_64-linux-gnu/libgpgmepp.so.7.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/g/ghostscript/libgs-common_10.06.0~dfsg-3ubuntu1_all.deb",
+                sha256: "be7c90d171aff0597b35ebdb2eefd5a4a8e50a444bcb81ad43c2d120387d3cfb",
+                files: &["usr/share/color/icc/"],
+            },
+            Deb {
+                pool: "main/g/gtk+3.0/libgtk-3-common_3.24.52-0ubuntu1_all.deb",
+                sha256: "bd402f87b106a975272fb12cdeb49d26ff6521e4c909b37b4b091797bf2a732d",
+                files: &[
+                    "usr/share/glib-2.0/schemas/org.gtk.Settings.ColorChooser.gschema.xml",
+                    "usr/share/glib-2.0/schemas/org.gtk.Settings.Debug.gschema.xml",
+                    "usr/share/glib-2.0/schemas/org.gtk.Settings.EmojiChooser.gschema.xml",
+                    "usr/share/glib-2.0/schemas/org.gtk.Settings.FileChooser.gschema.xml",
+                ],
+            },
+            Deb {
+                pool: "main/libg/libgudev/libgudev-1.0-0_238-7build1_amd64.deb",
+                sha256: "fdf0708cb0fbc95c553e3379cf77f6b1c9bb485cf3244c6246c31c7312467c81",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libgudev-1.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libgudev-1.0.so.0.3.0",
+                ],
+            },
+            Deb {
+                pool: "main/n/nettle/libhogweed6t64_3.10.2-1_amd64.deb",
+                sha256: "1c8c808ab24ff3018ac886e3f311edee0f2d4d97d12d3908be52343e89807046",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libhogweed.so.6",
+                    "usr/lib/x86_64-linux-gnu/libhogweed.so.6.11",
+                ],
+            },
+            Deb {
+                pool: "main/libi/libidn2/libidn2-0_2.3.8-4build1_amd64.deb",
+                sha256: "92bdac0f443a648859d06dee3defb9c96864fd76df6cfe617ca70bb261344767",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libidn2.so.0",
+                    "usr/lib/x86_64-linux-gnu/libidn2.so.0.4.0",
+                ],
+            },
+            Deb {
+                pool: "universe/i/imath/libimath-3-1-29t64_3.1.12-1ubuntu5_amd64.deb",
+                sha256: "526ae12ddc13b3c7a9b582e44f43d376aa248e896b2ecf21be1b0c3dc36bfd18",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libImath-3_1.so.29",
+                    "usr/lib/x86_64-linux-gnu/libImath-3_1.so.29.11.0",
+                ],
+            },
+            Deb {
+                pool: "main/libi/libinih/libinih1_61-1ubuntu1_amd64.deb",
+                sha256: "6ee8d9867cc98d192a7b6bc589c61aad12b2e8479c6a0217932afa6c2db99df6",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libinih.so.1",
+                    "usr/lib/x86_64-linux-gnu/libinih.so.61",
+                ],
+            },
+            Deb {
+                pool: "main/libi/libinih/libinireader0_61-1ubuntu1_amd64.deb",
+                sha256: "e3758dc01da47a9c793995bc7560bf1d503616080c81f023949a881103edc10d",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libINIReader.so.0",
+                    "usr/lib/x86_64-linux-gnu/libINIReader.so.61",
+                ],
+            },
+            Deb {
+                pool: "main/j/jbigkit/libjbig0_2.1-6.1ubuntu3_amd64.deb",
+                sha256: "bb2ffa4e359ee7a29dab9902b45e5c85de06f019272700cb2538e4762f141ee8",
+                files: &["usr/lib/x86_64-linux-gnu/libjbig.so.0"],
+            },
+            Deb {
+                pool: "main/libj/libjpeg-turbo/libjpeg-turbo8_2.1.5-4ubuntu4_amd64.deb",
+                sha256: "07672ce1f4d187e005ea0cc35d03e515ba056f3d3e7a9a25d3ef386e184da8c5",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libjpeg.so.8",
+                    "usr/lib/x86_64-linux-gnu/libjpeg.so.8.2.2",
+                ],
+            },
+            Deb {
+                pool: "main/j/json-c/libjson-c5_0.18+ds-3_amd64.deb",
+                sha256: "a19fa7f6504920f13e5fd291cf3c626d7201a48a0d80fde7cdac34f95306d352",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libjson-c.so.5",
+                    "usr/lib/x86_64-linux-gnu/libjson-c.so.5.4.0",
+                ],
+            },
+            Deb {
+                pool: "main/j/json-glib/libjson-glib-1.0-0_1.10.8+ds-2_amd64.deb",
+                sha256: "7b2a877a55554709e550ab2112eb3f8429c653d2340ef718d5ddeaf8b191ecd5",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libjson-glib-1.0.so.0",
+                    "usr/lib/x86_64-linux-gnu/libjson-glib-1.0.so.0.1000.8",
+                ],
+            },
+            Deb {
+                pool: "main/l/lapack/liblapack3_3.12.1-7ubuntu1_amd64.deb",
+                sha256: "f0893023771313599c1fe132dcbbfefa2a1d0a5db77654400f369f2e73325ed1",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/lapack/liblapack.so.3.12.1",
+                    "usr/lib/x86_64-linux-gnu/liblapack.so.3=usr/lib/x86_64-linux-gnu/lapack/liblapack.so.3.12.1",
+                ],
+            },
+            Deb {
+                pool: "main/o/openldap/libldap2_2.6.10+dfsg-1ubuntu5_amd64.deb",
+                sha256: "8d3a361e8655a0ff4a390243059949fa6f22d42d0e266f58b57c124eb21d2993",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/liblber.so.2",
+                    "usr/lib/x86_64-linux-gnu/liblber.so.2.0.200",
+                    "usr/lib/x86_64-linux-gnu/libldap.so.2",
+                    "usr/lib/x86_64-linux-gnu/libldap.so.2.0.200",
+                ],
+            },
+            Deb {
+                pool: "main/l/lerc/liblerc4_4.0.0+ds-5ubuntu2_amd64.deb",
+                sha256: "29051d37d010a7a0e3b5648f73f30d35eb1e313061137c88f3a2c2078925a36d",
+                files: &["usr/lib/x86_64-linux-gnu/libLerc.so.4"],
+            },
+            Deb {
+                pool: "main/l/lz4/liblz4-1_1.10.0-8_amd64.deb",
+                sha256: "28fe729f69be0fa950618f0ee02e479218fd60b11e86c1aa6026c87632ed2aa4",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/liblz4.so.1",
+                    "usr/lib/x86_64-linux-gnu/liblz4.so.1.10.0",
+                ],
+            },
+            Deb {
+                pool: "main/x/xz-utils/liblzma5_5.8.3-1_amd64.deb",
+                sha256: "38ad8500817a9159db210fecfb8c50fa82d7a8829730fcdf8ae60e3523676d41",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/liblzma.so.5",
+                    "usr/lib/x86_64-linux-gnu/liblzma.so.5.8.3",
+                ],
+            },
+            Deb {
+                pool: "main/l/lame/libmp3lame0_3.101~svn6525+dfsg-2_amd64.deb",
+                sha256: "20ab98afff633ed2c8e2cfb1b69a2c0a0cb86c8328b663c5825e6592dab600b4",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libmp3lame.so.0",
+                    "usr/lib/x86_64-linux-gnu/libmp3lame.so.0.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/m/mpg123/libmpg123-0t64_1.33.3-2_amd64.deb",
+                sha256: "5bb06d8890eecd357da520a21e592a93267bb4b48a4f8946d6d67c366f511bbd",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libmpg123.so.0",
+                    "usr/lib/x86_64-linux-gnu/libmpg123.so.0.49.4",
+                ],
+            },
+            Deb {
+                pool: "universe/libm/libmypaint/libmypaint-1.5-1_1.6.0-4build1_amd64.deb",
+                sha256: "f4f4e011d140d28131eca39023621660d1a265e7ecae8a1bc368b7450e1b773a",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libmypaint-1.5.so.1",
+                    "usr/lib/x86_64-linux-gnu/libmypaint-1.5.so.1.1.2",
+                ],
+            },
+            Deb {
+                pool: "main/n/nettle/libnettle8t64_3.10.2-1_amd64.deb",
+                sha256: "83a2a924c11759a2ed6e6f98f456d28e1b026974ce9e6e7ef12c9ac43b2d543e",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libnettle.so.8",
+                    "usr/lib/x86_64-linux-gnu/libnettle.so.8.11",
+                ],
+            },
+            Deb {
+                pool: "main/n/nghttp2/libnghttp2-14_1.68.0-2_amd64.deb",
+                sha256: "d2328ad5c97b9df2decbfdcd3a849cbf38f6c823aa96eef7fe2143b791aac96f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libnghttp2.so.14",
+                    "usr/lib/x86_64-linux-gnu/libnghttp2.so.14.29.2",
+                ],
+            },
+            Deb {
+                pool: "main/n/nspr/libnspr4_4.38.2-1ubuntu1_amd64.deb",
+                sha256: "2f28284b35765aaccad1785ab017425e1ca378c395256331f9c662d04335d43f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libnspr4.so",
+                    "usr/lib/x86_64-linux-gnu/libplc4.so",
+                    "usr/lib/x86_64-linux-gnu/libplds4.so",
+                ],
+            },
+            Deb {
+                pool: "main/n/nss/libnss3_3.120-1ubuntu2_amd64.deb",
+                sha256: "2d6d4480a86b0fbc9d36a61c50d5480b2f8c931845bc5392c5374f7a2108e22b",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libnss3.so",
+                    "usr/lib/x86_64-linux-gnu/libnssutil3.so",
+                    "usr/lib/x86_64-linux-gnu/libsmime3.so",
+                ],
+            },
+            Deb {
+                pool: "main/libo/libogg/libogg0_1.3.6-2_amd64.deb",
+                sha256: "9d62d5e64a55ecfc17a7aeb00a5ca5fdf095bd68c1c397146c81867bec35c31f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libogg.so.0",
+                    "usr/lib/x86_64-linux-gnu/libogg.so.0.8.6",
+                ],
+            },
+            Deb {
+                pool: "universe/o/openexr/libopenexr-3-1-30_3.1.13-2build1_amd64.deb",
+                sha256: "040a38c394002ffcea3f63bebb50b9edf474846341a22f496df943140ff2ca44",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libIex-3_1.so.30",
+                    "usr/lib/x86_64-linux-gnu/libIex-3_1.so.30.13.1",
+                    "usr/lib/x86_64-linux-gnu/libIlmThread-3_1.so.30",
+                    "usr/lib/x86_64-linux-gnu/libIlmThread-3_1.so.30.13.1",
+                    "usr/lib/x86_64-linux-gnu/libOpenEXR-3_1.so.30",
+                    "usr/lib/x86_64-linux-gnu/libOpenEXR-3_1.so.30.13.1",
+                ],
+            },
+            Deb {
+                pool: "main/o/openjpeg2/libopenjp2-7_2.5.4-1_amd64.deb",
+                sha256: "fd7926e9f22b1c6f0d408c18ec6f6961b279cfcc9772196eb2470e9d264b3b05",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libopenjp2.so.2.5.4",
+                    "usr/lib/x86_64-linux-gnu/libopenjp2.so.7",
+                ],
+            },
+            Deb {
+                pool: "main/o/opus/libopus0_1.6.1-1_amd64.deb",
+                sha256: "395f9e1bf29b804e42471e225976d69355c220bbfe469cb4ed387d36184b9bcc",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libopus.so.0",
+                    "usr/lib/x86_64-linux-gnu/libopus.so.0.11.1",
+                ],
+            },
+            Deb {
+                pool: "main/p/p11-kit/libp11-kit0_0.26.2-2_amd64.deb",
+                sha256: "e70d3422e24b267293215134458f340944bf10e92b27147594c69a7dd2823089",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libp11-kit.so.0",
+                    "usr/lib/x86_64-linux-gnu/libp11-kit.so.0.4.8",
+                ],
+            },
+            Deb {
+                pool: "main/p/poppler/libpoppler-glib8t64_26.01.0-2build2_amd64.deb",
+                sha256: "59f86b52dad55e14c147a3df6b0fb6b380f0199741b224fc42049e3ceae06728",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpoppler-glib.so.8",
+                    "usr/lib/x86_64-linux-gnu/libpoppler-glib.so.8.31.0",
+                ],
+            },
+            Deb {
+                pool: "main/p/poppler/libpoppler156_26.01.0-2build2_amd64.deb",
+                sha256: "36d7d4ed95a1b601f13552f2b7432482733258ca9b0a6e27019c93110f75885b",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpoppler.so.156",
+                    "usr/lib/x86_64-linux-gnu/libpoppler.so.156.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/libp/libpsl/libpsl5t64_0.21.2-1.1build2_amd64.deb",
+                sha256: "1ae62705714f660ecdfd70273fce5b226b6cb7b9fe53776531799093edc99774",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpsl.so.5",
+                    "usr/lib/x86_64-linux-gnu/libpsl.so.5.3.4",
+                ],
+            },
+            Deb {
+                pool: "main/p/pulseaudio/libpulse0_17.0+dfsg1-2ubuntu4_amd64.deb",
+                sha256: "d2998fcca587cb21447302a551bfaa6caa7052e7f00a1b041adf4237dd65e4a3",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libpulse.so.0",
+                    "usr/lib/x86_64-linux-gnu/libpulse.so.0.24.3",
+                    "usr/lib/x86_64-linux-gnu/pulseaudio/libpulsecommon-17.0.so",
+                ],
+            },
+            Deb {
+                pool: "main/libr/libraw/libraw23t64_0.21.5b-1ubuntu1_amd64.deb",
+                sha256: "e088ea3497fba3ab7940ddaa4db7639f352b555871235e5600d213725d5e14a3",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libraw.so.23",
+                    "usr/lib/x86_64-linux-gnu/libraw.so.23.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/r/rtmpdump/librtmp1_2.4+20151223.gitfa8646d.1-3_amd64.deb",
+                sha256: "77cbd0ddf7e7487079ec300ff7751322de5e7d67f0f46749591b78ff1442cbe8",
+                files: &["usr/lib/x86_64-linux-gnu/librtmp.so.1"],
+            },
+            Deb {
+                pool: "main/libs/libsamplerate/libsamplerate0_0.2.2-4build2_amd64.deb",
+                sha256: "c554aed04aa0c47928039dc158e26c2b6da44b4570d400574110dcdaedd03360",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libsamplerate.so.0",
+                    "usr/lib/x86_64-linux-gnu/libsamplerate.so.0.2.2",
+                ],
+            },
+            Deb {
+                pool: "main/c/cyrus-sasl2/libsasl2-2_2.1.28+dfsg1-9ubuntu3_amd64.deb",
+                sha256: "11b9b2ce6702d86dd3dea60e08bd15255d7fd9545431a9e555eec47770404de0",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libsasl2.so.2",
+                    "usr/lib/x86_64-linux-gnu/libsasl2.so.2.0.25",
+                ],
+            },
+            Deb {
+                pool: "main/libs/libsdl2/libsdl2-classic_2.32.10+dfsg-6_amd64.deb",
+                sha256: "207811ceab6ab784e6dd86de05ecea82c0860b99768c6526f0dc9937d9321a81",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0=usr/lib/x86_64-linux-gnu/sdl2-classic/libSDL2-2.0.so.0.3200.10",
+                    "usr/lib/x86_64-linux-gnu/sdl2-classic/libSDL2-2.0.so.0.3200.10",
+                ],
+            },
+            Deb {
+                pool: "main/libw/libwebp/libsharpyuv0_1.5.0-0.1build1_amd64.deb",
+                sha256: "4e2c0a8aa97dafd923f00d77ca017d14f16ab79d3b1120892c8215a0b5fb7892",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libsharpyuv.so.0",
+                    "usr/lib/x86_64-linux-gnu/libsharpyuv.so.0.1.1",
+                ],
+            },
+            Deb {
+                pool: "main/libs/libsndfile/libsndfile1_1.2.2-4_amd64.deb",
+                sha256: "678c7e95dea924d1ebe6c59879009dc3e7b61491bc32bd63bea200487d60a454",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libsndfile.so.1",
+                    "usr/lib/x86_64-linux-gnu/libsndfile.so.1.0.37",
+                ],
+            },
+            Deb {
+                pool: "main/libs/libssh2/libssh2-1t64_1.11.1-1build2_amd64.deb",
+                sha256: "63ece6297e34148e2cad22968059b7ac4e631b0ce2aaffa8424774fa2e02dacf",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libssh2.so.1",
+                    "usr/lib/x86_64-linux-gnu/libssh2.so.1.0.1",
+                ],
+            },
+            Deb {
+                pool: "main/o/openssl/libssl3t64_3.5.5-1ubuntu3_amd64.deb",
+                sha256: "fe78b8124fb6c8c0d7efc8f2bd8d5e0d3f217351f520a3b4652ee0afe24143c2",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+                    "usr/lib/x86_64-linux-gnu/libssl.so.3",
+                ],
+            },
+            Deb {
+                pool: "main/s/snowball/libstemmer0d_3.0.1-1_amd64.deb",
+                sha256: "ff03ff070cebf6e5949dc48df012e707b43cc381e4c6da5ece52282af6476eb6",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libstemmer.so.0d",
+                    "usr/lib/x86_64-linux-gnu/libstemmer.so.0d.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/s/suitesparse/libsuitesparseconfig7_7.12.2+dfsg-1ubuntu1_amd64.deb",
+                sha256: "eca0e54a95e0a59307c4131e1726ca814cd2acbe23ca4dde8dc9dc42e477d13f",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libsuitesparseconfig.so.7",
+                    "usr/lib/x86_64-linux-gnu/libsuitesparseconfig.so.7.12.2",
+                ],
+            },
+            Deb {
+                pool: "main/libt/libtasn1-6/libtasn1-6_4.21.0-2_amd64.deb",
+                sha256: "59c74951324ead0ff77ab945d561feb1b21bc189b793600b8e2b7cf4d39b1ee5",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libtasn1.so.6",
+                    "usr/lib/x86_64-linux-gnu/libtasn1.so.6.6.5",
+                ],
+            },
+            Deb {
+                pool: "main/t/tiff/libtiff6_4.7.0-3ubuntu4_amd64.deb",
+                sha256: "67bea9f8bbe05d3b4a827d447a9bb2849a7195c4ddecd83644cd57aa7871d594",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libtiff.so.6",
+                    "usr/lib/x86_64-linux-gnu/libtiff.so.6.1.0",
+                ],
+            },
+            Deb {
+                pool: "main/s/systemd/libudev1_259.5-0ubuntu3_amd64.deb",
+                sha256: "c8acd1fcb6b4041be7697692f47289d3e147462fcb5c1df722848a3096e1cbd3",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libudev.so.1",
+                    "usr/lib/x86_64-linux-gnu/libudev.so.1.7.12",
+                ],
+            },
+            Deb {
+                pool: "universe/s/suitesparse/libumfpack6_7.12.2+dfsg-1ubuntu1_amd64.deb",
+                sha256: "6da9ad4e038b4f332e11713d54fa49fb9546593e3ae7261121cfb29e43cac947",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libumfpack.so.6",
+                    "usr/lib/x86_64-linux-gnu/libumfpack.so.6.3.7",
+                ],
+            },
+            Deb {
+                pool: "main/libu/libunistring/libunistring5_1.3-2build1_amd64.deb",
+                sha256: "88c0163f1acb384abde07641b7e13fcaea36e0a3b88fc57a653779fc429fc46a",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libunistring.so.5",
+                    "usr/lib/x86_64-linux-gnu/libunistring.so.5.2.0",
+                ],
+            },
+            Deb {
+                pool: "main/libv/libvorbis/libvorbis0a_1.3.7-3build2_amd64.deb",
+                sha256: "e8577fd985c3a2bc61212be338207cc2a95e7d6892acaeccb3d455da13e4a480",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libvorbis.so.0",
+                    "usr/lib/x86_64-linux-gnu/libvorbis.so.0.4.9",
+                ],
+            },
+            Deb {
+                pool: "main/libv/libvorbis/libvorbisenc2_1.3.7-3build2_amd64.deb",
+                sha256: "b4230d0064eee971727b204e3d0644a4deb4a3d882eaac2304d379e7a5439f2a",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libvorbisenc.so.2",
+                    "usr/lib/x86_64-linux-gnu/libvorbisenc.so.2.0.12",
+                ],
+            },
+            Deb {
+                pool: "main/libw/libwebp/libwebp7_1.5.0-0.1build1_amd64.deb",
+                sha256: "0a846cf63522d9c1f28d31bdd53e35e223d590a0971bb6927b3ee5092934ce9d",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libwebp.so.7",
+                    "usr/lib/x86_64-linux-gnu/libwebp.so.7.1.10",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxmlb/libxmlb2_0.3.24-2_amd64.deb",
+                sha256: "12aa2999751f0e0944b8369f6c1c17ee50182644545c9a2c5f22dc5188c91c11",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxmlb.so.2",
+                    "usr/lib/x86_64-linux-gnu/libxmlb.so.2.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/libx/libxss/libxss1_1.2.3-1build4_amd64.deb",
+                sha256: "04339441bb49c8b9c6d3297bb569b3b774de61e422f5e7334c34225b08709035",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libXss.so.1",
+                    "usr/lib/x86_64-linux-gnu/libXss.so.1.0.0",
+                ],
+            },
+            Deb {
+                pool: "main/x/xxhash/libxxhash0_0.8.3-2build1_amd64.deb",
+                sha256: "4fff119ba9018fbe2eddfa7759bb4c7b6132ed38dcfa7fc58750c586d1d155a1",
+                files: &[
+                    "usr/lib/x86_64-linux-gnu/libxxhash.so.0",
+                    "usr/lib/x86_64-linux-gnu/libxxhash.so.0.8.3",
+                ],
+            },
+            Deb {
+                pool: "main/p/poppler-data/poppler-data_0.4.12-1build1_all.deb",
+                sha256: "6d2d873d2a77a76ea2a156c15a5ae798fe3711d8736cd2ff3872f53d57567e0e",
+                files: &[
+                    "usr/share/fonts/cMap/",
+                    "usr/share/fonts/cmap/",
+                    "usr/share/poppler/cMap/Adobe-CNS1/",
+                    "usr/share/poppler/cMap/Adobe-GB1/",
+                    "usr/share/poppler/cMap/Adobe-Japan1/",
+                    "usr/share/poppler/cMap/Adobe-Japan2/",
+                    "usr/share/poppler/cMap/Adobe-Korea1/",
+                ],
+            },
+            Deb {
+                pool: "main/p/python3.14/python3.14_3.14.4-1_amd64.deb",
+                sha256: "243b02ca4ce4008daad2cda307b21e1f39cda04b2e46a087ea6fc41592c2690a",
+                files: &["usr/share/pixmaps/"],
+            },
+            Deb {
+                pool: "main/t/tzdata/tzdata_2026a-3ubuntu1_all.deb",
+                sha256: "88bfe1faddda7b905746429af8ee26ac5ace881c8fb9a994de8b54572445e728",
+                files: &["etc/localtime=usr/share/zoneinfo/Etc/UTC", "usr/share/zoneinfo/Etc/UTC"],
+            },
+            Deb {
+                pool: "main/x/xfonts-encodings/xfonts-encodings_1.0.5-0ubuntu3_all.deb",
+                sha256: "1d0610635e1fe757c8df0ec2c2cef511203c7e7bf81bbff332031c8bf87b1847",
+                files: &["usr/share/fonts/X11/encodings/", "usr/share/fonts/X11/encodings/large/"],
+            },
+            Deb {
+                pool: "main/x/xfonts-utils/xfonts-utils_7.7+7build1_amd64.deb",
+                sha256: "97e8c7ce05e09ea5b766c99f4d77e20cb70db61396c2e83bb43715c6e2f0ac1e",
+                files: &["usr/share/fonts/X11/util/"],
             },
         ],
     },
@@ -2088,6 +4884,22 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("lx_pty_pie", "user/lx/bin/pty_test-pie", "lx"),
     ("lx_eventfd", "user/lx/bin/eventfd_test", "lx"),
     ("lx_eventfd_pie", "user/lx/bin/eventfd_test-pie", "lx"),
+    ("lx_procfs", "user/lx/bin/procfs_test", "lx"),
+    ("lx_procfs_pie", "user/lx/bin/procfs_test-pie", "lx"),
+    ("lx_altstack", "user/lx/bin/altstack_test", "lx"),
+    ("lx_altstack_pie", "user/lx/bin/altstack_test-pie", "lx"),
+    ("lx_fdbits", "user/lx/bin/fdbits_test", "lx"),
+    ("lx_fdbits_pie", "user/lx/bin/fdbits_test-pie", "lx"),
+    ("lx_timerfd", "user/lx/bin/timerfd_test", "lx"),
+    ("lx_timerfd_pie", "user/lx/bin/timerfd_test-pie", "lx"),
+    ("lx_caps", "user/lx/bin/caps_test", "lx"),
+    ("lx_caps_pie", "user/lx/bin/caps_test-pie", "lx"),
+    ("lx_fdioctl", "user/lx/bin/fdioctl_test", "lx"),
+    ("lx_fdioctl_pie", "user/lx/bin/fdioctl_test-pie", "lx"),
+    ("lx_shm", "user/lx/bin/shm_test", "lx"),
+    ("lx_shm_pie", "user/lx/bin/shm_test-pie", "lx"),
+    ("lx_sysinfo", "user/lx/bin/sysinfo_test", "lx"),
+    ("lx_sysinfo_pie", "user/lx/bin/sysinfo_test-pie", "lx"),
     ("lx_statfs", "user/lx/bin/statfs_test", "lx"),
     ("lx_statfs_pie", "user/lx/bin/statfs_test-pie", "lx"),
     ("lx_unix", "user/lx/bin/unix_test", "lx"),
@@ -2146,10 +4958,18 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     // /bin/sh (Xwayland runs xkbcomp through it, xterm the user's shell).
     ("x11", "target/prebuilt/x11/usr/", "usr"),
     ("x11", "target/prebuilt/x11/usr/bin/sh", "bin"),
+    ("gimp", "target/prebuilt/gimp/usr/", "usr"),
+    ("gimp", "target/prebuilt/gimp/etc/", "etc"),
     // A distribution's desktop in one window (LD step 6): the session
     // script and twm's configuration.
     ("xdesktop", "user/lx/xdesktop/session.sh", "lx/xdesktop"),
     ("xdesktop", "user/lx/xdesktop/twmrc", "lx/xdesktop"),
+    ("gimp_batch", "target/prebuilt/busybox-linux/busybox", "lx"),
+    ("gimp_batch", "user/lx/gimp/batch.sh", "lx/gimp"),
+    ("gimp_batch", "user/lx/gimp/batch.scm", "lx/gimp"),
+    ("gimp_batch", "user/lx/gimp/gimprc", "lx/gimp"),
+    ("gimp_batch", "user/lx/gimp/in.png", "lx/gimp"),
+    ("gimp_batch", "user/lx/gimp/gui.sh", "lx/gimp"),
     ("lx_busybox", "target/prebuilt/busybox-linux/busybox", "lx"),
     ("lx_busybox", "user/lx/busybox/shell.sh", "lx"),
     ("lx_httpd", "target/prebuilt/busybox-linux/busybox", "lx"),
@@ -4234,8 +7054,12 @@ const BOOT_TEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// ~180 s of run time under TCG) or a whole database (PostgreSQL: initdb,
 /// then the server's ~20 processes) under TCG: tens of seconds locally,
 /// over twice that on a slow CI runner or under the full suite (postgres
-/// took ~45 s alone and hit 120 s there). They get this much instead of
-/// BOOT_TEST_TIMEOUT.
+/// took ~45 s alone and hit 120 s there), or GIMP 3.2 in batch mode
+/// (`lx_gimp_batch`: its brushes, patterns and gradients loaded and
+/// babl's conversions measured at a first start, two plug-in processes;
+/// 133 s of run time under TCG, 2.5 s on the host) and its window
+/// (`lx_gimp`: GTK, its UI's data and icons, three plug-ins; 178 s). They
+/// get this much instead of BOOT_TEST_TIMEOUT.
 const SLOW_SCENARIOS: &[&str] = &[
     "taskmgr",
     "explorer",
@@ -4254,6 +7078,8 @@ const SLOW_SCENARIOS: &[&str] = &[
     "python_pip",
     "python_pip_https",
     "python_numpy",
+    "lx_gimp_batch",
+    "lx_gimp",
 ];
 /// Memory for memload_test's VM (its file cache holds less than the
 /// 192 MiB it downloads).
@@ -4708,6 +7534,7 @@ fn host_package(program: &str) -> Option<&'static str> {
         "Xvfb" => "xvfb",
         "xorriso" => "xorriso",
         "update-mime-database" => "shared-mime-info",
+        "glib-compile-schemas" => "libglib2.0-bin",
         _ => return None,
     })
 }
@@ -5523,16 +8350,31 @@ fn fetch_linux_root(r: &LinuxRoot, path: &str) -> Result {
         run_quiet(Command::new("dpkg-deb").arg("-x").arg(&deb).arg(&tree))
             .map_err(|e| format!("{e} (dpkg-deb is in dpkg)"))?;
         for file in d.files {
-            let from = resolve_in_tree(&tree, file).map_err(|e| format!("{url}: {e}"))?;
-            let to = dir.join(file);
+            // `<dir>/`: an empty directory (Deb::files), one the package has.
+            if let Some(sub) = file.strip_suffix('/') {
+                if !tree.join(sub).is_dir() {
+                    return Err(format!("{url}: no directory {sub}"));
+                }
+                let to = dir.join(sub);
+                fs::create_dir_all(&to).map_err(|e| format!("creating {to:?}: {e}"))?;
+                continue;
+            }
+            // `<installed>=<in the package>`: an alternative (Deb::files).
+            let (installed, packaged) = file.split_once('=').unwrap_or((file, file));
+            let from = resolve_in_tree(&tree, packaged).map_err(|e| format!("{url}: {e}"))?;
+            let to = dir.join(installed);
             if let Some(parent) = to.parent() {
                 fs::create_dir_all(parent).map_err(|e| format!("creating {parent:?}: {e}"))?;
             }
-            fs::rename(&from, &to).map_err(|e| format!("{file} in {url}: {e}"))?;
+            // Copied, not moved: several names may be links to one file
+            // (an icon theme's cursors: cross and cross_reverse are
+            // crosshair).
+            fs::copy(&from, &to).map_err(|e| format!("{file} in {url}: {e}"))?;
         }
         fs::remove_dir_all(&tree).map_err(|e| format!("cleaning {tree:?}: {e}"))?;
     }
     update_mime_database(&dir)?;
+    compile_gsettings_schemas(&dir)?;
     write(&done, &format!("{} packages\n", r.debs.len()))?;
     if !root().join(path).exists() {
         return Err(format!("{path} is not in the Linux root {:?} (LINUX_ROOTS)", r.name));
@@ -5562,6 +8404,31 @@ fn update_mime_database(dir: &Path) -> Result {
         let path = entry.path();
         let gone = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
         gone.map_err(|e| format!("removing {path:?}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// What GLib's installation does for the GSettings schemas (its dpkg
+/// trigger): `gschemas.compiled` made from `usr/share/glib-2.0/schemas`'s
+/// XML by the host's `glib-compile-schemas` (libglib2.0-bin; the compiled
+/// format is GLib's GVariant database, read the same by 26.04's GLib).
+/// Only the compiled file is kept: GLib reads nothing else. Without it a
+/// GSettings user stops ("No GSettings schemas are installed": GIMP's
+/// window). Nothing to do for a root without schemas.
+fn compile_gsettings_schemas(dir: &Path) -> Result {
+    let schemas = dir.join("usr/share/glib-2.0/schemas");
+    if !schemas.exists() {
+        return Ok(());
+    }
+    run_quiet(Command::new("glib-compile-schemas").arg(&schemas))
+        .map_err(|e| format!("{e} (glib-compile-schemas is in libglib2.0-bin)"))?;
+    for entry in fs::read_dir(&schemas).map_err(|e| format!("reading {schemas:?}: {e}"))?.flatten()
+    {
+        if entry.file_name() == "gschemas.compiled" {
+            continue;
+        }
+        let path = entry.path();
+        fs::remove_file(&path).map_err(|e| format!("removing {path:?}: {e}"))?;
     }
     Ok(())
 }
@@ -11062,6 +13929,144 @@ const SCENARIOS: &[Scenario] = &[
         expect: &["personality linux", "run: end /lx/eventfd_test-pie", BOOT_OK_MARKER],
     },
     Scenario {
+        // user/lx/procfs_test (LD: bubblewrap, for Ubuntu 26.04's glycin):
+        // /proc's first part, its sys files, /proc/self and its ns links,
+        // exe and auxv, and a user namespace refused; its transcript must
+        // be its expected.txt (real Linux's).
+        name: "lx_procfs",
+        cmdline: "qemu_exit lxrun=/lx/procfs_test lxargs=./procfs_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/procfs_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/procfs_test as a static-pie.
+        name: "lx_procfs_pie",
+        cmdline: "qemu_exit lxrun=/lx/procfs_test-pie lxargs=./procfs_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/procfs_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/altstack_test (LD: Rust's runtime in Ubuntu 26.04's
+        // glycin loaders and uutils): sigaltstack and SA_ONSTACK handlers
+        // on the alternate stack; its transcript must be its expected.txt
+        // (real Linux's).
+        name: "lx_altstack",
+        cmdline: "qemu_exit lxrun=/lx/altstack_test lxargs=./altstack_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/altstack_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/altstack_test as a static-pie.
+        name: "lx_altstack_pie",
+        cmdline: "qemu_exit lxrun=/lx/altstack_test-pie lxargs=./altstack_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/altstack_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/fdbits_test (LD: Ubuntu 26.04's glycin): a descriptor
+        // argument's upper 32 bits are not looked at (Linux's int and
+        // unsigned int fds); its transcript must be its expected.txt (real
+        // Linux's).
+        name: "lx_fdbits",
+        cmdline: "qemu_exit lxrun=/lx/fdbits_test lxargs=./fdbits_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/fdbits_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/fdbits_test as a static-pie.
+        name: "lx_fdbits_pie",
+        cmdline: "qemu_exit lxrun=/lx/fdbits_test-pie lxargs=./fdbits_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/fdbits_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/timerfd_test (LD: Ubuntu 26.04's glycin waits with one in
+        // epoll): timerfds on the monotonic, real-time and boot clocks, a
+        // blocking read, poll, epoll, interval and absolute timers and the
+        // errors, timing only as lower bounds; its transcript must be its
+        // expected.txt (real Linux's).
+        name: "lx_timerfd",
+        cmdline: "qemu_exit lxrun=/lx/timerfd_test lxargs=./timerfd_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/timerfd_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/timerfd_test as a static-pie.
+        name: "lx_timerfd_pie",
+        cmdline: "qemu_exit lxrun=/lx/timerfd_test-pie lxargs=./timerfd_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/timerfd_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/caps_test (LD: Ubuntu 26.04's glycin): capget and capset,
+        // the relations that hold for root and a user, the version
+        // handshake and the errors; its transcript must be its expected.txt
+        // (real Linux's).
+        name: "lx_caps",
+        cmdline: "qemu_exit lxrun=/lx/caps_test lxargs=./caps_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/caps_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/caps_test as a static-pie.
+        name: "lx_caps_pie",
+        cmdline: "qemu_exit lxrun=/lx/caps_test-pie lxargs=./caps_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/caps_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/fdioctl_test (LD: Ubuntu 26.04's glycin, Rust's std): the
+        // ioctls every descriptor answers (FIOCLEX, FIONCLEX, FIONBIO) and a
+        // pipe's FIONREAD; its transcript must be its expected.txt (real
+        // Linux's).
+        name: "lx_fdioctl",
+        cmdline: "qemu_exit lxrun=/lx/fdioctl_test lxargs=./fdioctl_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/fdioctl_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/fdioctl_test as a static-pie.
+        name: "lx_fdioctl_pie",
+        cmdline: "qemu_exit lxrun=/lx/fdioctl_test-pie lxargs=./fdioctl_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/fdioctl_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/shm_test (LD step 9: GIMP's tiles to its plug-ins, X's
+        // MIT-SHM): System V shared memory, a segment's pages shared by its
+        // attachments and through a fork, the attach count, the removal
+        // deferred to the last detach, keys and the errors; its transcript
+        // must be its expected.txt (real Linux's).
+        name: "lx_shm",
+        cmdline: "qemu_exit lxrun=/lx/shm_test lxargs=./shm_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/shm_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/shm_test as a static-pie.
+        name: "lx_shm_pie",
+        cmdline: "qemu_exit lxrun=/lx/shm_test-pie lxargs=./shm_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/shm_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/sysinfo_test (LD step 9, what GIMP's start reached):
+        // sysinfo (glibc's _SC_PHYS_PAGES) and sched_getaffinity (GLib's
+        // processor count): what holds on any machine, and the errors; its
+        // transcript must be its expected.txt (real Linux's).
+        name: "lx_sysinfo",
+        cmdline: "qemu_exit lxrun=/lx/sysinfo_test lxargs=./sysinfo_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/sysinfo_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/sysinfo_test as a static-pie.
+        name: "lx_sysinfo_pie",
+        cmdline: "qemu_exit lxrun=/lx/sysinfo_test-pie lxargs=./sysinfo_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/sysinfo_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
         // user/lx/statfs_test (LD step 3, what GTK's start reached): statfs and fstatfs: what holds on any file system, and the errors;
         // its transcript must be its expected.txt (real Linux's).
         name: "lx_statfs",
@@ -11220,6 +14225,24 @@ const SCENARIOS: &[Scenario] = &[
         ],
     },
     Scenario {
+        // GIMP's window (LD step 9): Ubuntu 26.04's GIMP 3.2 (LINUX_ROOTS
+        // "gimp" with "gtk3" and "x11") over gala's Wayland server, opening
+        // user/lx/gimp/in.png (user/lx/gimp/gui.sh; its transcript, GIMP's
+        // exit status, is user/lx/sh/lx_gimp.txt). The screen check
+        // (GIMP_SCREEN) sees its window and its welcome dialog, closes the
+        // dialog and quits GIMP with Ctrl+Q.
+        name: "lx_gimp",
+        cmdline: "qemu_exit presenter=test wayland=on events=wayland lxrun=/bin/sh lxargs=sh%20/lx/gimp/gui.sh lxenv=XDG_RUNTIME_DIR=/run/user/1000%20WAYLAND_DISPLAY=wayland-0%20HOME=/Users/gala%20PATH=/usr/bin:/bin",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "personality linux",
+            "desktop: shown window",
+            "xtask: screen ok",
+            "run: end /bin/sh",
+            BOOT_OK_MARKER,
+        ],
+    },
+    Scenario {
         // X11 through rootless Xwayland (LD step 5): xterm 390 on display
         // :0, which the Wayland server holds (`xwayland=on`); its connect
         // starts Ubuntu's Xwayland (LINUX_ROOTS "x11"), whose window
@@ -11257,6 +14280,18 @@ const SCENARIOS: &[Scenario] = &[
             "run: end /bin/sh",
             BOOT_OK_MARKER,
         ],
+    },
+    Scenario {
+        // GIMP in batch mode (LD step 9's first part): Ubuntu 26.04's
+        // console GIMP 3.2 (LINUX_ROOTS "gimp") loads a PNG through its
+        // file-png plug-in, blurs and inverts it with GEGL from script-fu
+        // (another plug-in process; user/lx/gimp/batch.sh and batch.scm)
+        // and saves it; the saved file's SHA-256 in the transcript
+        // (user/lx/sh/lx_gimp_batch.txt) is the one GIMP writes on Ubuntu.
+        name: "lx_gimp_batch",
+        cmdline: "qemu_exit lxrun=/bin/sh lxargs=sh%20/lx/gimp/batch.sh lxenv=HOME=/Users/gala%20PATH=/usr/bin:/bin",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /bin/sh", BOOT_OK_MARKER],
     },
     Scenario {
         // user/lx/gtk_test under X11 (LD step 5): GDK's X11 backend on
@@ -11774,6 +14809,18 @@ const MODULE_SETS: &[(&str, &str)] = &[
     ("linux_menu", "gtk3"),
     ("linux_menu", "wayland_client"),
     ("linux_menu", "glibc"),
+    ("lx_gimp_batch", "gimp_batch"),
+    ("lx_gimp_batch", "gimp"),
+    ("lx_gimp_batch", "x11"),
+    ("lx_gimp_batch", "gtk3"),
+    ("lx_gimp_batch", "wayland_client"),
+    ("lx_gimp_batch", "glibc"),
+    ("lx_gimp", "gimp_batch"),
+    ("lx_gimp", "gimp"),
+    ("lx_gimp", "x11"),
+    ("lx_gimp", "gtk3"),
+    ("lx_gimp", "wayland_client"),
+    ("lx_gimp", "glibc"),
     ("lx_xdesktop", "xdesktop"),
     ("lx_xdesktop", "x11"),
     ("lx_xdesktop", "gtk3"),
@@ -14252,6 +17299,45 @@ const GTK_SCREEN: ScreenCheck = ScreenCheck {
     ],
 };
 
+/// GIMP 3.2's window (`lx_gimp`): GIMP's window, then its "Welcome to
+/// GIMP" dialog (a first start), which has the focus: its picture, then
+/// Escape closes it and Ctrl+Q quits GIMP (the imported image is
+/// unchanged, so it asks nothing).
+const GIMP_SCREEN: ScreenCheck = ScreenCheck {
+    marker: "desktop: shown window 'GNU Image Manipulation Program'",
+    steps: &[
+        // GIMP's window and the dialog drawn (screen0.png).
+        ScreenStep {
+            after: "desktop: shown window 'Welcome to GIMP",
+            input: &[],
+            pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
+        },
+        ScreenStep { after: "", input: &["sendkey esc"], pixels: &[] },
+        // The image window alone (screen2.png).
+        ScreenStep {
+            after: "window 'Welcome to GIMP 3.2.2' left the screen",
+            input: &[],
+            pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
+        },
+        // The image opened: GIMP's title names it (`[in] (imported)-1.0
+        // ...`) and its docks show its layer (screen3.png).
+        ScreenStep {
+            after: "desktop: window titled '[in]",
+            input: &[],
+            pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
+        },
+        // The image painted on the canvas (screen4.png): in.png's orange
+        // rectangle (250, 200, 40; user/lx/gimp/mkpng.py) in the canvas
+        // between the docks. Then Ctrl+Q.
+        ScreenStep {
+            after: "",
+            input: &[],
+            pixels: &[PixelCheck::AnyIn(262, 185, 330, 450, 0xfac828)],
+        },
+        ScreenStep { after: "", input: &["sendkey ctrl-q"], pixels: &[] },
+    ],
+};
+
 /// user/lx/gtk_test under X11 (`lx_gtk_x11`, `--input`): its X window
 /// framed by shasha at (64, 48), the client area (320 x 200) from (65,
 /// 81): GTK's background, its label and its button. A click on the button
@@ -14380,6 +17466,15 @@ const XDESKTOP_SCREEN: ScreenCheck = ScreenCheck {
                 PixelCheck::AnyIn(62, 78, 34, 10, 0xffffff), // twm's title "xterm"
             ],
         },
+        // twm's focus follows the pointer (as on Ubuntu 26.04: there the
+        // keys typed into the window go to the xterm only once the pointer
+        // is on it): the pointer onto the xterm (from (640, 400) to
+        // (300, 300)), the xterm's white beside the arrow, then `exit`.
+        ScreenStep {
+            after: "",
+            input: &["mouse_move -340 -100"],
+            pixels: &[PixelCheck::At(400, 250, 0xffffff)],
+        },
         ScreenStep { after: "", input: typed!("e", "x", "i", "t"), pixels: &[] },
     ],
 };
@@ -14394,8 +17489,7 @@ const XDESKTOP_SCREEN: ScreenCheck = ScreenCheck {
 /// 68). The start button at (640, 776) alone on the taskbar, (616, 776)
 /// beside one window. A context menu opens at the pointer, 32-pixel items
 /// from 4 below its top. The pointer starts at (640, 400); each move is
-/// from where the step before left it (few moves: QEMU's PS/2 queue drops
-/// what a busy guest has not read).
+/// from where the step before left it.
 const LINUX_MENU_SCREEN: ScreenCheck = ScreenCheck {
     marker: "linux_menu_test: ready",
     steps: &[
@@ -14472,18 +17566,22 @@ const LINUX_MENU_SCREEN: ScreenCheck = ScreenCheck {
                 PixelCheck::At(300, 300, 0xffffff),
             ],
         },
-        // `exit` in its xterm ends the session.
+        // `exit` in its xterm ends the session. twm's focus follows the
+        // pointer (as on Ubuntu 26.04: keys go to the xterm only with the
+        // pointer on it): the pointer from (416, 440), the xterm's edge,
+        // into it (356, 340), its white beside the arrow, then `exit`.
         ScreenStep {
             after: "session: display :1 ready",
-            input: typed!("e", "x", "i", "t"),
-            pixels: &[],
+            input: &["mouse_move -60 -100"],
+            pixels: &[PixelCheck::At(500, 250, 0xffffff)],
         },
+        ScreenStep { after: "", input: typed!("e", "x", "i", "t"), pixels: &[] },
         // The menu again, Ubuntu's context menu: "Open terminal" and
         // XTerm (from its .desktop file). "context menu".
         ScreenStep {
             after: "session: done",
             input: &[
-                "mouse_move 224 255",
+                "mouse_move 284 355",
                 "mouse_move 0 81",
                 "mouse_button 1",
                 "mouse_button 0",
@@ -14522,7 +17620,10 @@ const LINUX_MENU_SCREEN: ScreenCheck = ScreenCheck {
         },
         ScreenStep { after: "", input: typed!("e", "x", "i", "t"), pixels: &[] },
         // The menu (beside the console window's button), the context menu,
-        // XTerm: an xterm under the desktop's rootless Xwayland.
+        // XTerm: an xterm under the desktop's rootless Xwayland. Nothing to
+        // wait for after `exit`: the console's window stays (the taskbar
+        // does not change), and the keys are read before these moves
+        // (Ps2Pace).
         ScreenStep {
             after: "",
             input: &[
@@ -14543,19 +17644,25 @@ const LINUX_MENU_SCREEN: ScreenCheck = ScreenCheck {
             pixels: &[],
         },
         // "application": its window (shasha's frame at (96, 80): the
-        // second Wayland window), white with dash's prompt.
+        // second Wayland window), white with dash's prompt (its client
+        // area from (97, 113), as lx_xterm's from (65, 81)). The window
+        // shows before the shell runs; `exit` waits for the prompt, or
+        // its keys reach Xwayland before the xterm has the X focus.
         ScreenStep {
             after: "desktop: shown window 'xterm'",
             input: &[],
             pixels: &[
                 PixelCheck::AnyIn(104, 90, 40, 16, 0x1b1b1b), // "xterm" in its caption
                 PixelCheck::At(300, 300, 0xffffff),
+                PixelCheck::AnyIn(98, 116, 12, 12, 0x000000), // the prompt "$"
             ],
         },
         ScreenStep { after: "", input: typed!("e", "x", "i", "t"), pixels: &[] },
-        // "Hide": the section goes. "section hidden".
+        // "Hide": the section goes. "section hidden". Once the xterm's
+        // window has gone: until then the taskbar has two buttons beside
+        // the start button, which is then at (570, 776).
         ScreenStep {
-            after: "",
+            after: "desktop: window 'xterm' left the screen",
             input: &[
                 "mouse_move 116 255",
                 "mouse_move 0 29",
@@ -15431,6 +18538,7 @@ const SCREEN_SCENARIOS: &[(&str, ScreenCheck)] = &[
     ("lx_wl_input", WL_INPUT_SCREEN),
     ("lx_simple_shm", SIMPLE_SHM_SCREEN),
     ("lx_gtk", GTK_SCREEN),
+    ("lx_gimp", GIMP_SCREEN),
     ("lx_gtk_x11", GTK_X11_SCREEN),
     ("lx_xterm", XTERM_SCREEN),
     ("lx_xdesktop", XDESKTOP_SCREEN),
@@ -15916,21 +19024,21 @@ fn check_screen(socket: &Path, iso: &Path, check: &ScreenCheck) -> Result {
         .iter()
         .find(|(n, _)| *n == iso_scenario(iso))
         .map_or(SCREEN_STEP_WAIT, |&(_, w)| w);
+    let mut ps2 = Ps2Pace::default();
     for (n, step) in check.steps.iter().enumerate() {
         if !step.after.is_empty() {
             wait_for_line(&log, step.after, wait).map_err(|e| format!("step {n}: {e}"))?;
         }
         for command in step.input {
-            // Each command, then time for the guest to read the device
-            // (QEMU's PS/2 queue is short: a click queued behind a long
-            // move is dropped).
-            // A press waits longer: under load (the full suite) the guest
-            // drains the queue slowly and a press behind moves is lost.
-            if command.starts_with("mouse_button 1") {
-                thread::sleep(Duration::from_millis(750));
-            }
+            // Each command only once the guest has read what QEMU queued
+            // for the ones before: QEMU's PS/2 queues hold 16 bytes, and
+            // what does not fit is lost (Ps2Pace).
+            ps2.wait_taken(&mut monitor, &log).map_err(|e| format!("step {n}: {e}"))?;
             writeln!(monitor, "{command}").map_err(|e| e.to_string())?;
-            thread::sleep(Duration::from_millis(250));
+            ps2.sent(command).map_err(|e| format!("step {n}: {e}"))?;
+        }
+        if !step.input.is_empty() {
+            ps2.wait_taken(&mut monitor, &log).map_err(|e| format!("step {n}: {e}"))?;
         }
         check_screen_step(&mut monitor, iso, n, step).map_err(|e| format!("step {n}: {e}"))?;
         // A host-side wait this step's check ends (HELD_DOWNLOADS).
@@ -15940,6 +19048,224 @@ fn check_screen(socket: &Path, iso: &Path, check: &ScreenCheck) -> Result {
         }
     }
     Ok(())
+}
+
+/// A screen check's PS/2 input, paced on what the guest has read. QEMU's
+/// PS/2 keyboard and mouse each queue at most 16 bytes for the guest:
+/// a key that does not fit is dropped, and a mouse packet that does not
+/// fit waits for the next input event, which only carries the buttons as
+/// they are then (a press followed by its release before the guest made
+/// room is never seen). A guest busy for a second (a program ending
+/// under the full suite's load) lost keys and clicks that way when input
+/// was paced by time. So each command is sent only once the guest has
+/// read every byte QEMU queued for the commands before it: the queues
+/// are empty when it arrives. The guest counts the bytes its input
+/// thread reads from each device (`input: bytes read at <address>` on
+/// the serial log), read here through the monitor; what QEMU queues for
+/// each command is exact (`ps2_bytes`).
+#[derive(Default)]
+struct Ps2Pace {
+    /// The guest's counters (keyboard, mouse) and its mouse packets'
+    /// size, once found in the serial log.
+    guest: Option<(u64, u64)>,
+    /// The counters when this check began (a resumed snapshot's are not
+    /// 0), plus what this check has sent since.
+    want: (u64, u64),
+    /// The buttons QEMU's monitor last set (`mouse_button` with the same
+    /// state queues nothing).
+    buttons: u8,
+}
+
+/// How long the guest may take to read what a screen check sent: a
+/// give-up only (a guest that stopped reading the controller).
+const PS2_TAKEN_WAIT: Duration = Duration::from_secs(120);
+
+impl Ps2Pace {
+    /// Waits until the guest has read everything sent so far.
+    fn wait_taken(&mut self, monitor: &mut std::os::unix::net::UnixStream, log: &Path) -> Result {
+        let (at, _) = self.find(monitor, log)?;
+        let start = Instant::now();
+        let mut read = guest_ps2_read(monitor, at)?;
+        while read.0 < self.want.0 || read.1 < self.want.1 {
+            if start.elapsed() > PS2_TAKEN_WAIT {
+                return Err(format!(
+                    "the guest read {} of the {} keyboard bytes and {} of the {} mouse bytes sent \
+                     within {} s (its input thread: `input:` lines in the serial log)",
+                    read.0,
+                    self.want.0,
+                    read.1,
+                    self.want.1,
+                    PS2_TAKEN_WAIT.as_secs()
+                ));
+            }
+            thread::sleep(Duration::from_millis(20));
+            read = guest_ps2_read(monitor, at)?;
+        }
+        if read.0 > self.want.0 || read.1 > self.want.1 {
+            return Err(format!(
+                "the guest read more PS/2 bytes than were sent (keyboard {} of {}, mouse {} of {}): \
+                 ps2_bytes no longer matches QEMU",
+                read.0, self.want.0, read.1, self.want.1
+            ));
+        }
+        Ok(())
+    }
+
+    /// The guest's counters' address and its mouse packets' size; the
+    /// first time, also where its counters stand.
+    fn find(
+        &mut self,
+        monitor: &mut std::os::unix::net::UnixStream,
+        log: &Path,
+    ) -> Result<(u64, u64)> {
+        if let Some(g) = self.guest {
+            return Ok(g);
+        }
+        const LINE: &str = "input: bytes read at ";
+        wait_for_line(log, LINE, SCREEN_STEP_WAIT)?;
+        let text =
+            String::from_utf8_lossy(&fs::read(log).map_err(|e| format!("reading {log:?}: {e}"))?)
+                .into_owned();
+        let rest = text
+            .lines()
+            .rev()
+            .find_map(|l| l.split_once(LINE).map(|(_, r)| r.to_string()))
+            .ok_or("no `input: bytes read at` line")?;
+        let at = rest
+            .split_whitespace()
+            .next()
+            .and_then(|a| u64::from_str_radix(a.trim_start_matches("0x"), 16).ok())
+            .ok_or_else(|| format!("unreadable `{LINE}{rest}`"))?;
+        let packet = rest
+            .split_once("mouse packets of ")
+            .and_then(|(_, r)| r.split_whitespace().next()?.parse().ok())
+            .ok_or_else(|| format!("unreadable `{LINE}{rest}`"))?;
+        self.guest = Some((at, packet));
+        self.want = guest_ps2_read(monitor, at)?;
+        Ok((at, packet))
+    }
+
+    /// `command` was written to the monitor: what it queues is wanted.
+    fn sent(&mut self, command: &str) -> Result {
+        let (_, packet) = self.guest.ok_or("no guest counters")?;
+        let (keyboard, mouse) = ps2_bytes(command, packet, &mut self.buttons)?;
+        self.want.0 += keyboard;
+        self.want.1 += mouse;
+        Ok(())
+    }
+}
+
+/// What QEMU's PS/2 devices queue for monitor command `command`
+/// (keyboard bytes, mouse bytes), with `packet`-byte mouse packets and
+/// `buttons` the monitor's button state (updated). A move is cut into
+/// packets of at most 127 per axis (at least one), a wheel notch adds
+/// one; a change of the buttons is one packet; a key is one byte when
+/// pressed and one when released (the controller translates to set 1),
+/// two each with the E0 prefix. A command that would not fit an empty
+/// queue, or that this does not know, is refused.
+fn ps2_bytes(command: &str, packet: u64, buttons: &mut u8) -> Result<(u64, u64)> {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    let number = |w: Option<&&str>| -> Result<i64> {
+        w.and_then(|w| w.parse().ok())
+            .ok_or_else(|| format!("unreadable input command {command:?}"))
+    };
+    let (keyboard, mouse) = match words.first().copied() {
+        Some("mouse_move") => {
+            let (dx, dy) = (number(words.get(1))?, number(words.get(2))?);
+            let dz = if words.len() > 3 { number(words.get(3))? } else { 0 };
+            let packets =
+                1.max(dx.unsigned_abs().div_ceil(127)).max(dy.unsigned_abs().div_ceil(127))
+                    + u64::from(dz != 0);
+            (0, packets * packet)
+        }
+        Some("mouse_button") => {
+            let b = u8::try_from(number(words.get(1))?)
+                .map_err(|_| format!("unreadable input command {command:?}"))?;
+            let changed = b != *buttons;
+            *buttons = b;
+            (0, if changed { packet } else { 0 })
+        }
+        Some("sendkey") if words.len() == 2 => {
+            let mut bytes = 0;
+            for key in words[1].split('-') {
+                if matches!(key, "print" | "sysrq" | "pause") {
+                    return Err(format!("{command:?}: {key} has its own scan codes (ps2_bytes)"));
+                }
+                // Keys with the E0 prefix (QEMU's qcode names).
+                let extended = matches!(
+                    key,
+                    "ctrl_r"
+                        | "alt_r"
+                        | "altgr"
+                        | "altgr_r"
+                        | "kp_enter"
+                        | "kp_divide"
+                        | "home"
+                        | "up"
+                        | "pgup"
+                        | "left"
+                        | "right"
+                        | "end"
+                        | "down"
+                        | "pgdn"
+                        | "insert"
+                        | "delete"
+                        | "meta_l"
+                        | "meta_r"
+                        | "menu"
+                );
+                bytes += if extended { 4 } else { 2 };
+            }
+            (bytes, 0)
+        }
+        _ => {
+            return Err(format!(
+                "input command {command:?}: what it queues is not known (ps2_bytes)"
+            ));
+        }
+    };
+    if keyboard > 16 || mouse > 16 {
+        return Err(format!(
+            "input command {command:?} queues more than QEMU's PS/2 queue holds (16 bytes): split it"
+        ));
+    }
+    Ok((keyboard, mouse))
+}
+
+/// The guest's PS/2 counters at `at` (`input: bytes read at`): (keyboard
+/// bytes, mouse bytes) read, through the monitor's `x`.
+fn guest_ps2_read(monitor: &mut std::os::unix::net::UnixStream, at: u64) -> Result<(u64, u64)> {
+    use std::io::{Read, Write};
+    writeln!(monitor, "x /2gx {at:#x}").map_err(|e| e.to_string())?;
+    // The reply: "<address>: 0x<keyboard> 0x<mouse>", after the echo of
+    // whatever was sent before.
+    let _ = monitor.set_read_timeout(Some(Duration::from_millis(100)));
+    let mut said = Vec::new();
+    let mut buf = [0u8; 4096];
+    let start = Instant::now();
+    let found = loop {
+        if let Ok(n) = monitor.read(&mut buf) {
+            said.extend_from_slice(&buf[..n]);
+        }
+        let text = String::from_utf8_lossy(&said);
+        let reply = text.lines().find_map(|l| {
+            let (address, values) = l.trim().split_once(": ")?;
+            if u64::from_str_radix(address, 16).ok()? != at {
+                return None;
+            }
+            let mut v = values
+                .split_whitespace()
+                .map(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok());
+            Some((v.next()??, v.next()??))
+        });
+        if reply.is_some() || start.elapsed() > Duration::from_secs(10) {
+            break reply;
+        }
+    };
+    let _ = monitor.set_read_timeout(None);
+    found.ok_or_else(|| {
+        format!("the monitor did not answer `x /2gx {at:#x}`: {:?}", String::from_utf8_lossy(&said))
+    })
 }
 
 /// Downloads `serve-page` holds part-way until a screen step has seen
@@ -20525,6 +23851,52 @@ mod judging {
         // Without the client's line, or after a failure exit, it fails.
         assert!(judge_log(&s, Some(QEMU_EXIT_SUCCESS), false, BOOT_OK_MARKER).is_err());
         assert!(judge_log(&s, Some(QEMU_EXIT_FAILURE), false, &ok).is_err());
+    }
+}
+
+#[cfg(test)]
+mod ps2_pace {
+    use super::*;
+
+    /// What QEMU queues: packets of at most 127 per axis, one more for a
+    /// wheel notch, one per change of the buttons, a byte per key press
+    /// and release (two with E0).
+    #[test]
+    fn commands_queue_what_qemu_queues() {
+        let mut b = 0;
+        assert_eq!(ps2_bytes("mouse_move 0 0", 4, &mut b), Ok((0, 4)));
+        assert_eq!(ps2_bytes("mouse_move 127 -127", 4, &mut b), Ok((0, 4)));
+        assert_eq!(ps2_bytes("mouse_move 116 255", 4, &mut b), Ok((0, 12)));
+        assert_eq!(ps2_bytes("mouse_move -201 -255", 3, &mut b), Ok((0, 9)));
+        assert_eq!(ps2_bytes("mouse_move 0 0 1", 4, &mut b), Ok((0, 8)));
+        assert_eq!(ps2_bytes("mouse_button 1", 4, &mut b), Ok((0, 4)));
+        // The same state again queues nothing.
+        assert_eq!(ps2_bytes("mouse_button 1", 4, &mut b), Ok((0, 0)));
+        assert_eq!(ps2_bytes("mouse_button 0", 4, &mut b), Ok((0, 4)));
+        assert_eq!(ps2_bytes("sendkey e", 4, &mut b), Ok((2, 0)));
+        assert_eq!(ps2_bytes("sendkey shift-4", 4, &mut b), Ok((4, 0)));
+        assert_eq!(ps2_bytes("sendkey meta_l-left", 4, &mut b), Ok((8, 0)));
+        assert_eq!(ps2_bytes("sendkey ctrl-shift-esc", 4, &mut b), Ok((6, 0)));
+        // More than an empty queue holds, or unknown: refused.
+        assert!(ps2_bytes("mouse_move 600 0", 4, &mut b).is_err());
+        assert!(ps2_bytes("sendkey print", 4, &mut b).is_err());
+        assert!(ps2_bytes("screendump x", 4, &mut b).is_err());
+    }
+
+    /// Every screen step's input is a command whose bytes are known and
+    /// fit QEMU's queue.
+    #[test]
+    fn every_screen_step_input_is_paced() {
+        for (name, check) in SCREEN_SCENARIOS {
+            let mut b = 0;
+            for (n, step) in check.steps.iter().enumerate() {
+                for command in step.input {
+                    if let Err(e) = ps2_bytes(command, 4, &mut b) {
+                        panic!("{name} step {n}: {e}");
+                    }
+                }
+            }
+        }
     }
 }
 

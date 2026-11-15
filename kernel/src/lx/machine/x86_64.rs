@@ -141,24 +141,28 @@ pub struct Frame {
 /// The handler starts with rip = sa_handler, rsp = the frame (its first
 /// word: sa_restorer, the return address), rdi = sig, rsi = &siginfo,
 /// rdx = &ucontext, rax 0, DF and TF clear, every other register as it
-/// was. The ucontext: uc_flags UC_SIGCONTEXT_SS|UC_STRICT_RESTORE_SS
-/// (signal_test), no alternate stack (ss_flags SS_DISABLE), the
-/// interrupted mask in uc_sigmask and in oldmask.
+/// was. The frame goes below `sp` (the interrupted rsp, or the top of
+/// the alternate stack). The ucontext: uc_flags UC_SIGCONTEXT_SS|
+/// UC_STRICT_RESTORE_SS (signal_test), the alternate stack as
+/// `uc_stack`, the interrupted mask in uc_sigmask and in oldmask.
+#[allow(clippy::too_many_arguments)]
 pub fn build_frame(
     regs: &UserRegs,
+    sp: u64,
+    uc_stack: Stack,
     sig: u32,
     info: &Siginfo,
     action: &KSigaction,
     old_mask: SigSet,
     fp_len: u64,
 ) -> Option<Frame> {
-    let (addr, fpstate) = frame_layout(regs.sp(), fp_len)?;
+    let (addr, fpstate) = frame_layout(sp, fp_len)?;
     let frame = RtSigframe {
         pretcode: action.restorer,
         uc: Ucontext {
             uc_flags: abi::UC_SIGCONTEXT_SS | abi::UC_STRICT_RESTORE_SS,
             uc_link: 0,
-            uc_stack: Stack { ss_sp: 0, ss_flags: abi::SS_DISABLE, ss_size: 0 },
+            uc_stack,
             uc_mcontext: sigcontext_of(regs, old_mask, fpstate),
             uc_sigmask: old_mask.0,
         },
@@ -205,7 +209,17 @@ mod tests {
         regs.set_flags(0x202 | DF);
         let a = handler(0x40_3000, SA_SIGINFO, 0);
         let info = pipe_info();
-        let f = build_frame(&regs, SIGPIPE, &info, &a, SigSet::of(SIGUSR1), 832).unwrap();
+        let f = build_frame(
+            &regs,
+            regs.sp(),
+            Stack { ss_sp: 0, ss_flags: abi::SS_DISABLE, ss_size: 0 },
+            SIGPIPE,
+            &info,
+            &a,
+            SigSet::of(SIGUSR1),
+            832,
+        )
+        .unwrap();
         assert_eq!((f.addr + 8) % 16, 0);
         assert_eq!(f.fpstate % 64, 0);
         assert!(f.fpstate + 832 <= regs.sp() - RED_ZONE);
@@ -224,6 +238,18 @@ mod tests {
         assert_eq!(uc.uc_flags, 6);
         assert_eq!(f.bytes[312..440], info.to_bytes());
         // No room below a tiny stack pointer.
-        assert!(build_frame(&UserRegs::default(), SIGPIPE, &info, &a, SigSet::EMPTY, 0).is_none());
+        assert!(
+            build_frame(
+                &UserRegs::default(),
+                0,
+                Stack { ss_sp: 0, ss_flags: abi::SS_DISABLE, ss_size: 0 },
+                SIGPIPE,
+                &info,
+                &a,
+                SigSet::EMPTY,
+                0
+            )
+            .is_none()
+        );
     }
 }

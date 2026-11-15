@@ -7148,7 +7148,15 @@ session's is shown by nothing unless GalaSession attaches a presenter
   keys. The input thread turns on an IntelliMouse-compatible wheel (the
   sample-rate knock 200, 100, 80, then device id 3: 4-byte packets, the
   fourth byte's low nibble the signed movement, positive towards the
-  user).
+  user). It counts the bytes it reads from each device (`BYTES_READ`:
+  keyboard, mouse) and logs their address once (`input: bytes read at
+  <address> ..., mouse packets of N bytes`): xtask's screen checks send
+  their next input only once the guest has read all they sent, as
+  QEMU's 16-byte PS/2 queues lose what does not fit (WORKFLOW "Screen
+  checks"). The `input:` line at exit counts packets, presses, wheel
+  notches and keys. A shown window that leaves the screen is logged as
+  `desktop: window '<title>' left the screen (hidden | closed | its
+  process ended)`, the counterpart of `desktop: shown window`.
 - **Boot splash** (`console.rs`): from when the kernel takes the
   framebuffer until the desktop does, the screen shows the fortress
   (160 px) over the wordmark (220 px) on a dark gradient, with a
@@ -11853,7 +11861,34 @@ The running parts (milestone 1; `lxrun=`):
   devices are; glibc's ld.so reads it for `$ORIGIN`): the path of the
   program the process runs (`LxProcess::exe`, its node: execve sets it,
   to the interpreter for a `#!` script; a fork's child has its
-  parent's); other /proc paths are ENOENT (ledgered for readlink).
+  parent's).
+- **/proc, its first part** (`lx::procfs`; procfs_test, `lx_procfs`): a
+  volume the kernel keeps in the shared file system, mounted over
+  `/proc` for processes rooted at the shared tree as `/run` is
+  (`lx::file`'s mounts), so open, stat, readlink, getdents and O_PATH
+  work on it as on any directory: `sys/kernel/overflowuid` and
+  `overflowgid` (65534), `sys/user/max_user_namespaces` (0), and per
+  process (made at its first image, removed at its end) `<pid>/ns/<kind>`
+  links named as Linux's initial namespaces (`user:[4026531837]`: one set
+  for all), `exe` (set at each execve) and `auxv` (the pairs up to
+  AT_NULL); `self` is the caller's pid in the walk and for readlink.
+  readlink of `/proc/<pid>/fd/<n>` (and `self`'s) answers from that
+  process's descriptor table (`file::fd_link`): a file's path as it sees
+  it, `pipe:[N]`, `socket:[N]`, `anon_inode:[eventfd]` and the like, a
+  device's path; ENOENT for a descriptor not open. GLib names an open
+  file so before handing it to a glycin loader (GTK's icons). Limits:
+  the `fd` directories are not listed or opened (readlink only), and
+  N is fstat's inode number, 1 for every pipe and socket. What changes
+  as a process runs (maps, stat, status, the fd directory) is not there
+  yet (files generated when opened, proc_test's, are the design to
+  make).
+- **Namespaces are refused** (`procfs::namespace_refusal`; procfs_test):
+  gala makes none. clone, clone3 and unshare asking for a user namespace
+  get ENOSPC (Linux's answer at max_user_namespaces 0); another without
+  CAP_SYS_ADMIN (any uid but 0) EPERM; uid 0's EINVAL, ledgered.
+  bubblewrap then fails as on such a Linux, and glycin (GTK 3's image
+  loader on Ubuntu 26.04) runs its loaders unsandboxed, warning so on
+  stderr as Linux's does.
 - **Process attributes** (`lx::prctl`; prctl_test, `lx_prctl`): prctl's
   PR_SET_NAME and PR_GET_NAME are the calling thread's name
   (`state::Comm` in `LxThread`, Linux's "comm": up to 15 bytes and a
@@ -11871,6 +11906,65 @@ The running parts (milestone 1; `lxrun=`):
   anonymous inode their pseudo file systems' magics, without blocks.
   fontconfig asks whether its cache may be mapped, libselinux whether
   /sys/fs/selinux is there, GLib a file's file system.
+- **Descriptor arguments are their low 32 bits** (`state::slot`;
+  fdbits_test): Linux takes descriptors as int or unsigned int, and the
+  x86-64 C ABI leaves an int's upper register half undefined, so the
+  descriptor table, dup2/dup3 and fcntl's F_DUPFD minimum look at the low
+  half only (a dirfd's AT_FDCWD is compared as an int the same way).
+- **ioctls every descriptor answers** (`dispatch::generic_ioctl`;
+  fdioctl_test): FIOCLEX and FIONCLEX (the descriptor's close-on-exec),
+  FIONBIO (O_NONBLOCK on the open file description: a dup sees it), before
+  any object's own requests; a pipe's FIONREAD (the bytes it holds).
+- **Capabilities** (`lx::caps`; caps_test): capget and capset with
+  Linux's version handshake (v1 one structure, v2 and v3 two; an unknown
+  version answered with v3 written back and EINVAL, 0 without data). The
+  sets follow the uid (uid 0 all up to CAP_LAST_CAP 40, others none: no
+  file capabilities); capset accepts the sets held, refuses raising them
+  and other processes (EPERM), and a root process dropping some is not
+  kept (ledgered).
+- **timerfd** (`lx::timerfd`, `Object::TimerFd`; timerfd_test): the next
+  expiry on its clock (real-time, or monotonic for CLOCK_MONOTONIC and
+  CLOCK_BOOTTIME), an interval and the expirations not read, counted from
+  the clock whenever looked at (`Setting::settle`: none lost, none early);
+  a read gives them (blocking until the next, EAGAIN with O_NONBLOCK),
+  poll and epoll see it readable while some wait; a kernel thread
+  (`timerfd`) sleeps until the earliest armed expiry and wakes the waiters
+  then. The alarm clocks need uid 0 (CAP_WAKE_ALARM); CANCEL_ON_SET is
+  taken and not acted on (ledgered).
+- **prctl's no-new-privileges and auxiliary vector** (`lx::prctl`;
+  prctl_test): PR_SET_NO_NEW_PRIVS (only 1) and PR_GET_NO_NEW_PRIVS, a flag
+  kept by children and across execve; PR_GET_AUXV, the image's auxiliary
+  vector saved at exec (`LxProcess::auxv`, from the initial stack) as
+  Linux's 448-byte saved_auxv (zeros after AT_NULL), copied as far as it
+  fits, that size returned; PR_SET_PDEATHSIG and PR_GET_PDEATHSIG, the
+  signal a process gets when its parent ends (sent by `state::ended` to
+  each child still running; cleared in a fork's child, kept across
+  execve: glycin's loaders die with the program that started them).
+- **sysinfo and sched_getaffinity** (`lx::sysinfo`; sysinfo_test,
+  `lx_sysinfo`): sysinfo counts in bytes (`mem_unit` 1): RAM is the frame
+  allocator's managed frames and free ones (NT's NumberOfPhysicalPages),
+  no swap, shared, buffer or high memory, `procs` the running processes'
+  threads, the uptime the monotonic clock's rounded up to a second; the
+  load averages are 0 (gala keeps none). sched_getaffinity copies the
+  thread's scheduler mask (NT's ThreadAffinityMask; one long, at most 64
+  CPUs) after Linux's size checks (EINVAL below the CPUs or not whole
+  longs), ESRCH for no such thread. glibc's `_SC_PHYS_PAGES` is
+  sysinfo's (GIMP sizes its undo memory from it), GLib's processor count
+  the mask's (GEGL's threads).
+- **System V shared memory** (`lx::shm`; shm_test, `lx_shm`): a segment
+  is a pagefile-backed section held by a registry (ids a slot below
+  SHMMNI plus 32768 times a sequence number, keys, Linux's ipcperms);
+  shmat maps a view of that section (`mm::attach`), so attachments in
+  every process and a fork's child share its pages; `shm_nattch` is the
+  number of views of it in the running processes (Linux's VMAs). IPC_RMID
+  marks it SHM_DEST with the key IPC_PRIVATE; it goes once nothing maps
+  it (`shm::collect` after a detach, an exit or an execve; a shmat
+  between its look-up and its mapping keeps it), and until then shmat by
+  id still works, which GIMP relies on (it removes its tile segment at
+  once and its plug-ins attach it). IPC_STAT, IPC_SET and IPC_RMID;
+  SHM_REMAP, SHM_LOCK and the INFO commands are EINVAL and ledgered.
+  `lx shm` events (`events=ipc`) and `lx: shm segment` lines in the
+  state dump.
 - **Clocks and timers** (`lx::time`, `lx::timer`; clock_test is the
   spec): clock_gettime/clock_getres (REALTIME and its variants from the
   system time, MONOTONIC, _RAW, _COARSE, BOOTTIME from the monotonic
@@ -11965,7 +12059,11 @@ The running parts (milestone 1; `lxrun=`):
   the description's last close removes it from every set
   (`Fd::watchers`, `Epoll::forget`); closing the epoll fd empties its
   set. Ready entries come out in the order they were added; struct
-  epoll_event is the packed 12 bytes.
+  epoll_event is the packed 12 bytes. A waiter waits on the set's own
+  queue (`Epoll::waiters`) beside its objects'; ADD and MOD wake it, so a
+  wait begun before them (another thread's) looks again and watches the
+  new entry (epoll_test's "the set changed while a thread waits": glycin
+  arms its loader connection from one thread while another waits).
 - **eventfd** (`lx::eventfd`; eventfd_test, `lx_eventfd`): eventfd and
   eventfd2 (EFD_SEMAPHORE, EFD_NONBLOCK, EFD_CLOEXEC; another flag
   EINVAL), a 64-bit counter as `Object::EventFd`: a read (8 bytes at
@@ -12119,8 +12217,16 @@ The running parts (milestone 1; `lxrun=`):
     comes back at once if no handler runs: `Signals::suspend`,
     `frame_mask`, `restore_saved_mask`); SA_RESTART also restarts readv,
     pread64/pwrite64, accept/accept4, recvfrom and sendto.
+  - sigaltstack (altstack_test, `lx_altstack`): each thread's alternate
+    stack (`LxThread::altstack`; disabled at first and after execve, a
+    fork's child's its creator's), set with Linux's checks (EPERM while
+    on it, EINVAL for other flags, ENOMEM below MINSIGSTKSZ). An
+    SA_ONSTACK handler gets its frame at its top unless the thread is on
+    it already; the frame's uc_stack records it (SS_ONSTACK when the
+    interrupted code was on it), SS_AUTODISARM disarms it while the
+    handler runs, rt_sigreturn sets it back from uc_stack. Rust's runtime
+    sets one up in every thread (Ubuntu 26.04's glycin loaders, uutils).
   - Not yet: rt_sigqueueinfo,
-    sigaltstack (SA_ONSTACK is ledgered and the current stack used),
     CPU faults as signals (an exception still ends the process with its
     NT status, read as SIGSEGV etc.), delivery to a thread running user
     code (only at a system call's return), stop/continue, UC_FP_XSTATE's
@@ -12207,7 +12313,7 @@ The running parts (milestone 1; `lxrun=`):
   address, bitset, thread), so a hang shows who waits where. Ledger:
   `linux clone flags missing` (and vfork's CLONE_VM, unsupported thread
   flag sets), `linux signal action missing`
-  (Stop), `linux signal option missing` (SA_ONSTACK), `linux option
+  (Stop), `linux option
   missing` (wait4's and kill's process groups, open flags, an unlink or
   rename an NT program's open refuses, names the file system cannot
   hold, socket families and types, socket options, CPU-time clocks and
@@ -12216,7 +12322,7 @@ The running parts (milestone 1; `lxrun=`):
   mremap's MREMAP_DONTUNMAP and old length 0, madvise advice not taken,
   a resource limit set but not enforced, another process's limits, the
   shrinking of a mapped file,
-  /proc paths other than /proc/self/exe, no random generator), `linux
+  a namespace asked for by uid 0, no random generator), `linux
   syscall stub` (ioctl, wait4's rusage); a page mremap could not move
   logs why (and `out of memory`).
 - **Invariants**: a Linux process is never handed over (carry refuses "a
@@ -12295,7 +12401,14 @@ fields at the `repr(C)` offsets, host-tested), since `lx` has no
   of a new pty start with: iflag ICRNL|IXON, oflag OPOST|ONLCR, cflag
   B38400|CS8|CREAD, lflag ISIG|ICANON|ECHO|ECHOE|ECHOK|ECHOCTL|ECHOKE|
   IEXTEN; INTR ^C, QUIT ^\, ERASE DEL, KILL ^U, EOF ^D, VMIN 1, VTIME
-  0); `make_raw` (cfmakeraw); `Winsize`; the tty ioctl numbers.
+  0); `make_raw` (cfmakeraw); `Winsize`; the tty ioctl numbers. termios2
+  (TCGETS2, TCSETS2, TCSETSW2, TCSETSF2: the termios then c_ispeed and
+  c_ospeed, 44 bytes; `speeds`, `encode_speeds`): glibc 2.43 (Ubuntu
+  26.04) asks with it in isatty and tcgetattr, so a terminal without it
+  is no terminal to dash or xterm. A BOTHER speed with a baud code is
+  stored as that code, as Linux's tty_termios_encode_baud_rate does;
+  one without is B38400's (ledgered). A terminal request ('T') on what
+  is not a terminal is ENOTTY, not ledgered.
 - **`lx_abi::layout`**: `Stat` (144), `Statx` (256), `Dirent64Head` (19,
   packed, the name at 19; `dirent64_reclen` = align8(19 + len + 1)),
   `EpollEvent` (packed, 12: data at 4), `Timespec`, `Timeval`, `Pollfd`
@@ -12970,7 +13083,11 @@ real Linux does not print, or a ledger line):
   at assembly as dpkg and its triggers would: the MIME database's
   `mime.cache` (`update-mime-database` from shared-mime-info's XML;
   gdk-pixbuf picks a loader by MIME type through GIO, so without it GTK
-  aborts on its own PNG icons). The user database is not the root's:
+  aborts on its own PNG icons) and the GSettings schemas'
+  `gschemas.compiled` (`glib-compile-schemas` from the root's schema
+  XML: GTK's; GIMP stops without it). A directory a program looks for
+  with nothing used beneath it is a `<dir>/` entry (each GIMP plug-in
+  checks for `/usr/share/locale`). The user database is not the root's:
   the kernel makes `/etc/passwd` and `/etc/group` from gala's accounts
   ("The lx module", Linux identity); the user's home is their profile
   (`/Users/gala`), where fontconfig keeps its cache.

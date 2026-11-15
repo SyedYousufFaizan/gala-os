@@ -1,0 +1,27 @@
+capget(v3, pid 0) = 0
+  effective within permitted = yes
+  the high words hold nothing above the last capability (40) = yes
+capget(v3, our pid) = 0
+  the same sets = yes
+capget(v3, our tid) = 0
+-- versions
+capget(version 0) = -22 (EINVAL)
+  the version written back = 0x20080522
+capget(an unknown version, no data) = 0
+  the version written back = 0x20080522
+capget(v3, no data): the version check alone = 0
+capget(v1: one structure) = 0
+  its sets are v3's low words = yes
+capget(v2) = 0
+-- capset
+capset(the same sets) = 0
+capset(an effective one not permitted) = -1 (EPERM)
+capset(another process) = -1 (EPERM)
+-- errors
+capget(no such pid) = -3 (ESRCH)
+capget(pid -1) = -22 (EINVAL)
+capget(bad header) = -14 (EFAULT)
+capget(bad data) = -14 (EFAULT)
+capset(bad data) = -14 (EFAULT)
+caps_test: ok
+-- exit status 0

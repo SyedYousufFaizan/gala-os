@@ -1,0 +1,21 @@
+sigaltstack(NULL, &old) = 0
+  at start: flags 2, ours no, none yes
+sigaltstack(64 KiB) = 0
+  then: flags 0, ours yes, none no
+a SA_ONSTACK handler: on the alternate stack = yes
+  sigaltstack's flags in it = 1
+  changing it in it = -1 (EPERM)
+a handler without SA_ONSTACK: on it = no
+  the flags in it = 0
+a fork's child keeps it (exit 7): exited 7
+SS_DISABLE = 0
+  the old one: flags 0, ours yes, none no
+  now its flags = 2
+a SA_ONSTACK handler with none: on it = no
+-- errors
+a size below MINSIGSTKSZ = -12 (ENOMEM)
+flags 4 = -22 (EINVAL)
+a bad pointer = -14 (EFAULT)
+a bad old pointer = -14 (EFAULT)
+altstack_test: ok
+-- exit status 0

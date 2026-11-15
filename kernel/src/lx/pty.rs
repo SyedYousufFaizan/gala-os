@@ -779,6 +779,46 @@ pub fn write_bytes(call: &Call<'_>, f: &Fd, end: &End, data: &[u8]) -> Result {
 }
 
 /// The kernel's struct termios as bytes.
+/// The termios a TCSETS-family request `cmd` gives at `arg`: termios2's
+/// (TCSETS2 ..) with a BOTHER speed encoded as its baud code (Linux's
+/// tty_termios_encode_baud_rate); one without a code is B38400's
+/// (ledgered: speeds mean nothing to a pty).
+pub fn read_termios(call: &Call<'_>, cmd: u32, arg: u64) -> core::result::Result<Termios, u16> {
+    let mut raw = [0u8; 44];
+    call.process.read(arg, &mut raw[..set_size(cmd)]).map_err(|_| EFAULT)?;
+    Ok(termios_of(cmd, &raw))
+}
+
+/// The bytes a TCSETS-family request `cmd` reads (termios2's 44).
+pub fn set_size(cmd: u32) -> usize {
+    if matches!(cmd, termios::TCSETS2 | termios::TCSETSW2 | termios::TCSETSF2) { 44 } else { 36 }
+}
+
+/// The termios of request `cmd`'s bytes `raw` (`set_size` of them).
+pub fn termios_of(cmd: u32, raw: &[u8; 44]) -> Termios {
+    let mut first = [0u8; 36];
+    first.copy_from_slice(&raw[..36]);
+    let mut t = termios_from(&first);
+    if set_size(cmd) == 44 {
+        let word = |i: usize| u32::from_le_bytes([raw[i], raw[i + 1], raw[i + 2], raw[i + 3]]);
+        t.cflag = termios::encode_speeds(t.cflag, word(36), word(40)).unwrap_or_else(|| {
+            crate::nt::ledger::record("ioctl", "linux option missing", u64::from(word(40)));
+            (t.cflag & !(termios::CBAUD | termios::CIBAUD)) | termios::B38400
+        });
+    }
+    t
+}
+
+/// `struct termios2` (TCGETS2): the termios, then its speeds.
+pub fn termios2_bytes(t: &Termios) -> [u8; 44] {
+    let mut b = [0u8; 44];
+    b[..36].copy_from_slice(&termios_bytes(t));
+    let (input, output) = termios::speeds(t.cflag);
+    b[36..40].copy_from_slice(&input.to_le_bytes());
+    b[40..44].copy_from_slice(&output.to_le_bytes());
+    b
+}
+
 pub fn termios_bytes(t: &Termios) -> [u8; 36] {
     let mut b = [0u8; 36];
     b[0..4].copy_from_slice(&t.iflag.to_le_bytes());
@@ -819,12 +859,22 @@ pub fn ioctl(call: &Call<'_>, f: &Fd, end: &End, cmd: u32, arg: u64) -> Result {
             call.process.write(arg, &termios_bytes(&t)).map_err(|_| EFAULT)?;
             Ok(0)
         }
-        termios::TCSETS | termios::TCSETSW | termios::TCSETSF => {
-            let mut raw = [0u8; 36];
-            call.process.read(arg, &mut raw).map_err(|_| EFAULT)?;
+        termios::TCGETS2 => {
+            let t = pty.state.lock().ld.t;
+            call.process.write(arg, &termios2_bytes(&t)).map_err(|_| EFAULT)?;
+            Ok(0)
+        }
+        termios::TCSETS
+        | termios::TCSETSW
+        | termios::TCSETSF
+        | termios::TCSETS2
+        | termios::TCSETSW2
+        | termios::TCSETSF2 => {
+            let t = read_termios(call, cmd, arg)?;
             {
                 let mut s = pty.state.lock();
-                s.ld.set(termios_from(&raw), cmd == termios::TCSETSF);
+                let flush = cmd == termios::TCSETSF || cmd == termios::TCSETSF2;
+                s.ld.set(t, flush);
                 s.changes += 1;
             }
             pty.waiters.wake_all();

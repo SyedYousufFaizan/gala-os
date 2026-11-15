@@ -53,8 +53,11 @@ pub struct Frame {
     pub regs: UserRegs,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_frame(
     _regs: &UserRegs,
+    _sp: u64,
+    _uc_stack: lx_abi::signal::Stack,
     _sig: u32,
     _info: &Siginfo,
     _action: &KSigaction,

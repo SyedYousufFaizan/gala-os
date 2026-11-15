@@ -189,6 +189,18 @@ fn fork_with(call: &Call<'_>, stack: Option<u64>, vfork: bool, tids: Tids) -> Re
             return failed("no memory for the Linux state", ENOMEM);
         }
     };
+    // Its /proc directory: the parent's image (`lx::procfs`).
+    if lx.root == crate::fs::ramfs::ROOT {
+        let exe = *lx.exe.lock();
+        let aux = {
+            let a = lx.auxv.lock();
+            let mut v = alloc::vec::Vec::new();
+            crate::mm::heap::TryVec::try_extend_from_slice(&mut v, &a).map(|()| v)
+        };
+        if let (Ok(path), Ok(aux)) = (super::file::path_of(lx.root, exe), aux) {
+            super::procfs::image(child.id, &path, &aux);
+        }
+    }
     let object = match thread::create_forked(&child, regs, fx, bases, true) {
         Ok(o) => o,
         Err(status) => {
@@ -205,7 +217,10 @@ fn fork_with(call: &Call<'_>, stack: Option<u64>, vfork: bool, tids: Tids) -> Re
     // Its one thread, with the forking thread's mask, before it runs.
     let comm = call.lx.comm(call.tid);
     let core_tid = thread::id_of(&object);
-    if lx.add_thread(core_tid, super::threads::mask_of(call), comm).is_err() {
+    let added = lx.add_thread(core_tid, super::threads::mask_of(call), comm);
+    // A fork's child keeps its creator's alternate signal stack.
+    lx.set_altstack(core_tid, call.lx.altstack(call.tid));
+    if added.is_err() {
         crate::warn!("lx: pid {} fork failed: no memory for the child's thread state", parent.id);
         process::terminate(&child, super::signal::killed_status(lx_abi::signal::SIGKILL), false);
         thread::resume(&object);
@@ -265,9 +280,37 @@ fn wait_for_exec(call: &Call<'_>, child: &state::LxProcess) {
 /// signal (SIGCHLD: the C library's fork); a vfork with
 /// CLONE_VM|CLONE_VFORK (posix_spawn's). The combinations clone(2) calls
 /// invalid are EINVAL first.
+/// unshare(flags): gala makes no namespaces (`procfs::namespace_refusal`);
+/// what a process alone already has to itself (its descriptors, its file
+/// system context, its System V undo list, its address space and signal
+/// handlers with one thread) needs nothing. A threaded process asking to
+/// part from its threads' table is not supported (EINVAL, ledgered).
+pub fn unshare(call: &Call<'_>, flags: u64) -> Result {
+    use super::threads::{
+        CLONE_FILES, CLONE_FS, CLONE_SIGHAND, CLONE_SYSVSEM, CLONE_THREAD, CLONE_VM,
+    };
+    let own = CLONE_FILES | CLONE_FS | CLONE_SYSVSEM | CLONE_THREAD | CLONE_SIGHAND | CLONE_VM;
+    if flags & !(own | super::procfs::NAMESPACE_FLAGS) != 0 {
+        return Err(EINVAL);
+    }
+    if flags & super::procfs::NAMESPACE_FLAGS != 0 {
+        let uid = super::identity::of_process(&call.process).uid;
+        return Err(super::procfs::namespace_refusal(flags, uid));
+    }
+    if flags != 0 && call.lx.threads.lock().len() > 1 {
+        ledger::record("unshare", "linux option missing", flags);
+        return Err(EINVAL);
+    }
+    Ok(0)
+}
+
 pub fn clone(call: &Call<'_>, flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64) -> Result {
     use super::threads::{CLONE_THREAD, CLONE_VFORK, CSIGNAL, check_flags, clone_thread};
     check_flags(flags)?;
+    if flags & super::procfs::NAMESPACE_FLAGS != 0 {
+        let uid = super::identity::of_process(&call.process).uid;
+        return Err(super::procfs::namespace_refusal(flags, uid));
+    }
     if flags & CLONE_THREAD != 0 {
         return clone_thread(call, flags, stack, ptid, ctid, tls);
     }

@@ -76,7 +76,7 @@ impl WaitQueue {
 
 /// The scheduler tick by which the monotonic clock reads `at` (one more:
 /// the current tick may be nearly over).
-fn ticks_at(at: u64) -> u64 {
+pub fn ticks_at(at: u64) -> u64 {
     let ns = at.saturating_sub(platform::monotonic_ns());
     platform::ticks() + ns.div_ceil(1_000_000_000 / platform::TICK_HZ) + 1
 }

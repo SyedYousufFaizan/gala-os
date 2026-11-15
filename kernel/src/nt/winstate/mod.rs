@@ -298,6 +298,9 @@ pub struct Window<X> {
     pub client: Vec<u32>,
     /// The title (UTF-16).
     pub title: Vec<u16>,
+    /// Its program's name (the executable's file name, UTF-16; empty if
+    /// unknown): a taskbar tile's initial when the title has none.
+    pub program: Vec<u16>,
     /// A frameless popup (STYLE_POPUP: a menu, a drop-down list, a
     /// tooltip): all client area, above the framed windows, not on the
     /// taskbar, never active.
@@ -599,6 +602,7 @@ impl<X: Default> State<X> {
             docked: false,
             client,
             title: name,
+            program: Vec::new(),
             icon: Vec::new(),
             small_icon: Vec::new(),
             unsnapped: None,
@@ -622,16 +626,15 @@ impl<X: Default> State<X> {
         win.visible = visible;
         win.minimized = false;
         let bounds = win.bounds(shadow);
+        if !visible && was {
+            note_left(&win.title, "hidden");
+        }
         if visible && !was {
-            // The title, ASCII, for the log (screen checks wait for it; not
-            // in host unit tests, which have no console).
+            // Screen checks wait for it (not in host unit tests, which
+            // have no console).
             #[cfg(not(test))]
             {
-                let mut text = [0u8; 64];
-                let n = win.title.len().min(text.len());
-                for (t, &c) in text.iter_mut().zip(&win.title[..n]) {
-                    *t = if (0x20..0x7f).contains(&c) { c as u8 } else { b'?' };
-                }
+                let (text, n) = ascii_title(&win.title);
                 crate::info!(
                     "desktop: shown window '{}'",
                     core::str::from_utf8(&text[..n]).unwrap_or("?")
@@ -751,11 +754,31 @@ impl<X: Default> State<X> {
         Ok(new)
     }
 
+    /// Window `id`'s program name (`program_name`): set once it is made.
+    pub fn set_program(&mut self, id: u32, owner: u64, name: &[u16]) -> Result<(), NtStatus> {
+        let mut v = Vec::new();
+        v.try_extend_from_slice(name).map_err(|_| NtStatus::NO_MEMORY)?;
+        let win = self.find(id, owner)?;
+        win.program = v;
+        self.listing_changed = true;
+        Ok(())
+    }
+
     /// A window's new title (the caption and the taskbar show it).
     pub fn set_title(&mut self, id: u32, owner: u64, title: &[u16]) -> Result<Rect, NtStatus> {
         let mut name = Vec::new();
         name.try_extend_from_slice(title).map_err(|_| NtStatus::NO_MEMORY)?;
         let win = self.find(id, owner)?;
+        // A shown window's new title (screen checks wait for it: GIMP's
+        // names the image it opened); not in host unit tests.
+        #[cfg(not(test))]
+        if win.visible && win.title[..] != name[..] {
+            let (text, n) = ascii_title(&name);
+            crate::info!(
+                "desktop: window titled '{}'",
+                core::str::from_utf8(&text[..n]).unwrap_or("?")
+            );
+        }
         win.title = name;
         win.restyled();
         let r = win.caption_rect();
@@ -845,7 +868,11 @@ impl<X: Default> State<X> {
     pub fn destroy(&mut self, id: u32, owner: u64) -> Result<Rect, NtStatus> {
         let i = self.windows.iter().position(|w| w.id == id && w.owner == owner);
         let i = i.ok_or(NtStatus::INVALID_HANDLE)?;
-        let bounds = self.windows.remove(i).bounds(self.shadow);
+        let w = self.windows.remove(i);
+        if w.visible {
+            note_left(&w.title, "closed");
+        }
+        let bounds = w.bounds(self.shadow);
         self.forget(id);
         self.add_damage(bounds);
         Ok(bounds)
@@ -863,6 +890,9 @@ impl<X: Default> State<X> {
                 continue;
             }
             let w = self.windows.remove(i);
+            if w.visible {
+                note_left(&w.title, "its process ended");
+            }
             self.forget(w.id);
             self.add_damage(w.bounds(self.shadow));
         }
@@ -1370,6 +1400,35 @@ impl<X: Default> State<X> {
         self.add_damage(old);
         self.add_damage(new);
     }
+}
+
+/// A window's title for the log: ASCII (other characters as `?`), at
+/// most 64 bytes.
+#[cfg_attr(test, allow(dead_code))]
+fn ascii_title(title: &[u16]) -> ([u8; 64], usize) {
+    let mut text = [0u8; 64];
+    let n = title.len().min(text.len());
+    for (t, &c) in text.iter_mut().zip(&title[..n]) {
+        *t = if (0x20..0x7f).contains(&c) { c as u8 } else { b'?' };
+    }
+    (text, n)
+}
+
+/// A shown window left the screen (and the taskbar): `how` it went.
+/// The counterpart of `desktop: shown window`: a screen check whose
+/// input depends on the taskbar's buttons waits for it (the start button
+/// moves with each window: `linux_menu` after `exit` in an xterm).
+fn note_left(title: &[u16], how: &str) {
+    #[cfg(not(test))]
+    {
+        let (text, n) = ascii_title(title);
+        crate::info!(
+            "desktop: window '{}' left the screen ({how})",
+            core::str::from_utf8(&text[..n]).unwrap_or("?")
+        );
+    }
+    #[cfg(test)]
+    let _ = (title, how);
 }
 
 #[cfg(test)]

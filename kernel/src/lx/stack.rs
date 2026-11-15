@@ -159,6 +159,25 @@ pub struct InitialStack {
 }
 
 impl InitialStack {
+    /// The auxiliary vector's bytes: its pairs up to AT_NULL's.
+    pub fn auxv_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut at = self.auxv;
+        while let (Some(t), Some(v)) = (self.u64_at(at), self.u64_at(at + 8)) {
+            use crate::mm::heap::TryVec;
+            if out.try_extend_from_slice(&t.to_le_bytes()).is_err()
+                || out.try_extend_from_slice(&v.to_le_bytes()).is_err()
+            {
+                return Vec::new();
+            }
+            if t == 0 {
+                break;
+            }
+            at += 16;
+        }
+        out
+    }
+
     /// The u64 at `addr`, if it lies in the stack.
     pub fn u64_at(&self, addr: u64) -> Option<u64> {
         let at = usize::try_from(addr.checked_sub(self.sp)?).ok()?;

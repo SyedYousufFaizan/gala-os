@@ -60,5 +60,10 @@ epoll_pwait2(30 ms) = 0
   waited >= 30 ms = yes
 epoll_pwait2(tv_nsec = 1e9) = -22 (EINVAL)
 epoll_pwait2(NULL timeout, data there) = 2: data 1 events IN; data 10 events IN
+-- the set changed while a thread waits
+epoll_wait(-1) on an empty set, a pipe ADDed meanwhile and written = 1: data 7 events IN
+a one-shot entry, ready = 1: data 8 events IN
+  then disabled = 0
+epoll_wait(-1), the entry re-armed by MOD meanwhile = 1: data 8 events IN
 epoll_test: ok
 -- exit status 0

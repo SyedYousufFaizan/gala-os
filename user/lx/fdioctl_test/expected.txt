@@ -1,0 +1,85 @@
+-- a pipe's read end
+  at first: cloexec 0, nonblock 0
+  FIONBIO 1 = 0
+  then: cloexec 0, nonblock 1
+  FIOCLEX = 0
+  then: cloexec 1, nonblock 1
+  a dup (its description, not its descriptor): cloexec 0, nonblock 1
+  FIONBIO 0 through the dup = 0
+  the first: cloexec 1, nonblock 0
+  FIONCLEX = 0
+  then: cloexec 0, nonblock 0
+  FIONBIO(bad pointer) = -14 (EFAULT)
+a non-blocking read of the empty pipe = -11 (EAGAIN)
+FIONREAD of the empty pipe = 0
+  bytes = 0
+FIONREAD after 5 bytes = 0
+  bytes = 5
+FIONREAD(bad pointer) = -14 (EFAULT)
+an unknown ioctl on a pipe = -25 (ENOTTY)
+-- a pipe's write end
+  at first: cloexec 0, nonblock 0
+  FIONBIO 1 = 0
+  then: cloexec 0, nonblock 1
+  FIOCLEX = 0
+  then: cloexec 1, nonblock 1
+  a dup (its description, not its descriptor): cloexec 0, nonblock 1
+  FIONBIO 0 through the dup = 0
+  the first: cloexec 1, nonblock 0
+  FIONCLEX = 0
+  then: cloexec 0, nonblock 0
+  FIONBIO(bad pointer) = -14 (EFAULT)
+-- a socket
+  at first: cloexec 0, nonblock 0
+  FIONBIO 1 = 0
+  then: cloexec 0, nonblock 1
+  FIOCLEX = 0
+  then: cloexec 1, nonblock 1
+  a dup (its description, not its descriptor): cloexec 0, nonblock 1
+  FIONBIO 0 through the dup = 0
+  the first: cloexec 1, nonblock 0
+  FIONCLEX = 0
+  then: cloexec 0, nonblock 0
+  FIONBIO(bad pointer) = -14 (EFAULT)
+a non-blocking recv of nothing (FIONBIO 1) = -11 (EAGAIN)
+-- a regular file
+  at first: cloexec 0, nonblock 0
+  FIONBIO 1 = 0
+  then: cloexec 0, nonblock 1
+  FIOCLEX = 0
+  then: cloexec 1, nonblock 1
+  a dup (its description, not its descriptor): cloexec 0, nonblock 1
+  FIONBIO 0 through the dup = 0
+  the first: cloexec 1, nonblock 0
+  FIONCLEX = 0
+  then: cloexec 0, nonblock 0
+  FIONBIO(bad pointer) = -14 (EFAULT)
+-- an eventfd
+  at first: cloexec 0, nonblock 0
+  FIONBIO 1 = 0
+  then: cloexec 0, nonblock 1
+  FIOCLEX = 0
+  then: cloexec 1, nonblock 1
+  a dup (its description, not its descriptor): cloexec 0, nonblock 1
+  FIONBIO 0 through the dup = 0
+  the first: cloexec 1, nonblock 0
+  FIONCLEX = 0
+  then: cloexec 0, nonblock 0
+  FIONBIO(bad pointer) = -14 (EFAULT)
+-- /dev/null
+  at first: cloexec 0, nonblock 0
+  FIONBIO 1 = 0
+  then: cloexec 0, nonblock 1
+  FIOCLEX = 0
+  then: cloexec 1, nonblock 1
+  a dup (its description, not its descriptor): cloexec 0, nonblock 1
+  FIONBIO 0 through the dup = 0
+  the first: cloexec 1, nonblock 0
+  FIONCLEX = 0
+  then: cloexec 0, nonblock 0
+  FIONBIO(bad pointer) = -14 (EFAULT)
+-- errors
+FIONBIO on a closed descriptor = -9 (EBADF)
+FIOCLEX on -1 = -9 (EBADF)
+fdioctl_test: ok
+-- exit status 0

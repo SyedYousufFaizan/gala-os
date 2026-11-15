@@ -159,6 +159,53 @@ static int writer(void *arg)
 	return 0;
 }
 
+/* A thread changing a set another thread is blocked on (glycin's loader
+ * connection, armed from one thread while another waits). */
+static volatile int changer_ep, changer_fd, changer_wfd, changer_mode, changer_go;
+
+static int changer(void *arg)
+{
+	(void)arg;
+	while (!changer_go)
+		sys0(SYS_sched_yield);
+	sleep_ms(20);
+	if (changer_mode == 0) {
+		/* ADD an empty pipe, then write to it. */
+		ctl(changer_ep, EPOLL_CTL_ADD, changer_fd, EPOLLIN, 7);
+		sleep_ms(20);
+		write_str(changer_wfd, "a");
+	} else {
+		/* Re-arm a disabled one-shot entry that is ready. */
+		ctl(changer_ep, EPOLL_CTL_MOD, changer_fd, EPOLLIN | EPOLLONESHOT, 8);
+	}
+	return 0;
+}
+
+static void join(volatile int *ctid)
+{
+	for (int v; (v = *ctid) != 0;)
+		sys4(SYS_futex, ctid, 0, v, 0);
+}
+
+static int q_write;
+
+static void run_changer(int ep, int fd, int mode, struct epoll_event *ev, const char *label)
+{
+	static volatile int ctid;
+	int ptid;
+	ctid = -1;
+	changer_ep = ep;
+	changer_fd = fd;
+	changer_mode = mode;
+	changer_go = 0;
+	changer_wfd = q_write;
+	tls_block[0] = (u64)tls_block;
+	clone_thread(THREAD_FLAGS, stack + sizeof stack, &ptid, (int *)&ctid, tls_block, changer, 0);
+	changer_go = 1;
+	say_epoll(label, ewait(ep, ev, 8, -1), ev);
+	join(&ctid);
+}
+
 static volatile int alarms;
 static void on_alarm(int sig)
 {
@@ -298,6 +345,17 @@ int main(void)
 	say_ret("epoll_pwait2(tv_nsec = 1e9)", sys6(SYS_epoll_pwait2, inner, (i64)ev, 8, (i64)&bad, 0, 8));
 	write_str(p[1], "y");
 	say_epoll("epoll_pwait2(NULL timeout, data there)", sys6(SYS_epoll_pwait2, inner, (i64)ev, 8, 0, 0, 8), ev);
+
+	say_text("-- the set changed while a thread waits");
+	int q[2];
+	sys2(SYS_pipe2, q, 0);
+	q_write = q[1];
+	i64 fresh = sys1(SYS_epoll_create1, 0);
+	run_changer(fresh, q[0], 0, ev, "epoll_wait(-1) on an empty set, a pipe ADDed meanwhile and written");
+	ctl(fresh, EPOLL_CTL_MOD, q[0], EPOLLIN | EPOLLONESHOT, 8);
+	say_epoll("a one-shot entry, ready", ewait(fresh, ev, 8, 0), ev);
+	say_epoll("  then disabled", ewait(fresh, ev, 8, 0), ev);
+	run_changer(fresh, q[0], 1, ev, "epoll_wait(-1), the entry re-armed by MOD meanwhile");
 	say_text("epoll_test: ok");
 	return 0;
 }

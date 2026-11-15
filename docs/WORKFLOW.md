@@ -2228,6 +2228,10 @@ source).
   /usr/share/keyrings/ubuntu-archive-keyring.gpg`, then
   `dists/noble/main/binary-amd64/Packages.xz`, whose hash InRelease
   lists) and add a `Deb` row with the files used; a THIRD_PARTY row too.
+  A file a maintainer script installs under another name
+  (update-alternatives: libblas3's `libblas.so.3` is a link through
+  /etc/alternatives to `blas/libblas.so.3`) is written
+  `"<installed path>=<path in the package>"`.
   The packages are kept in `target/prebuilt/debs/` (shared, checked at
   each use), so a re-assembly or an interrupted fetch downloads only
   what is missing. Assembly runs the host's `update-mime-database`
@@ -2277,6 +2281,104 @@ source).
   before its parent's wait4 returns, so whatever the parent does next
   (sealing a memfd against writing: EBUSY while a writable mapping is
   left) must not see the child's mappings (`lx::process_ended`).
+
+### Linux roots from Ubuntu 26.04 (ROADMAP LD)
+
+The Linux roots (`LINUX_ROOTS`, the "glibc", "wayland_client" and
+"weston" prebuilts) are Ubuntu 26.04 LTS's (resolute) release pocket.
+A root is what its workload opened on real 26.04, traced:
+
+- `tools/linux-roots/mkchroot.sh <base.tar.gz> <dir> <packages>` makes a
+  fresh chroot from Ubuntu's base image (`ubuntu-base-26.04-base-amd64`,
+  its SHA256SUMS checked with gpgv against the archive keyring), apt on
+  the release pocket only, the workload's packages without recommends:
+  one chroot per root, so nothing another root's packages bring is
+  traced. Run the workload (`tools/linux-roots/workloads/`) in it under
+  `strace -f -y` **as uid 1000** (`chroot --userspec=1000:1000`): gala's
+  programs are unprivileged, and some decide by it (glycin's sandbox
+  reads capget).
+- `plan.py <chroot> plan.json <traces>` gives the files by package;
+  `rows.py <index dir> plan.json rows.rs --exclude <earlier roots' files>`
+  the `Deb` rows from resolute's verified `Packages` indexes (InRelease
+  checked with gpgv, the `Packages.xz` hashes it lists); `replace_root.py
+  <root> rows.rs` puts them in xtask. The glibc prebuilt's files (ld.so,
+  libc, libm), libffi's and libwayland-client's are excluded from the
+  roots, the rest of libc6 (libresolv) is not.
+- A scenario's input is checked against 26.04 in the chroot first when
+  it misbehaves: weston on Xvfb as the compositor, `xdotool` typing into
+  weston's window (rootful Xwayland there needs `-ac` in the chroot). So
+  it was found that twm gives the keys to the xterm only with the
+  pointer on it (`lx_xdesktop`, `linux_menu` point first), and the rest
+  was gala's (termios2).
+- Pitfalls met: Xwayland caches compiled keymaps in `/var/lib/xkb`
+  (clear `*.xkm` before tracing, or the keymap's files are never
+  opened); Xwayland loads Mesa's `swrast_dri.so` (gallium and LLVM:
+  185 MB) for GLX, which gala's Xwayland runs without: move
+  `/usr/lib/x86_64-linux-gnu/dri` aside for the trace; `/usr/share/X11/xkb`
+  is a link to `xkeyboard-config-2`, and xkbcomp opens files relative to
+  the target after a chdir (the plan adds them under the link too);
+  strace's `<unfinished ...>` lines carry paths that were used;
+  `/usr/bin/sleep` (uutils) is a link into another package and
+  `icons/default/index.theme` an update-alternatives link (both
+  `<installed>=<packaged>`); a root's links to one file (an icon theme's
+  cursors) are copies at assembly; a file the menu or a desktop reads
+  but the program never opens (xterm's `debian-xterm.desktop`) is not
+  in a trace: add it to the row by hand, with a comment.
+- Transcripts recorded on 24.04 that 26.04 answers otherwise get their
+  own `<scenario>.txt`, recorded in the chroot (lx-expect's
+  expected.txt stays the CI host's).
+
+### GIMP (ROADMAP LD step 9)
+
+- Scenario `lx_gimp_batch` (`cargo xtask boot-test 'lx_gimp_batch$'`,
+  about 135 s of run time under TCG: one of `SLOW_SCENARIOS`):
+  `/bin/sh /lx/gimp/batch.sh` runs `gimp-console-3.2` in batch mode on
+  `user/lx/gimp/in.png` (made by `mkpng.py`) with `batch.scm` and a
+  writable copy of `gimprc` in `$HOME` (GIMP writes it back at the end;
+  cp keeps the source's mode, and gala's `/lx` files are 0555), then
+  busybox's sha256sum of the PNG it saved; its transcript is
+  `user/lx/sh/lx_gimp_batch.txt`. Record it in a fresh Ubuntu 26.04
+  chroot (`mkchroot.sh ... gimp`, GIMP 3.2.2-1) holding only the root's
+  plug-ins (move the others in `/usr/lib/x86_64-linux-gnu/gimp/3.0/
+  plug-ins` aside, and `extensions/org.gimp.extension.goat-exercises`),
+  as uid 1000 with a new empty home: `chroot --userspec=1000:1000 <dir>
+  env -i HOME=<home> PATH=/usr/bin:/bin BB= DIR=<a copy of user/lx/gimp>
+  sh <that copy>/batch.sh`, stdout, then `-- stderr:` and stderr, then
+  `-- exit status 0`. Run it twice: the transcripts must be the same.
+- **The saved file is compared byte for byte**, so it carries nothing
+  that changes between runs: the gimprc turns off exporting the colour
+  profile, Exif, XMP and IPTC (their dates and document ids), and
+  `file-png-export`'s arguments every optional chunk. GEGL's and babl's
+  modules come in x86_64 variants picked by the CPU's features; the
+  guest's (QEMU's `-cpu max`) gives the host's bytes.
+- **GIMP loads its data** (no `-d`): Script-Fu's scripts name a brush, a
+  gradient and a pattern as defaults and warn, with a pid and a time,
+  when they are missing; and Script-Fu crashes without its scripts'
+  directory (a `script-fu-path` without GIMP's own). The first start
+  measures babl's conversions (`~/.cache/babl`): most of the run time.
+- **The root "gimp"** is what `strace -f -y` of that run opened on
+  26.04 (`plan.py`), less what the "gtk3", "x11" and "glibc" roots ship,
+  coreutils (busybox's applets in gala) and GEGL's probe of graphviz's
+  `dot`; directories looked for with nothing used beneath them
+  (`usr/share/locale/`, which each plug-in checks for its catalogs) are
+  `<dir>/` entries. A start queries every plug-in in the plug-ins and
+  extensions directories (each a process): the root has only those the
+  scenario uses (script-fu and file-png).
+- Scenario `lx_gimp` (about 180 s of run time): `sh /lx/gimp/gui.sh`
+  starts `gimp-3.2` on in.png over the session's Wayland display, its
+  output in `$HOME/gimp.log`; GIMP_SCREEN dumps the screen when the
+  welcome dialog shows (`target/debug/test-lx_gimp.screen0.png`), once
+  it is closed (`screen2.png`), once GIMP's title names the image
+  (`screen3.png`) and once in.png's orange rectangle is on the canvas
+  (`screen4.png`), then Ctrl+Q. A screen step dumps only
+  when it has pixels to check (a `Varied` over the screen will do);
+  `XTASK_SHOTS` is QEMU's screen, black for a `presenter=test` desktop.
+- Reading a run: `XTASK_EVENTS=ipc` shows GIMP's segment (`lx shm`:
+  gimp-console gets, attaches and removes it; each plug-in attaches and
+  detaches; it is destroyed at the last detach), `XTASK_EVENTS=syscall`
+  every Linux call (a failing open's errno is what GLib's message turns
+  into words); GLib's criticals and GIMP's own messages are on its
+  stderr in the transcript.
 
 ### The WSL facade's tests (user/wsl_test, ROADMAP CT)
 
@@ -2349,10 +2451,13 @@ source).
   HELD_DOWNLOADS), so the bar is seen mid-download under KVM as under
   TCG;
   the start button moves left by 24 pixels per window on the taskbar
-  (the console window of the terminal stays after `exit`); each move is
-  relative to where the step before left the pointer, a few moves per
-  click (a reset to (0, 0) with six large moves lost a move under load:
-  QEMU's PS/2 queue is short). A distribution's processes run as the
+  (the console window of the terminal stays after `exit`; the xterm's
+  goes, which the Hide step waits for: `desktop: window 'xterm' left the
+  screen`); the xterm's window shows before its shell runs, so `exit`
+  is typed only once its pixels show dash's prompt (keys sent earlier
+  reached Xwayland before the xterm had the X focus and were lost, and
+  the xterm never ended); each move is relative to where the step
+  before left the pointer. A distribution's processes run as the
   Windows user's Linux ids (uid 1000), so its `/etc/passwd` must name
   uid 1000: Xwayland refuses its own local clients ("Authorization
   required") when the user of the peer is unknown; the stand-in has the
@@ -3399,9 +3504,10 @@ guest's state dump, and is the scenario's verdict. Such scenarios must boot by
 UEFI (BIOS boots have no framebuffer), unless their desktop is headless
 (`presenter=test`, below).
 
-- A step first sends QEMU monitor commands, 250 ms apart: `mouse_move dx
-  dy`, `mouse_button 1` (bit 0 the left button, bit 1 the right:
-  `mouse_button 2` is a right press), `sendkey`. Then it takes a
+- A step first sends QEMU monitor commands: `mouse_move dx dy`,
+  `mouse_button 1` (bit 0 the left button, bit 1 the right:
+  `mouse_button 2` is a right press), `sendkey`, each once the guest
+  has read everything the ones before it queued (below). Then it takes a
   screendump (none when the step checks no pixels, e.g. the click that
   ends the program), kept as `target/debug/test-<scenario>.screen<step>.png`,
   and checks pixels (exact colours, or "some pixel near this colour in
@@ -3409,14 +3515,38 @@ UEFI (BIOS boots have no framebuffer), unless their desktop is headless
 - A pixel check is retried (a new screendump every 0.5 s, for about
   30 s) before it fails: a redraw under load can outlast the first
   dump, and a step may wait for the program.
+- **Input is paced on what the guest has read, never on time**
+  (`Ps2Pace` in xtask). QEMU's PS/2 keyboard and mouse each queue at
+  most 16 bytes: a key that does not fit is dropped, and a mouse packet
+  that does not fit waits for the next input event, which carries only
+  the buttons as they are then, so a press followed by its release
+  before the guest made room is never seen. Input paced by time is lost
+  that way whenever the guest is busy for a second (the full suite's
+  load). So the kernel counts the bytes its input thread reads from each device
+  and logs where (`input: bytes read at <address>`); xtask reads them
+  with the monitor's `x` and sends each command only when the guest has
+  read every byte QEMU queued before it (`ps2_bytes` knows what each
+  command queues: packets of at most 127 per axis, one per change of
+  the buttons, a byte per key press and release, two with E0). A guest
+  that does not read within 120 s fails the step with the counts ("the
+  guest read N of the M mouse bytes sent"); a command `ps2_bytes` does
+  not know, or one that would not fit an empty queue, is refused by the
+  host test `every_screen_step_input_is_paced`. Under the
+  `events=window` mask, each button change the desktop takes is an
+  event `pointer` (where, and what got it: `Start`, `LinuxEntry(0)`,
+  `capture <window>`), and the exit's `input:` line counts the presses.
 - The guest's pointer starts in the middle of the screen and is clamped
   to it: `mouse_move -255 -255` three times puts it at (0, 0) whatever
-  the earlier steps did. Keep each `mouse_move` within 255 per axis:
-  QEMU queues PS/2 packets of at most 255 and hands the rest of a larger
-  move over with later events (a click then lands elsewhere).
-- A mouse press is sent 0.75 s after the command before it, so queued
-  moves are drained first. Typed input is queued too: check for the
-  final state.
+  the earlier steps did. Keep each `mouse_move` within 255 per axis (3
+  packets: 4 do not fit QEMU's queue with the wheel's 4-byte packets).
+- **Input that aims at something the step before changes waits for
+  that change** (`after:`): the start button moves left by 24 pixels per
+  window on the taskbar, so a click on it after `exit` in a window waits
+  for `desktop: window '<title>' left the screen` (the counterpart of
+  `desktop: shown window`); typed input waits for the prompt of what
+  reads it (a pixel check of the prompt: a window shows before its
+  program reads keys). `after` matches anywhere in the serial log, so
+  it names a line that comes only from that change.
 - Windows-key chords are one `sendkey` (`sendkey meta_l-right`: Snap).
   The wheel: `mouse_move 0 0 1` is one notch up (away from the user; a
   negative dz is down).

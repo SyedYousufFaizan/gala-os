@@ -1420,3 +1420,15 @@ fn win_e_starts_file_explorer() {
     d.key(b'E', 0x12, false, true);
     assert!(d.take_launch().is_none());
 }
+
+#[test]
+fn a_tile_initial_from_the_title_or_else_the_program() {
+    let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+    let (gimp, program) = (w("[in] (imported)-1.0 - GIMP"), w("gimp-3.2"));
+    assert_eq!(tile_initial(&gimp, &program), ('G', &program[..]));
+    let notes = w("Notes");
+    assert_eq!(tile_initial(&notes, &program), ('N', &notes[..]));
+    let star = w("*untitled");
+    assert_eq!(tile_initial(&star, &[]), ('*', &star[..]));
+    assert_eq!(tile_initial(&[], &[]), ('?', &[][..]));
+}
