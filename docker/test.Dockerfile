@@ -5,16 +5,16 @@
 #
 # The repository is mounted at /work; build output goes to target/docker.
 # KVM is used when the host passes /dev/kvm through (docker-test does).
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 # Behind a TLS-intercepting proxy, docker-test puts its CA here
 # (XTASK_DOCKER_CA, or SSL_CERT_FILE); proxy variables come as build args.
 COPY extra-ca/ /usr/local/share/ca-certificates/extra/
 ARG http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY
 
-# No QEMU package: the distribution's is 8.2.2, whose TCG loses writes
-# to a rewritten page (WORKFLOW "QEMU"), and a container that carries one
-# uses it silently when the pinned build is missing. These are what
+# No QEMU package: the distribution's is 10.2.1, which wedges under KVM
+# before the kernel logs a phase (WORKFLOW "QEMU"), and a container that
+# carries one uses it silently when the pinned build is missing. These are what
 # `cargo xtask qemu` needs to build QEMU_VERSION instead, into the
 # ~/.cache/gala-qemu that docker-test mounts.
 
@@ -26,13 +26,18 @@ ARG http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY
 # and libglib2.0-bin (glib-compile-schemas) for the desktop ones. They are what CI's runner installs
 # (`.github/workflows/ci.yml`); without one the scenario that needs it
 # fails -- after a full boot where it is a client.
+#
+# The base image takes the plain amd64 archive (it sets no
+# APT::Architecture-Variants), so its gcc is the one user/lx/bin is built
+# with: an amd64v3 toolchain defaults to -march=x86-64-v3 and gives other
+# bytes, which user/lx/build.sh refuses (WORKFLOW "Linux test programs").
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ovmf xorriso git make gcc libc6-dev curl ca-certificates \
         python3 python3-venv ninja-build pkg-config flex bison bzip2 xz-utils \
         libglib2.0-dev libpixman-1-dev libslirp-dev libfdt-dev zlib1g-dev \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        p7zip-full unzip openssh-client postgresql-client msitools musl-tools \
+        7zip unzip openssh-client postgresql-client msitools musl-tools \
         weston xvfb libgtk-3-0t64 shared-mime-info libglib2.0-bin \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
