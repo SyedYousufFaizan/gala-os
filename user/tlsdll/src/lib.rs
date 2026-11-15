@@ -76,7 +76,15 @@ extern "system" fn tls_callback(_module: usize, reason: u32, _reserved: usize) {
 fn slot(i: usize) -> *mut u64 {
     let array: usize;
     // SAFETY: gs:[0x58] is TEB.ThreadLocalStoragePointer.
-    unsafe { core::arch::asm!("mov {}, gs:[0x58]", out(reg) array, options(nostack, readonly)) };
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!("mov {}, gs:[0x58]", out(reg) array, options(nostack, readonly))
+    };
+    // SAFETY: the same field through x18, which holds the TEB on ARM64.
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("ldr {}, [x18, #0x58]", out(reg) array, options(nostack, readonly))
+    };
     // SAFETY: the loader set the index and this thread's block.
     unsafe {
         let index = core::ptr::read_volatile(&raw const _tls_index) as usize;

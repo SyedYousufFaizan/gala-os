@@ -14,14 +14,14 @@ mod path;
 
 /// MSVC-target codegen references this marker symbol directly, so it cannot
 /// come from an import. On x86, ntrt's.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 
 // The C runtime helpers the compiler calls (`path`'s buffers are copied,
 // zeroed and probed), ntdll's exports as kernel32 takes them. On x86 they
 // come from ntrt's x86 runtime.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -118,6 +118,9 @@ fn set_last_error_code(error: u32) {
         core::arch::asm!("mov gs:[0x68], {0:e}", in(reg) error, options(nostack, preserves_flags));
         #[cfg(target_arch = "x86")]
         core::arch::asm!("mov fs:[0x34], {0}", in(reg) error, options(nostack, preserves_flags));
+        // x18 holds the TEB (the ARM64 ABI); the 64-bit TEB's 0x68.
+        #[cfg(target_arch = "aarch64")]
+        core::arch::asm!("str {0:w}, [x18, #0x68]", in(reg) error, options(nostack, preserves_flags));
     }
 }
 

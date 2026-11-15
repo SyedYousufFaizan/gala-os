@@ -248,6 +248,46 @@ pub fn send_from_kernel(pid: u64, sig: u32) {
     raise_for(&target, pid, 0, info, Target::Process);
 }
 
+/// Ends the calling process with signal `sig` from the kernel (a seccomp
+/// kill, strict mode's SIGKILL), whatever its handlers.
+pub fn kill_self(call: &Call<'_>, sig: u32) {
+    let info = Siginfo::zeroed(sig as i32, abi::SI_KERNEL);
+    kill(&call.process, call.tid, sig, &info);
+}
+
+/// Ends the calling thread with `sig` (SECCOMP_RET_KILL_THREAD): the
+/// process if it is its only thread, as Linux's.
+pub fn kill_thread_self(call: &Call<'_>, sig: u32) {
+    if call.lx.threads.lock().len() <= 1 {
+        kill_self(call, sig);
+        return;
+    }
+    crate::info!(
+        "lx: pid {} (thread {}): killed by signal {sig} (seccomp)",
+        call.process.id,
+        call.tid
+    );
+    if let Some(me) = crate::nt::thread::current() {
+        crate::nt::thread::request_termination(&me, signal::killed_status(sig));
+    }
+}
+
+/// A seccomp trap of the calling thread: SIGSYS to it with the trap's
+/// siginfo, forced to its default action (an end) if blocked or ignored,
+/// as Linux's force_sig_seccomp.
+pub fn seccomp_trap(call: &Call<'_>, nr: i32, data: i32, ip: u64) {
+    let info = super::seccomp::trap_info(nr, data, ip);
+    let (blocked, handler) = {
+        let s = call.lx.signals.lock();
+        (s.mask(call.tid).contains(abi::SIGSYS), s.action(abi::SIGSYS).handler)
+    };
+    if blocked || handler == abi::SIG_DFL || handler == abi::SIG_IGN {
+        kill(&call.process, call.tid, abi::SIGSYS, &info);
+        return;
+    }
+    raise_for(&call.lx, call.process.id, call.tid, info, Target::Thread(call.tid));
+}
+
 pub fn kill_call(call: &Call<'_>, pid: u64, sig: u64) -> Result {
     let pid = pid as i32;
     if sig > u64::from(abi::NSIG) {

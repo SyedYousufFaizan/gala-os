@@ -63,9 +63,9 @@ use ntrt as _;
 
 mod db;
 
-// The x64 build takes the memory routines from gala's ntdll, which
+// The 64-bit builds take the memory routines from gala's ntdll, which
 // exports them.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -82,7 +82,7 @@ unsafe extern "C" {
 
 /// MSVC-target codegen references this marker symbol directly (ntrt's
 /// x86 runtime defines it on x86).
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 

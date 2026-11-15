@@ -179,6 +179,17 @@ cargo xtask export-tests    # refresh user/bin (CI compares)
   target add aarch64-unknown-none` if the toolchain lacks it). A new
   arch function used outside `arch` needs its aarch64 stub (it may end
   in `unported`).
+- **gala's DLLs build for ARM64** (`aarch64-pc-windows-msvc`, CI's
+  Clippy step: a clippy run and a build, since Clippy does not assemble
+  inline assembly; wow64 excepted). Each DLL's architecture-specific
+  code is in its per-architecture module (`x64.rs`, `x86.rs`,
+  `aarch64.rs`: kernel32, msvcrt, ntdll) or behind a `cfg` with an ARM64
+  branch: the TEB through x18 (`[x18 + 0x68]` is LastErrorValue, as
+  `gs:[0x68]` on x64), 64-bit layouts under `target_pointer_width =
+  "64"` rather than `target_arch = "x86_64"`, `_fltused` and ntdll's
+  C helpers under `not(target_arch = "x86")`. Where ARM64 needs the
+  port (its CONTEXT services, unwinding, FPCR), the stub records the gap
+  in the ledger and ends the process (`unported`).
 - **shasha features: the `gala` command first.** Everything the
   graphical shell does can be done from a terminal. Make a new feature a
   named action (`nt::desktop::Action`, or a new GalaDesktopAction
@@ -2444,6 +2455,29 @@ A root is what its workload opened on real 26.04, traced:
   into words); GLib's criticals and GIMP's own messages are on its
   stderr in the transcript.
 
+### Inkscape (ROADMAP LD)
+
+- Scenario `lx_inkscape_batch` (`cargo xtask boot-test
+  'lx_inkscape_batch$'`): `/bin/sh /lx/inkscape/batch.sh` runs `inkscape
+  --export-type=png` on `user/lx/inkscape/in.svg`, its stderr (GTK's
+  warnings, with a pid and a time) in `$HOME/inkscape.log`, then
+  busybox's sha256sum of the PNG; its transcript is
+  `user/lx/sh/lx_inkscape_batch.txt`, recorded in a fresh Ubuntu 26.04
+  chroot (`mkchroot.sh ... inkscape`, Inkscape 1.4.3-0ubuntu2) as uid
+  1000: `chroot --userspec=1000:1000 <dir> env -i HOME=<an empty home>
+  PATH=/usr/bin:/bin BB= DIR=<a copy of user/lx/inkscape> sh <that
+  copy>/batch.sh`, then `-- exit status 0`.
+- Scenario `lx_inkscape`: `sh /lx/inkscape/gui.sh` opens a copy of
+  in.svg over the session's Wayland display (its output in
+  `$HOME/inkscape.log`); INKSCAPE_SCREEN checks the drawing's yellow on
+  the canvas (`test-lx_inkscape.screen0.png`) and quits with Ctrl+Q. Its
+  transcript (the exit status) is recorded on Ubuntu 26.04 with the same
+  key, as GIMP's (weston on Xvfb, xdotool).
+- The root "inkscape" is those runs' `strace -f -y` (`plan.py`, `rows.py`
+  excluding the "gtk3", "x11" and "glibc" roots' files), with GTK's
+  schemas and Inkscape's whole hicolor icon theme. Inkscape finds
+  its own libraries through `$ORIGIN/..`: plan.py normalizes such paths.
+
 ### The WSL facade's tests (user/wsl_test, ROADMAP CT)
 
 - `user/wsl_test` drives `%SystemRoot%\System32\wsl.exe` from outside
@@ -3604,6 +3638,13 @@ UEFI (BIOS boots have no framebuffer), unless their desktop is headless
   `events=window` mask, each button change the desktop takes is an
   event `pointer` (where, and what got it: `Start`, `LinuxEntry(0)`,
   `capture <window>`), and the exit's `input:` line counts the presses.
+- **The last step's input may end the run.** A key that ends the
+  program (Esc, Ctrl+Q) under `qemu_exit` can close QEMU, and its
+  monitor, before xtask has read the guest's counters. On the last step
+  with no pixels to check, a monitor that closed then is not a failure:
+  the verdict says so (`xtask: screen ok (step N: QEMU's monitor closed
+  after the last input ...)`) and the run's exit status and expected
+  lines decide. Anywhere else a closed monitor fails the step.
 - The guest's pointer starts in the middle of the screen and is clamped
   to it: `mouse_move -255 -255` three times puts it at (0, 0) whatever
   the earlier steps did. Keep each `mouse_move` within 255 per axis (3

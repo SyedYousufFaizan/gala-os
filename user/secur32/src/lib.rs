@@ -23,7 +23,7 @@ mod unimplemented;
 #[cfg(target_arch = "x86")]
 use ntrt as _;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -40,7 +40,7 @@ unsafe extern "C" {
 
 /// MSVC-target codegen references this marker symbol directly, so it cannot
 /// come from an import. (It becomes a harmless extra data export.)
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 

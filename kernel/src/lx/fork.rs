@@ -220,6 +220,8 @@ fn fork_with(call: &Call<'_>, stack: Option<u64>, vfork: bool, tids: Tids) -> Re
     let added = lx.add_thread(core_tid, super::threads::mask_of(call), comm);
     // A fork's child keeps its creator's alternate signal stack.
     lx.set_altstack(core_tid, call.lx.altstack(call.tid));
+    // And its seccomp state.
+    lx.set_seccomp(core_tid, call.lx.seccomp(call.tid));
     if added.is_err() {
         crate::warn!("lx: pid {} fork failed: no memory for the child's thread state", parent.id);
         process::terminate(&child, super::signal::killed_status(lx_abi::signal::SIGKILL), false);

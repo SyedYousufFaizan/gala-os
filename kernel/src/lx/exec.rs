@@ -661,6 +661,7 @@ pub fn execve(
     // Its name once it runs: the path given (a script's, not its
     // interpreter's).
     let comm = state::Comm::of_path(&path);
+    let name = process::CurrentName::of_path(&path);
     let mut args = read_strings(&call.process, argv)?;
     let env = read_strings(&call.process, envp)?;
     let (mut exe, mut data) = super::file::executable(call, &path)?;
@@ -745,6 +746,7 @@ pub fn execve(
     }
     *call.lx.auxv.lock() = aux;
     call.lx.set_comm(call.tid, comm);
+    *call.process.current_name.lock() = name;
     // The task manager's command line: the new argv.
     let mut line: Vec<u8> = Vec::new();
     for (i, a) in argv_refs.iter().enumerate() {

@@ -117,6 +117,18 @@ fn activity_id() -> *mut [u8; 16] {
     (teb + 0xf50) as *mut [u8; 16]
 }
 
+/// TEB.ActivityId (the 64-bit TEB's 0x1710, as x64's): the thread's ETW
+/// activity id.
+#[cfg(target_arch = "aarch64")]
+fn activity_id() -> *mut [u8; 16] {
+    let teb: usize;
+    // SAFETY: x18 holds the TEB in user mode (the ARM64 ABI).
+    unsafe {
+        core::arch::asm!("mov {}, x18", out(reg) teb, options(nomem, nostack, preserves_flags))
+    };
+    (teb + 0x1710) as *mut [u8; 16]
+}
+
 #[cfg_attr(
     target_arch = "x86",
     link(name = "bcryptprimitives", kind = "raw-dylib", import_name_type = "undecorated")

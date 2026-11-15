@@ -21,6 +21,11 @@ use gala_heap as _;
 
 mod binding;
 mod client;
+// x64's (assembly with its unwind information); ARM64's is a stub.
+#[cfg(target_arch = "x86_64")]
+mod guard;
+#[cfg(not(target_arch = "x86_64"))]
+#[path = "guard_stub.rs"]
 mod guard;
 mod ndr;
 mod pdu;

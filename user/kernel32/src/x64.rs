@@ -1,46 +1,10 @@
-//! The x64 parts of kernel32 (System32's): the TEB through GS and the
-//! offsets of the x64 TEB, PEB, process parameters, CONTEXT and PE32+
-//! optional header (the public x64 layouts: winnt.h, winternl.h). The x86
+//! The x64 parts of kernel32 (System32's): the TEB through GS, the x64
+//! CONTEXT (winnt.h), the processor, SLIST_HEADER; the 64-bit TEB, PEB,
+//! process parameters and PE32+ optional header are `win64.rs`'s. The x86
 //! build (SysWOW64's kernel32, ARCHITECTURE "Plan: WOW64") has the same
-//! names in `x86.rs`.
+//! names in `x86.rs`, the ARM64 one in `aarch64.rs`.
 
-/// TEB offsets (x64).
-pub const TEB_STACK_BASE: usize = 0x08;
-pub const TEB_SELF: usize = 0x30;
-pub const TEB_CLIENT_PROCESS: usize = 0x40;
-pub const TEB_CLIENT_THREAD: usize = 0x48;
-pub const TEB_PEB: usize = 0x60;
-pub const TEB_LAST_ERROR: usize = 0x68;
-pub const TEB_DEALLOCATION_STACK: usize = 0x1478;
-pub const TEB_TLS_SLOTS: usize = 0x1480;
-pub const TEB_HARD_ERROR_MODE: usize = 0x16b0;
-pub const TEB_GUARANTEED_STACK_BYTES: usize = 0x1748;
-
-/// PEB offsets (x64).
-pub const PEB_BEING_DEBUGGED: usize = 0x02;
-pub const PEB_IMAGE_BASE: usize = 0x10;
-pub const PEB_PROCESS_PARAMETERS: usize = 0x20;
-pub const PEB_PROCESS_HEAP: usize = 0x30;
-pub const PEB_SESSION_ID: usize = 0x2c0;
-
-/// RTL_USER_PROCESS_PARAMETERS offsets (x64): the standard handles
-/// (input, output, error: pointer-sized, in that order), CurrentDirectory
-/// (DosPath, a UNICODE_STRING, then Handle), ImagePathName, CommandLine
-/// and RuntimeData (UNICODE_STRINGs: Length, MaximumLength, Buffer),
-/// Environment, EnvironmentSize.
-pub const PARAMS_STANDARD_INPUT: usize = 0x20;
-pub const PARAMS_CURRENT_DIRECTORY: usize = 0x38;
-pub const PARAMS_CURRENT_DIRECTORY_HANDLE: usize = 0x48;
-pub const PARAMS_IMAGE_PATH: usize = 0x60;
-pub const PARAMS_COMMAND_LINE: usize = 0x70;
-pub const PARAMS_ENVIRONMENT: usize = 0x80;
-pub const PARAMS_RUNTIME_DATA: usize = 0xe0;
-pub const PARAMS_ENVIRONMENT_SIZE: usize = 0x3f0;
-
-/// The optional header's SizeOfStackReserve and SizeOfStackCommit (PE32+:
-/// 8 bytes each), from the optional header's start.
-pub const OPTIONAL_STACK_RESERVE: usize = 72;
-pub const OPTIONAL_STACK_COMMIT: usize = 80;
+pub use super::win64::*;
 
 /// CONTEXT (x64): its size (16-byte aligned), where ContextFlags is, the
 /// architecture flag, the flag of the FXSAVE area (FltSave) and of the
@@ -68,6 +32,9 @@ pub const CONTEXT_PARTS: &[(u32, &[(usize, usize)])] = &[
 /// GetSystemInfo reports.
 pub const PROCESSOR_ARCHITECTURE: u16 = 9;
 pub const PROCESSOR_TYPE: u32 = 8664;
+/// What GetNativeSystemInfo reports: the same.
+pub const NATIVE_PROCESSOR_ARCHITECTURE: u16 = PROCESSOR_ARCHITECTURE;
+pub const NATIVE_PROCESSOR_TYPE: u32 = PROCESSOR_TYPE;
 
 /// The native system directory: System32 (a 32-bit build names it
 /// Sysnative).
@@ -98,16 +65,19 @@ pub fn teb_write_u32(offset: usize, value: u32) {
     };
 }
 
-/// The time stamp counter.
-pub fn rdtsc() -> u64 {
+/// A free-running counter: the time stamp counter.
+pub fn cycles() -> u64 {
     // SAFETY: rdtsc only reads the time stamp counter.
     unsafe { core::arch::x86_64::_rdtsc() }
 }
 
-/// The time stamp counter and IA32_TSC_AUX (rdtscp).
-pub fn rdtscp(aux: &mut u32) -> u64 {
+/// The processor running this thread: the number the kernel keeps in
+/// IA32_TSC_AUX (read with rdtscp).
+pub fn current_processor() -> u32 {
+    let mut aux = 0u32;
     // SAFETY: rdtscp reads the time stamp counter and TSC_AUX.
-    unsafe { core::arch::x86_64::__rdtscp(aux) }
+    unsafe { core::arch::x86_64::__rdtscp(&mut aux) };
+    aux & 0xfff
 }
 
 pub use core::arch::x86_64::{__cpuid as cpuid, __cpuid_count as cpuid_count};

@@ -1303,7 +1303,7 @@ pub fn dump() {
             in_syscall.is_some(),
             t.process.session,
             t.process.personality,
-            t.process.name
+            t.process.name_now()
         );
         let Some((number, regs)) = in_syscall else {
             // Running user code: where a tick last caught it.

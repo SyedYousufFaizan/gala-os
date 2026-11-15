@@ -150,7 +150,7 @@ pub struct ExplicitAccess {
     pub trustee: Trustee,
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(target_pointer_width = "64")]
 const _: () = {
     assert!(size_of::<SecurityDescriptor>() == 40 && size_of::<SidAndAttributes>() == 16);
     assert!(GROUPS_AT == 8 && size_of::<SecurityAttributes>() == 24);

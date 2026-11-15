@@ -151,6 +151,8 @@ const MICROSOFT_KEY: &[u8] = b"6595b64144ccf1df";
 const CURRENT_ARCH: &[u8] = b"amd64";
 #[cfg(target_arch = "x86")]
 const CURRENT_ARCH: &[u8] = b"x86";
+#[cfg(target_arch = "aarch64")]
+const CURRENT_ARCH: &[u8] = b"arm64";
 
 fn eq_ascii(s: &[u16], a: &[u8]) -> bool {
     s.len() == a.len() && s.iter().zip(a).all(|(&c, &b)| c == u16::from(b))

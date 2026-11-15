@@ -16,7 +16,7 @@ mod unimplemented;
 #[cfg(target_arch = "x86")]
 use ntrt as _;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -33,7 +33,7 @@ unsafe extern "C" {
 
 /// MSVC-target codegen references this marker symbol directly, so it cannot
 /// come from an import. (It becomes a harmless extra data export.)
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 
@@ -66,6 +66,7 @@ const STATUS_INVALID_PARAMETER: u32 = 0xc000_000d;
 const PROCESSOR_INFORMATION: u32 = 11;
 
 /// The base frequency in MHz (CPUID 0x16 EAX), or 0.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn base_mhz() -> u32 {
     let max = arch::__cpuid(0).eax;
     if max < 0x16 {
@@ -73,6 +74,14 @@ fn base_mhz() -> u32 {
     }
     // Leaf 0x16 exists (checked).
     arch::__cpuid(0x16).eax & 0xffff
+}
+
+/// The base frequency: unknown (0) on ARM64, which has no CPUID; where
+/// it comes from there (the firmware's tables, the registry's ~MHz) is
+/// the port's (ROADMAP AR).
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn base_mhz() -> u32 {
+    0
 }
 
 /// CallNtPowerInformation: ProcessorInformation (11) gives one

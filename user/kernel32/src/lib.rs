@@ -20,16 +20,22 @@
 
 use core::ffi::c_void;
 
-// The architecture's parts: x64 (System32's kernel32) or x86 (the 32-bit
-// kernel32 in SysWOW64, ARCHITECTURE "Plan: WOW64"): TEB access, the
-// offsets of the structures whose layout differs, SLIST_HEADER.
+// The architecture's parts: x64 (System32's kernel32), x86 (the 32-bit
+// kernel32 in SysWOW64, ARCHITECTURE "Plan: WOW64") or ARM64 (a stub that
+// compiles, ROADMAP PT): TEB access, the offsets of the structures whose
+// layout differs, the processor, SLIST_HEADER.
 #[cfg(target_arch = "x86_64")]
 #[path = "x64.rs"]
 mod arch;
 #[cfg(target_arch = "x86")]
 #[path = "x86.rs"]
 mod arch;
+#[cfg(target_arch = "aarch64")]
+#[path = "aarch64.rs"]
+mod arch;
 use arch::*;
+#[cfg(target_pointer_width = "64")]
+mod win64;
 
 mod actctx;
 mod ansi;
@@ -38,6 +44,9 @@ mod atom;
 mod buf;
 mod calendar;
 mod console;
+// CONTEXT buffers and the XState functions as x64 and x86 have them
+// (FXSAVE, XSAVE); ARM64's come with the port (ROADMAP AR).
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod context;
 mod files;
 mod global;
@@ -117,7 +126,7 @@ struct ObjectAttributes {
 // real ntdll does). Only compiler-generated code calls them. On x86 they
 // come from ntrt's x86 runtime (`x86.rs`): a raw-dylib import does not
 // give the symbols the compiler calls there.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -135,7 +144,7 @@ unsafe extern "C" {
 /// MSVC-target codegen references this marker symbol directly, so it cannot
 /// come from an import. (It becomes a harmless extra data export.) On x86,
 /// ntrt's.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 
@@ -2408,11 +2417,11 @@ fn system_info(info: *mut SystemInfo, architecture: u16, processor_type: u32) {
     unsafe { info.write(i) };
 }
 
-/// GetNativeSystemInfo: the machine's processor (AMD64: the same as
-/// GetSystemInfo but in a 32-bit process, where it is not x86).
+/// GetNativeSystemInfo: the machine's processor (the same as
+/// GetSystemInfo but in a 32-bit process, where it is AMD64, not x86).
 #[unsafe(no_mangle)]
 pub extern "system" fn GetNativeSystemInfo(info: *mut SystemInfo) {
-    system_info(info, 9, 8664); // PROCESSOR_ARCHITECTURE_AMD64, PROCESSOR_AMD_X8664
+    system_info(info, NATIVE_PROCESSOR_ARCHITECTURE, NATIVE_PROCESSOR_TYPE);
 }
 
 #[unsafe(no_mangle)]
@@ -3800,9 +3809,9 @@ pub extern "system" fn ExitProcess(code: u32) -> ! {
 /// __C_specific_handler: the language handler of SEH __try blocks
 /// (kernel32 exports it on Windows; mingw's runtime imports it from
 /// here). gala does not run __except filters yet: the exception keeps
-/// searching (recorded), as msvcrt's. x64 only: x86 SEH has no language
-/// handler.
-#[cfg(target_arch = "x86_64")]
+/// searching (recorded), as msvcrt's. 64-bit only: x86 SEH has no
+/// language handler.
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn __C_specific_handler(
     _record: *mut c_void,

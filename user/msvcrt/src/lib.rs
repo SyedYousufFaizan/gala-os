@@ -30,12 +30,16 @@
     clippy::needless_range_loop
 )]
 
-// The architecture's parts: x64 (System32's msvcrt) or x86 (SysWOW64's).
+// The architecture's parts: x64 (System32's msvcrt), x86 (SysWOW64's) or
+// ARM64 (a stub that compiles, ROADMAP PT).
 #[cfg(target_arch = "x86_64")]
 #[path = "x64.rs"]
 mod arch;
 #[cfg(target_arch = "x86")]
 #[path = "x86.rs"]
+mod arch;
+#[cfg(target_arch = "aarch64")]
+#[path = "aarch64.rs"]
 mod arch;
 
 mod float;
@@ -89,7 +93,7 @@ unsafe extern "system" {
     fn GalaRecordMissing(name: *const u8, length: usize, what: u32, detail: u64) -> u32;
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -114,7 +118,7 @@ unsafe extern "C" {
 
 /// Referenced by code that uses floating point (MSVC target convention).
 /// On x86, ntrt's.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 
@@ -531,8 +535,12 @@ pub extern "C" fn abort() -> ! {
 /// exceptions masked, 53-bit precision, round to nearest), MXCSR 0x1f80.
 #[unsafe(no_mangle)]
 pub extern "C" fn _fpreset() {
+    #[cfg(target_arch = "aarch64")]
+    arch::fp_reset();
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let (cw, mx) = (0x27fu16, 0x1f80u32);
     // SAFETY: resets the x87 and loads the two documented control words.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     unsafe {
         core::arch::asm!(
             "fninit",

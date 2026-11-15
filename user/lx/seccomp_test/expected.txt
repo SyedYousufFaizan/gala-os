@@ -1,0 +1,31 @@
+-- probes
+prctl(PR_GET_SECCOMP) = 0
+GET_ACTION_AVAIL: every action = yes
+GET_ACTION_AVAIL(0x12340000) = -95 (EOPNOTSUPP)
+GET_ACTION_AVAIL(flags 1) = -22 (EINVAL)
+GET_NOTIF_SIZES = 0
+  seccomp_notif = 80
+  seccomp_notif_resp = 24
+  seccomp_data = 64
+seccomp(op 99) = -22 (EINVAL)
+-- installing
+PR_SET_NO_NEW_PRIVS = 0
+SET_MODE_FILTER(NULL) = -14 (EFAULT)
+SET_MODE_FILTER(flags 0x100) = -22 (EINVAL)
+a filter of no instructions = -22 (EINVAL)
+a filter without a final return = -22 (EINVAL)
+a jump out of the filter = -22 (EINVAL)
+a load not on a word = -22 (EINVAL)
+a load past seccomp_data = -22 (EINVAL)
+a division by a constant 0 = -22 (EINVAL)
+-- filters at work (in children)
+ERRNO(42) on getppid: getppid() is -42, PR_GET_SECCOMP 2 (exit 7): exited 7
+TRAP on getuid: SIGSYS, SYS_SECCOMP, its data, the call and arch (exit 7): exited 7
+KILL_PROCESS on getuid: killed by 31
+three filters on getppid: ERRNO(5), ERRNO(6), ALLOW: exited 6
+a forked child keeps the filter: ERRNO(3): exited 3
+TRACE without a tracer: ENOSYS (exit 7): exited 7
+strict: write works
+strict mode, then getppid: killed by 9
+seccomp_test: ok
+-- exit status 0

@@ -1,0 +1,2 @@
+inkscape: exit status 0
+-- exit status 0
