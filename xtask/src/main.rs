@@ -17340,11 +17340,12 @@ const GIMP_SCREEN: ScreenCheck = ScreenCheck {
             input: &[],
             pixels: &[PixelCheck::AnyIn(262, 185, 330, 450, 0xfac828)],
         },
-        // Colors > Invert through "/", GIMP's action search: its popup
-        // (screen5.png), "invert" and Enter.
+        // Colors > Invert through "/", GIMP's action search: once its
+        // popup shows (screen6.png), "invert" and Enter.
+        ScreenStep { after: "", input: &["sendkey slash"], pixels: &[] },
         ScreenStep {
-            after: "",
-            input: &["sendkey slash"],
+            after: "desktop: shown window 'Search Actions'",
+            input: &[],
             pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
         },
         ScreenStep {
@@ -17361,7 +17362,7 @@ const GIMP_SCREEN: ScreenCheck = ScreenCheck {
             pixels: &[],
         },
         // Inverted: the title marks the image changed, and the rectangle
-        // is its inverse, blue (5, 55, 215) (screen7.png).
+        // is its inverse, blue (5, 55, 215) (screen8.png).
         ScreenStep {
             after: "desktop: window titled '*[in]",
             input: &[],
