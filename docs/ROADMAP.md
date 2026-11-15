@@ -3966,11 +3966,14 @@ on the seams item PT prepared: native ARM64 Windows programs
   kernel's AP entry (stack, tables, per-CPU block, vectors, GIC part,
   tick), IPIs as SGIs, TLB flushes by broadcast; hardware ids are
   MPIDR's affinity everywhere.
+- The NT layer's start (`arm_boot` to `stop_after=drivers`): the system
+  call dispatchers and the user-mode hooks kept, KUSER_SHARED_DATA.
 
 **Next**:
 1. The kernel's `arch` for aarch64, in boot order, each phase's
-   `stop_after` moving `arm_boot` on: the drivers (virtio over PCIe:
-   the ECAM from the MCFG, the disk, the network), the GIC's pseudo-NMI
+   `stop_after` moving `arm_boot` on: PCI (the ECAM from the MCFG;
+   virtio's BARs, ARM having no port I/O: memory-mapped I/O or modern
+   virtio), the boot files and the manifest, the GIC's pseudo-NMI
    (state dumps, `stop_others`), PSCI CPU_ON for CPUs the bootloader did
    not start; the UART's and the GIC's addresses from the firmware (SPCR,
    MADT or the device tree); the RTC (PL031). Then

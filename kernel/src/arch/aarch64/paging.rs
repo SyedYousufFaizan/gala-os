@@ -294,26 +294,50 @@ pub struct UserSpace {
     root: u64,
 }
 
-/// A page the kernel writes and processes map (KUSER_SHARED_DATA).
+fn hhdm_ptr(phys: u64) -> *mut u8 {
+    core::ptr::with_exposed_provenance_mut((crate::mm::hhdm_offset() + phys) as usize)
+}
+
+/// A kernel-owned page also mapped into user address spaces
+/// (KUSER_SHARED_DATA), written through the HHDM with volatile stores
+/// since user threads read it concurrently (as x86-64's).
 pub struct SharedPage {
     frame: Frame,
 }
 
 impl SharedPage {
     pub fn new() -> Result<Self, PagingError> {
-        Err(PagingError::NotInitialized)
+        let frame = crate::mm::allocate_frame(crate::mm::Use::SectionPage)
+            .ok_or(PagingError::Map(MapError::OutOfMemory))?;
+        // SAFETY: a freshly allocated frame, HHDM-mapped, owned by us.
+        unsafe { hhdm_ptr(frame.start()).write_bytes(0, PAGE_SIZE as usize) };
+        Ok(Self { frame })
     }
 
     pub fn frame(&self) -> Frame {
         self.frame
     }
 
-    pub fn write(&self, _offset: usize, _bytes: &[u8]) {
-        unported("SharedPage::write")
+    /// Writes `bytes` at `offset`; out-of-range writes are dropped.
+    pub fn write(&self, offset: usize, bytes: &[u8]) {
+        if offset.checked_add(bytes.len()).is_none_or(|end| end > PAGE_SIZE as usize) {
+            return;
+        }
+        let base = hhdm_ptr(self.frame.start());
+        for (i, &b) in bytes.iter().enumerate() {
+            // SAFETY: in bounds of the owned frame; volatile because user
+            // mode reads the page concurrently through its own mapping.
+            unsafe { base.add(offset + i).write_volatile(b) };
+        }
     }
 
-    pub fn write_u32(&self, _offset: usize, _value: u32) {
-        unported("SharedPage::write_u32")
+    pub fn write_u32(&self, offset: usize, value: u32) {
+        if !offset.is_multiple_of(4) || offset + 4 > PAGE_SIZE as usize {
+            return;
+        }
+        // SAFETY: aligned and in bounds of the owned frame; one volatile
+        // store, so readers never see a torn value.
+        unsafe { hhdm_ptr(self.frame.start()).add(offset).cast::<u32>().write_volatile(value) };
     }
 }
 

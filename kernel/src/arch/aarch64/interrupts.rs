@@ -145,8 +145,13 @@ pub fn set_nmi_handler(handler: NmiHandler) {
     );
 }
 
-pub fn set_user_exception_handler(_handler: UserExceptionHandler) {
-    unported("interrupts::set_user_exception_handler")
+/// What handles an exception from EL0 (the NT and Linux layers' fault
+/// handling); kept for the EL0 vectors user mode will have.
+static USER_EXCEPTION_HANDLER: crate::sync::IrqMutex<Option<UserExceptionHandler>> =
+    crate::sync::IrqMutex::new(None);
+
+pub fn set_user_exception_handler(handler: UserExceptionHandler) {
+    *USER_EXCEPTION_HANDLER.lock() = Some(handler);
 }
 
 pub fn set_handler(_vector: u8, _handler: Handler) {

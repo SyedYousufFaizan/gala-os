@@ -173,11 +173,13 @@ ROADMAP AR, under way on QEMU's `virt` machine (GICv3, a PL011, virtio
 over PCIe), booted by UEFI (QEMU's own edk2 build, or AAVMF) and
 Limine's `BOOTAA64.EFI` from the same kind of ISO as x86-64's (Limine's
 EFI image carries both loaders; the ISO holds the aarch64 kernel). The
-kernel boots through its other CPUs: scenarios `arm_boot` (to
-`stop_after=smp_done`: both CPUs online, the tick seen running),
-`arm_sched` (`schedtest`: kernel threads switched, woken, joined),
-`arm_fault_ud` and `arm_fault_pagefault` (the vectors' report); the
-drivers (`disk::init` and on: virtio over PCIe) are the next phase.
+kernel boots through its drivers phase: scenarios `arm_boot` (to
+`stop_after=drivers`: both CPUs online, the NT layer's start, the tick
+seen running), `arm_sched` (`schedtest`: kernel threads switched, woken,
+joined), `arm_fault_ud` and `arm_fault_pagefault` (the vectors' report).
+PCI is not reached yet (no ECAM: `pci: no configuration space on aarch64
+yet`, so no disk, network or GPU); the manifest and the boot files are
+the next phase.
 
 - **Soft-float**: the kernel is built for
   `aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE: it
@@ -252,6 +254,11 @@ drivers (`disk::init` and on: virtio over PCIe) are the next phase.
   affinity fields everywhere (Limine's MP response, the MADT's GICC
   entries, `smp::online_cpus`); the GIC packs them for GICR_TYPER and
   ICC_SGI1R itself.
+- **What the NT layer registers at its start**: the personalities'
+  system call dispatchers (`syscall::set_handler`, the neutral
+  `personality::Dispatchers`), the user-return hook and the user
+  exception handler are kept for user mode's paths; KUSER_SHARED_DATA is
+  a kernel frame written through the HHDM (`paging::SharedPage`).
 - **Limits**: the UART's and the GIC's addresses are the board's, not read
   from the firmware (SPCR, the MADT's GICD/GICR entries or the device
   tree: the port); CPUs the bootloader did not start are not started

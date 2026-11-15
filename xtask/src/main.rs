@@ -12268,10 +12268,11 @@ const SCENARIOS: &[Scenario] = &[
         // its PL011 console, the bootloader's handoff, the memory map, the
         // frame allocator, its own page tables (the console still writing
         // after the switch), the GIC and the generic timer's tick (IRQs
-        // taken and returned from), then the boot ends where the port has
-        // got to (`stop_after`) and the kernel exits through semihosting.
+        // taken and returned from), the second CPU, the NT layer's start,
+        // then the boot ends where the port has got to (`stop_after`) and
+        // the kernel exits through semihosting.
         name: "arm_boot",
-        cmdline: "qemu_exit stop_after=smp_done",
+        cmdline: "qemu_exit stop_after=drivers",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             "gala-os kernel",
@@ -12286,7 +12287,9 @@ const SCENARIOS: &[Scenario] = &[
             "smp: MADT: 2 enabled CPU(s): 0 1",
             "gic: CPU 1: GICv3",
             "smp: 2 CPUs online (2 reported by the bootloader, 2 in the MADT",
-            "boot: stopping after boot phase smp_done (stop_after), the tick running",
+            "syscall: personality nt dispatches to nt::syscalls",
+            "pci: no configuration space on aarch64 yet",
+            "boot: stopping after boot phase drivers (stop_after), the tick running",
         ],
     },
     Scenario {
