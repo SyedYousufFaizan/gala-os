@@ -26930,7 +26930,7 @@ fn copy(from: &Path, to: &Path) -> Result {
 /// handover (R8): 3 MB instead of 30 for a debug build. Backtraces are
 /// symbolized on the host from the build's own ELF, which keeps it.
 fn copy_kernel(from: &Path, to: &Path) -> Result {
-    run_quiet(Command::new(objcopy_for(from)).arg("--strip-debug").arg(from).arg(to))
+    run_quiet(Command::new(objcopy()).arg("--strip-debug").arg(from).arg(to))
 }
 
 /// Removes the relocations of a kernel ELF's debug sections
@@ -26940,37 +26940,30 @@ fn copy_kernel(from: &Path, to: &Path) -> Result {
 /// for every section, and those of the DWARF are most of the file: 71 of
 /// 135 MB for a debug build. The DWARF itself stays for symbolizing.
 fn drop_debug_relocations(elf: &Path) -> Result {
-    run_quiet(Command::new(objcopy_for(elf)).arg("--remove-section=.rela.debug_*").arg(elf))
+    run_quiet(Command::new(objcopy()).arg("--remove-section=.rela.debug_*").arg(elf))
 }
 
-/// The objcopy for `elf`: binutils' for x86-64 (what the checked-in
-/// images were made with), LLVM's for aarch64, which binutils' x86-64
-/// build cannot read: the toolchain's `llvm-tools` component
-/// (rust-toolchain.toml), else `llvm-objcopy` on PATH.
-fn objcopy_for(elf: &Path) -> PathBuf {
-    const EM_AARCH64: u16 = 183;
-    let machine = fs::File::open(elf).ok().and_then(|mut f| {
-        use std::io::{Read, Seek, SeekFrom};
-        let mut b = [0u8; 2];
-        f.seek(SeekFrom::Start(18)).ok()?;
-        f.read_exact(&mut b).ok()?;
-        Some(u16::from_le_bytes(b))
-    });
-    if machine != Some(EM_AARCH64) {
-        return PathBuf::from("objcopy");
-    }
-    let sysroot = Command::new("rustc").args(["--print", "sysroot"]).output().ok();
-    let host = Command::new("rustc").args(["--print", "host-tuple"]).output().ok();
-    if let (Some(s), Some(h)) = (sysroot, host) {
-        let tool = Path::new(String::from_utf8_lossy(&s.stdout).trim())
-            .join("lib/rustlib")
-            .join(String::from_utf8_lossy(&h.stdout).trim())
-            .join("bin/llvm-objcopy");
-        if tool.is_file() {
-            return tool;
+/// The objcopy for kernel ELFs of every architecture: the toolchain's
+/// `llvm-objcopy` (the `llvm-tools` component, rust-toolchain.toml: the
+/// LLVM that linked the kernel, pinned with it), else `llvm-objcopy` on
+/// PATH. Not binutils': its x86-64 build cannot read an aarch64 ELF.
+fn objcopy() -> PathBuf {
+    static TOOL: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    TOOL.get_or_init(|| {
+        let sysroot = Command::new("rustc").args(["--print", "sysroot"]).output().ok();
+        let host = Command::new("rustc").args(["--print", "host-tuple"]).output().ok();
+        if let (Some(s), Some(h)) = (sysroot, host) {
+            let tool = Path::new(String::from_utf8_lossy(&s.stdout).trim())
+                .join("lib/rustlib")
+                .join(String::from_utf8_lossy(&h.stdout).trim())
+                .join("bin/llvm-objcopy");
+            if tool.is_file() {
+                return tool;
+            }
         }
-    }
-    PathBuf::from("llvm-objcopy")
+        PathBuf::from("llvm-objcopy")
+    })
+    .clone()
 }
 
 fn write(path: &Path, contents: &str) -> Result {

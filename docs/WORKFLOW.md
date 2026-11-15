@@ -1061,10 +1061,10 @@ ARM64 host); about 8 s to the kernel, most of it the firmware.
   and no firmware or phase log (no ISA debug consoles on `virt`).
 - A kernel address in a panic or exception line: `llvm-addr2line -f -C
   -e target/aarch64-unknown-none/debug/kernel <address>`.
-- Stripping the image's kernel and dropping its debug relocations take
-  LLVM's objcopy for an aarch64 ELF (binutils' x86-64 build cannot read
-  it): the toolchain's `llvm-tools` component (rust-toolchain.toml), else
-  `llvm-objcopy` on PATH. x86-64's kernel keeps binutils' objcopy.
+- Every kernel ELF (both architectures) is stripped for the image and
+  rid of its debug relocations by LLVM's objcopy: the toolchain's
+  `llvm-tools` component (rust-toolchain.toml), else `llvm-objcopy` on
+  PATH. Binutils' x86-64 build cannot read an aarch64 ELF.
 - While a phase is unported, its scenario ends the boot just before it
   (`stop_after=<phase>`); porting the next phase moves that on.
 
