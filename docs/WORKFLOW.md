@@ -937,14 +937,77 @@ Vulkan-Headers) Vulkan on lavapipe through the Khronos loader (PREBUILT
   instructions the Intel way whatever vendor the guest's CPUID names, so
   behaviour that differs between Intel and AMD only shows under KVM on
   that vendor's host (CI's runners are AMD: an AMD-only bug is CI-only
-  here). The boot log's `cpu:` line names the vendor.
+  here). The boot log's `cpu:` line names the vendor, and its
+  `xtask: accelerator:` line says which accelerator ran it (QMP's
+  `query-kvm`, not what the host has): QEMU is given `-accel kvm -accel
+  tcg` and falls back to the second without failing, so a run that
+  should have been near-native and took ten times as long looks like
+  any other. A fallback on a host that has `/dev/kvm` is called out
+  with it, and QEMU's standard error says what it could not open.
 - **Docker**: `cargo xtask docker-test [xtask args]` builds
-  `docker/test.Dockerfile` (Ubuntu 24.04, QEMU, OVMF, xorriso, the
-  pinned toolchain) and runs `cargo xtask test` (or the given arguments)
-  inside it with the repository at /work and build output in
-  `target/docker`. It passes `/dev/kvm` through when the host has it and
-  forwards the `XTASK_*` variables and proxy settings. In a cloud
+  `docker/test.Dockerfile` (Ubuntu 24.04, OVMF, xorriso, the pinned
+  toolchain, QEMU's build dependencies, and the host-side programs the
+  tests run next to the VM: the ssh and sftp clients, psql, 7z, unzip,
+  msitools, musl-gcc, weston and Xvfb) and runs `cargo xtask test` (or
+  the given arguments) inside it with the repository at /work and build
+  output in `target/docker`. It passes `/dev/kvm` through when the host
+  has it, mounts `~/.cache/gala-qemu-docker` at
+  `/root/.cache/gala-qemu` (the container's `HOME` is /root) and builds
+  the pinned QEMU there first when it is missing, and forwards every
+  `XTASK_*` variable and the proxy settings. That cache is the
+  container's own and not the host's `~/.cache/gala-qemu`: QEMU links
+  against the glibc and libslirp of whatever built it, so sharing one
+  cache between a host newer than the image and the image gives the
+  container a QEMU it cannot load (`version GLIBC_2.42 not found`, 0.1s
+  into the run, which reads as a QEMU that crashed). The image carries
+  no QEMU package on purpose: the distribution's is 8.2.2, whose TCG
+  loses writes to a rewritten page ("QEMU" below), and a container that
+  has one runs the tests on it silently. The container is root over a tree
+  owned by the host's user, so the image lets git read it
+  (`safe.directory '*'`); without that every revision git is asked for
+  comes back empty, which read as a stale Limine checkout. In a cloud
   container without a running daemon, start one with `dockerd &`.
+- **A missing host tool is named with its package.** Several scenarios
+  run a program on the host beside the VM: a client for the server ones
+  (psql, ssh, sftp, scp), 7z or unzip to unpack a prebuilt archive,
+  msitools, musl-gcc, weston and Xvfb for the Linux-binary ones.
+  `std::io`'s message for a program that is not on PATH is "No such file
+  or directory", which reads as a missing input file, and the clients run
+  under `timeout`, which reports one as its own exit 127 -- so a host
+  without the package read as a failing test. Every program xtask spawns
+  now says which package has it (`host_package` in xtask is the one
+  table, and the list of what a host outside Docker needs): `the host has
+  no psql (apt install postgresql-client); `cargo xtask docker-test` runs
+  the tests in an image that carries it`. A client says it before the
+  boot instead of after it.
+- **The whole suite needs a machine as wide as its parallelism.**
+  `cargo xtask test` boots as many VMs at once as the host has logical
+  CPUs, each with 2 vCPUs, and the run-time limit is what keeps the host's
+  load off a test's result (`vmtime.rs`): run time is the wall time less
+  the run-queue wait of the most-starved *vCPU* thread. Two costs the
+  guest pays are outside that: the wait of the QEMU thread that serves its
+  disk (a vCPU blocked on an I/O completion is asleep, not on a run
+  queue), and the exit cost of nested virtualization. On a 6-core
+  (12-thread) i9-8950HK under WSL 2 the suite took 42m44s of wall time and
+  277m of CPU at a load average of 17 to 25, and three I/O-bound
+  scenarios timed out at 120s of run time with 35-43s of it already
+  subtracted while each of them passes alone on that machine:
+  `volume_test` (96.8s in the kernel alone), `pagefile_test` (67.3s) and
+  `pagefile_fail` (65.3s). There is no knob for fewer VMs at once
+  (`XTASK_SHARD` splits the set but each shard still fills the host), so
+  on a machine that size check such a scenario with `boot-test '<name>$'`,
+  which always boots it alone, and read a suite run's timeouts against
+  that.
+- **A scenario can want more CPU than a small host has.**
+  `winsock_async_test` runs 1000 non-blocking connects while four threads
+  keep every CPU busy, and on the i9 above it wants more than its 120s
+  even alone on an idle host: 120.9s of run time with 0.0s of it spent
+  waiting for a host CPU, the same from boot at any commit. That is the
+  scenario's work against two cores of a nested guest, not a regression
+  and not host load, and the limit stays as it is -- CI's runners finish
+  it well inside it, and raising it here would hide the real timeouts
+  above. Run it alone to see where it got and compare the run time, not
+  the verdict.
 - **Never run two xtask boot runs at once** (a full `cargo xtask test`
   and a single `boot-test`): they share ISO and serial-log files under
   `target/` and fail each other.
@@ -4079,12 +4142,22 @@ formats.
 
 ### Lock-order checking (lockdep)
 
-Debug kernels, host tests and gala-um panic with `lockdep: X taken while
-holding Y, but Y was taken while holding X before` on the first
-lock-order inversion (ARCHITECTURE "Built in early"), and with `lockdep:
-releasing X turns interrupts on while Y is still held` when IrqMutex
-guards drop out of order.
+Debug kernels, host tests and gala-um panic with `lockdep: X taken by
+thread N while holding Y (taken by thread M), but Y was taken while
+holding X before` on the first lock-order inversion (ARCHITECTURE "Built
+in early"), and with `lockdep: releasing X turns interrupts on while Y
+is still held (locks released out of order); Y was taken by thread M,
+and X is released by thread N` when IrqMutex guards drop out of order.
 
+- **Read the two threads first** in the out-of-order message. The held
+  locks belong to the CPU, not to the thread, so when M and N differ the
+  bug is not where the panic is: thread M left Y held across a wait, a
+  yield or its end, and thread N is merely the next thread to run on
+  that CPU and release a lock. Look for Y's guard living across a
+  `sched::wait`, `yield_now`, `sleep_ms` or a blocking call in M, not in
+  the code the panic points at. Thread numbers are the log's own
+  (`14`, or `14.2` once a thread record has been reused).
+- A class name longer than 96 bytes is shown cut, with `..`.
 - A class is the protected type, so give a lock over a plain type
   (`u32`, `Option<id>`, `()`) a name with `IrqMutex::named("module.field",
   value)`, or unrelated locks of that type share a class and report

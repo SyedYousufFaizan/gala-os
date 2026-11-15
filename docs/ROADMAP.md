@@ -472,7 +472,10 @@ time, instead of waiting for flaky scenarios to point at each one.
   dispatcher lock; the console's `settle` reset `input_ready` after
   checking the queue in an earlier lock hold; and the out-of-order
   IrqMutex release detector was added (debug kernels panic: `lockdep:
-  releasing X turns interrupts on while Y is still held`).
+  releasing X turns interrupts on while Y is still held`, each lock with
+  the thread that took it), beside the check that catches the cause
+  itself: `sched::schedule` panics when the thread giving up its CPU
+  still holds a lock.
 - Checked and found sound: the scheduler's `prepare_wait`/`wait`/`wake`
   protocol (preemption between them included), `on_cpu`, KArc's counts,
   the heap's and frame allocator's single locks, keyed events,

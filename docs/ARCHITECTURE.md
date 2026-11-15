@@ -14752,9 +14752,30 @@ New code follows them; old code is brought in line (ROADMAP R1).
   - a lock's class is its name (`IrqMutex::named("thread.sched_id",
     ..)`, for locks over plain types: a number, an Option of an id) or
     the type it protects;
+  - a class is identified by the address of that name, and the name's
+    first 96 bytes are copied into the class table (512 classes), so
+    every class a message can mention has its name. A `&'static str`
+    fits in no atomic and rebuilding one from a pointer and a length
+    needs `unsafe`, which `sync.rs` may not use; keeping the names in a
+    side table instead gave them a capacity and a failure mode, and
+    classes past it printed `?`;
   - each CPU (each host thread in tests and gala-um) keeps the classes
     it holds (16 slots; interrupts are off while an IrqMutex is held, so
-    the CPU does not change);
+    the CPU does not change), and for each slot the thread that took it.
+    The scheduler names that thread on every switch
+    (`lockdep::running`), because lockdep cannot ask it: the scheduler's
+    own state is behind one of these locks;
+  - **the invariant**: an `IrqMutex` is released by the thread that took
+    it, on the same CPU, before that thread waits, yields or ends. It is
+    checked where it is broken: `sched::schedule` panics if the thread
+    giving up its CPU still holds a lock, naming the lock, the thread
+    that took it and the thread leaving. Without that check the break
+    is only noticed later, because the held slots belong to the CPU: a
+    lock left behind is found by whichever thread runs there next, and
+    the panic lands at that thread's first release that turns interrupts
+    back on, in a thread that is not the culprit. That message (locks
+    released out of order, which is also a bug of its own) names each
+    lock's holder for the same reason;
   - taking B while holding A records "A before B" in an open-addressed
     table of 8192 edges; if "B before A" was seen, it panics with both
     class names before the deadlock could happen;
