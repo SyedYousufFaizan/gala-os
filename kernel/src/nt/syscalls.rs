@@ -3862,10 +3862,18 @@ fn gala_record_missing(call: &mut Call<'_>) -> NtStatus {
     }
     let what = super::ledger::user_what(arg!(call, 2) as u32);
     if what == "not implemented" {
-        // A stub about to end its process: say so now (the ledger is
-        // dumped when the `run=` program ends, which may be never).
+        // A stub about to end its process: say so now, with the number
+        // it was handed, because the ledger is dumped when the `run=`
+        // program ends -- which may be never, and is never in a run cut
+        // short by a snapshot. The detail goes last so triage still
+        // recognizes the line (xtask/src/triage.rs).
         let text = core::str::from_utf8(&name[..len]).unwrap_or("?");
-        warn!("{}: {} not implemented, ending the process", call.process.name, text);
+        warn!(
+            "{}: {} not implemented, ending the process (detail {:#x})",
+            call.process.name,
+            text,
+            arg!(call, 3)
+        );
     }
     super::ledger::record_user(&name[..len], what, arg!(call, 3));
     NtStatus::SUCCESS

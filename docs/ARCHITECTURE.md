@@ -9563,7 +9563,12 @@ document whole into the tree above, and `Scan` hands out one node at a
 time (`next_event(text)` -> `Event`) for a caller that pulls, as
 WS_XML_READER's does. The text is passed to each call and not held, so
 the scan is an offset into the document and borrows nothing; a caller
-can keep the document and the scan side by side.
+can keep the document and the scan side by side. A scan can be told
+that its text is a fragment (`allow_fragment`): more than one root
+element, every other rule unchanged, which is what webservices.dll's
+WS_XML_READER_PROPERTY_ALLOW_FRAGMENT asks for. It also says where it
+has got to (`position`: the line from 1 and the bytes into it), which
+is what that DLL's ROW and COLUMN are made of.
 **ZIP64** (`zip.rs`): the zip64 end record, locator and extra field
 (MSIX packages are zip64 with data descriptors; the central directory is
 authoritative); entries of 4 GiB or more are refused (archives are in
@@ -9778,21 +9783,56 @@ stations and desktops a program creates are refused until stage 3).
   waits) and the reads setup.exe makes: WsReadToStartElement (the
   element by local name and namespace, `found` FALSE with S_OK when it
   is not there and WS_E_INVALID_FORMAT when the caller passed no
-  `found`), WsReadStartElement, and WsReadType with
-  WS_ELEMENT_TYPE_MAPPING for WS_WSZ_TYPE (a string onto the heap) and
-  WS_UINT32_TYPE (a number; WS_E_NUMERIC_OVERFLOW for one that does not
-  fit). The document is read node by node with gala's XML reader ("XML",
-  `gala_xml`'s `Scan`), so a malformed document fails at the read that
-  reaches it and faults the reader -- every later call on it is
-  WS_E_OBJECT_FAULTED -- as Windows' reader does, and not when the input
-  is set. A writer is an object and nothing more (WsCreateWriter,
-  WsFreeWriter: setup.exe creates one and imports no write function).
-  Limits: the buffer input and the text encoding only; every other
-  WS_TYPE, type mapping, read option, reader property and encoding is
-  recorded in the missing-features ledger with the number it was handed
-  and answered WS_E_NOT_SUPPORTED, so a program that needs more says
-  which. A null namespace matches an element in any namespace, which of
-  the two readings Windows takes not being measured, so it is recorded
+  `found`), WsReadStartElement, WsReadEndElement, and WsReadType for
+  WS_WSZ_TYPE (a string onto the heap) and WS_UINT32_TYPE (a number;
+  WS_E_NUMERIC_OVERFLOW for one that does not fit) under both element
+  mappings. The reader reads ahead: a read that consumes a node leaves
+  it on the node after that one, which is what Windows' reader does
+  (its ROW and COLUMN stand there, measured) and the reason a document
+  with two root elements fails at the first root's end tag and not at
+  the read after it. WS_ELEMENT_TYPE_MAPPING reads a whole element,
+  start tag to end tag, and leaves the reader past it;
+  WS_ELEMENT_CONTENT_TYPE_MAPPING reads from inside an element whose
+  start tag the caller has read and leaves the reader on the end tag,
+  for the caller's own WsReadEndElement -- the way setup.exe reads the
+  answer. The content mapping refuses nothing on where the reader
+  stands: it takes the text from there up to the first node that is not
+  text and consumes neither that node nor the end tag, so an element
+  that holds elements holds the empty string, as Windows reads it. A
+  read of a value the document does not hold -- a number that is not
+  one, a number too big for its type, an element where a value was
+  expected -- faults the reader, as a malformed document does.
+  WsGetReaderProperty answers for the settings and the position, in
+  Windows' own order of refusals (measured): a reader with no input
+  refuses every id with WS_E_INVALID_OPERATION and a faulted one with
+  WS_E_OBJECT_FAULTED; then an id the reader does not report is
+  E_INVALIDARG; then a buffer that is not the property's own size is
+  E_INVALIDARG, is left untouched, and faults the reader.
+  WS_XML_READER_PROPERTY_MAX_DEPTH (32 by default) is enforced on a
+  start tag as it is read ahead, which is the read Windows refuses with
+  WS_E_QUOTA_EXCEEDED; ALLOW_FRAGMENT (FALSE) allows more than one root
+  element (`gala_xml`'s `Scan::allow_fragment`); CHARSET, IN_ATTRIBUTE,
+  ROW and COLUMN are reported and not set, ROW being the line counted
+  from 0 (the strings in errors count it from 1) and COLUMN the bytes
+  into that line. How Windows divides ROW and COLUMN over a document
+  written on several lines is not separately measured; gala counts the
+  line ends its scan has passed. The document is read node by node with
+  gala's XML reader ("XML", `gala_xml`'s `Scan`), so a malformed
+  document fails at the read that reaches it and faults the reader --
+  every later call on it is WS_E_OBJECT_FAULTED -- as Windows' reader
+  does, and not when the input is set. A writer is an object and
+  nothing more (WsCreateWriter, WsFreeWriter: setup.exe creates one and
+  imports no write function). Limits: the buffer input and the text
+  encoding only; every other WS_TYPE, type mapping, read option and
+  encoding is recorded in the missing-features ledger with the number
+  it was handed and answered WS_E_NOT_SUPPORTED, so a program that
+  needs more says which. MAX_ATTRIBUTES, MAX_NAMESPACES,
+  READ_DECLARATION and the stream and trim sizes are taken, kept and
+  recorded as "other" instead of refused: the reader is created and the
+  ledger names what a program asked for, where a refusal that ends the
+  process would hide everything after it. A null namespace matches an
+  element in any namespace, which of the two readings Windows takes not
+  being measured, so it is recorded
   too. The SOAP side -- channels, service proxies, calls, custom headers
   -- is stubs for SQL Server LocalDB ("Stub-only DLLs").
 - gdiplus (`user/gdiplus`, x64 and x86; `gdiplus_test`,
