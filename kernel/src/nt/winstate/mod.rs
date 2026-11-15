@@ -755,6 +755,16 @@ impl<X: Default> State<X> {
         let mut name = Vec::new();
         name.try_extend_from_slice(title).map_err(|_| NtStatus::NO_MEMORY)?;
         let win = self.find(id, owner)?;
+        // A shown window's new title (screen checks wait for it: GIMP's
+        // names the image it opened); not in host unit tests.
+        #[cfg(not(test))]
+        if win.visible && win.title[..] != name[..] {
+            let (text, n) = ascii_title(&name);
+            crate::info!(
+                "desktop: window titled '{}'",
+                core::str::from_utf8(&text[..n]).unwrap_or("?")
+            );
+        }
         win.title = name;
         win.restyled();
         let r = win.caption_rect();

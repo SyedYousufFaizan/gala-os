@@ -17274,10 +17274,16 @@ const GIMP_SCREEN: ScreenCheck = ScreenCheck {
             pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
         },
         ScreenStep { after: "", input: &["sendkey esc"], pixels: &[] },
-        // The image window alone (screen2.png), then Ctrl+Q once the
-        // focus is back on it.
+        // The image window alone (screen2.png).
         ScreenStep {
             after: "window 'Welcome to GIMP 3.2.2' left the screen",
+            input: &[],
+            pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
+        },
+        // The image opened: GIMP's title names it (`[in] (imported)-1.0
+        // ...`); its picture (screen3.png), then Ctrl+Q.
+        ScreenStep {
+            after: "desktop: window titled '[in]",
             input: &[],
             pixels: &[PixelCheck::Varied(0, 0, 1280, 800, 32)],
         },
