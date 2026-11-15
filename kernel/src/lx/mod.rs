@@ -71,6 +71,7 @@ pub mod machine;
 pub mod memfd;
 pub mod mm;
 pub mod ntio;
+pub mod pidfd;
 pub mod poll;
 pub mod prctl;
 pub mod procfs;

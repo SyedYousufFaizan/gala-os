@@ -4893,6 +4893,8 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("lx_procfs_pie", "user/lx/bin/procfs_test-pie", "lx"),
     ("lx_altstack", "user/lx/bin/altstack_test", "lx"),
     ("lx_altstack_pie", "user/lx/bin/altstack_test-pie", "lx"),
+    ("lx_pidfd", "user/lx/bin/pidfd_test", "lx"),
+    ("lx_pidfd_pie", "user/lx/bin/pidfd_test-pie", "lx"),
     ("lx_fdbits", "user/lx/bin/fdbits_test", "lx"),
     ("lx_fdbits_pie", "user/lx/bin/fdbits_test-pie", "lx"),
     ("lx_timerfd", "user/lx/bin/timerfd_test", "lx"),
@@ -13966,6 +13968,23 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit lxrun=/lx/altstack_test-pie lxargs=./altstack_test",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["personality linux", "run: end /lx/altstack_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/pidfd_test (LD: GLib 2.88 watches each child with a
+        // pidfd, then reaps it with waitid(P_PIDFD)): pidfd_open,
+        // pidfd_send_signal, waitid; its transcript must be its
+        // expected.txt (real Linux's).
+        name: "lx_pidfd",
+        cmdline: "qemu_exit lxrun=/lx/pidfd_test lxargs=./pidfd_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/pidfd_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/pidfd_test as a static-pie.
+        name: "lx_pidfd_pie",
+        cmdline: "qemu_exit lxrun=/lx/pidfd_test-pie lxargs=./pidfd_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/pidfd_test-pie", BOOT_OK_MARKER],
     },
     Scenario {
         // user/lx/fdbits_test (LD: Ubuntu 26.04's glycin): a descriptor

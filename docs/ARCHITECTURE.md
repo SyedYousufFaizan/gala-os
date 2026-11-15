@@ -11900,6 +11900,25 @@ The running parts (milestone 1; `lxrun=`):
   signal a process gets when its parent ends (sent by `state::ended` to
   each child still running; cleared in a fork's child, kept across
   execve: glycin's loaders die with the program that started them).
+- **pidfds and waitid** (`lx::pidfd`, `fork::waitid`; pidfd_test,
+  `lx_pidfd`): pidfd_open (EINVAL for pid 0 or flags but
+  PIDFD_NONBLOCK, ESRCH; always close-on-exec; `anon_inode:[pidfd]`) gives
+  an `Object::PidFd` holding the process's `Life` (an ended flag and a
+  wait queue, shared with the `LxProcess`: not the process, whose
+  descriptors would stay open); `state::ended` ends it before the parent
+  hears, so poll and epoll see the pidfd readable once its process has
+  ended. pidfd_send_signal is kill(2) of its process (flags: the thread,
+  its group or its process group, one at most; EBADF for what is not a
+  pidfd). waitid (P_ALL, P_PID, P_PIDFD; WEXITED with WNOHANG and
+  WNOWAIT) reads wait4's `Children::ended` and fills si_signo SIGCHLD,
+  si_code, si_pid, si_uid, si_status; WNOHANG with nothing ended writes
+  zeros; a nonblocking pidfd's wait is EAGAIN while it runs. A signal to
+  a zombie (ended, in a live process's `Children::ended`) is 0 and does
+  nothing, from kill or a pidfd, as Linux's; ESRCH once reaped
+  (`state::is_zombie`). Limits: stopped and continued children are not
+  told (ledgered), P_PGID waits for any child (ledgered), siginfo given
+  to pidfd_send_signal is unused (ledgered), no PIDFD_THREAD pidfds, no
+  pidfd_getfd.
 - **sysinfo and sched_getaffinity** (`lx::sysinfo`; sysinfo_test,
   `lx_sysinfo`): sysinfo counts in bytes (`mem_unit` 1): RAM is the frame
   allocator's managed frames and free ones (NT's NumberOfPhysicalPages),
