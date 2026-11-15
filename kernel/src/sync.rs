@@ -575,7 +575,8 @@ pub mod lockdep {
                 held::with(|slots| (0..MAX_HELD).map(|i| slots.get(i)).find(|&(c, _)| c != 0));
             if let Some((class, by)) = still {
                 panic!(
-                    "lockdep: {} gives up its CPU while holding {} (taken by {}):                      a lock may not be held across a wait, a yield or a switch",
+                    "lockdep: {} gives up its CPU while holding {} (taken by {}): \
+                     a lock may not be held across a wait, a yield or a switch",
                     Holder(held::current()),
                     name(class),
                     Holder(by)

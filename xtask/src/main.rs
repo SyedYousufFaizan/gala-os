@@ -16618,9 +16618,11 @@ const OFFICE_SOURCE_URL: &str =
     "http://officecdn.microsoft.com/pr/492350f6-3a01-4f97-b9c0-c7c6ddf67d60/Office/Data";
 /// The files under `Office\Data` (`{v}`: the version) and their SHA-256s:
 /// those the Click-to-Run client fetched for these products in
-/// office_install's runs (its log names each).
+/// office_install's runs (its log names each). Every name carries the
+/// version, which is what makes a checksum meaningful: the channel's
+/// unversioned `v64.cab` is a pointer the CDN composes per request, not
+/// content, and the cache writes its own (`write_version_pointer`).
 const OFFICE_SOURCE: &[(&str, &str)] = &[
-    ("v64.cab", "bc33d6f5431f494bbfd36a912b49c3cc488513c50b5ef7bea9f801cb594ba07a"),
     ("v64_{v}.cab", "231c411348a65fde60f14081f35d9771ea42b60b62e7fd14bbc1f412be58bbd1"),
     ("{v}/i640.cab", "72b07bef01bc57d9684b380abe01a65910d80411e5bd4cad901c73bcbd87148f"),
     ("{v}/i641033.cab", "1ddca4b1ed0f68b646ff7f367acec502f4306124fadbbbc630b816da2a017802"),
@@ -16635,6 +16637,27 @@ const OFFICE_SOURCE: &[(&str, &str)] = &[
         "e9ec4b9e32b34f0e6debb4006ee99722ac6e765f1472ac27282c13572bd82f6a",
     ),
 ];
+
+/// Writes the cache's `Office\Data\v64.cab`, the descriptor the
+/// Click-to-Run client reads from a SourcePath to learn which version is
+/// there, from that version's own `v64_<version>.cab`.
+///
+/// The channel's `v64.cab` is not that file and cannot be pinned: the CDN
+/// composes it per request (three fetches minutes apart gave three
+/// different files, of 12,403 and twice 12,409 bytes, every sum
+/// different), and its `<Available Build>` is the build the rollout
+/// offers (16.0.12527.22286 while this cache holds 16.0.20527.20196),
+/// not the one under `Office\Data`. An offline source carrying it would
+/// send the client after a build the cache does not have. A real
+/// `setup.exe /download` leaves behind a `v64.cab` that describes the
+/// version it downloaded; so does this.
+fn write_version_pointer(data: &Path, version: &str) -> Result {
+    let from = data.join(format!("v64_{version}.cab"));
+    let to = data.join("v64.cab");
+    fs::copy(&from, &to)
+        .map(|_| ())
+        .map_err(|e| format!("cannot write {} from {}: {e}", to.display(), from.display()))
+}
 
 /// The cache's directory for OFFICE_SOURCE_VERSION (outside the
 /// repository's tracked files, like PREBUILT's).
@@ -16686,6 +16709,7 @@ fn office_source_command(args: &[String]) -> Result {
             return Err(format!("{}: SHA-256 {got}, pinned {sum}", file.display()));
         }
     }
+    write_version_pointer(&data, OFFICE_SOURCE_VERSION)?;
     if !pin {
         fs::write(base.join(".complete"), OFFICE_SOURCE_VERSION).map_err(|e| e.to_string())?;
         eprintln!("xtask: Office {OFFICE_SOURCE_VERSION}'s source is in {}", base.display());
@@ -20604,5 +20628,40 @@ mod snapshot_scenarios {
             .filter(|s| s.name == "hotswap_machine" || s.name == "khotswap_both")
             .collect();
         assert_eq!(plan_vms(&pair).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod office_source_cache {
+    use super::*;
+
+    /// A pinned file's name carries its version. The channel's
+    /// unversioned `v64.cab` is composed per request -- its checksum
+    /// changed between two fetches minutes apart -- so a pin on one
+    /// breaks on its own, with nothing changed here and no new build.
+    #[test]
+    fn every_pinned_file_names_its_version() {
+        for (name, _) in OFFICE_SOURCE {
+            assert!(name.contains("{v}"), "{name} does not name its version");
+        }
+    }
+
+    /// The offline source describes the build it holds: the client reads
+    /// `v64.cab` from SourcePath, and the CDN's own names the build the
+    /// rollout offers, which the cache does not have.
+    #[test]
+    fn the_offline_source_points_at_the_build_it_holds() {
+        let data = std::env::temp_dir().join(format!("xtask-office-source-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(&data).expect("the temporary directory");
+        let version = "16.0.1.2";
+        let descriptor = b"the version's own descriptor";
+        fs::write(data.join(format!("v64_{version}.cab")), descriptor).expect("the descriptor");
+        write_version_pointer(&data, version).expect("the pointer");
+        assert_eq!(
+            fs::read(data.join("v64.cab")).expect("the pointer's bytes"),
+            descriptor.as_slice()
+        );
+        let _ = fs::remove_dir_all(&data);
     }
 }
