@@ -21,6 +21,20 @@ rustflags = [
     "-C", "link-arg=/DEBUG:NONE",
 ]
 
+[target.aarch64-pc-windows-msvc]
+# ARM64 builds of gala's DLLs (ROADMAP PT: a check that they build; the
+# port is item AR): linked as the x64 ones are.
+linker = "rust-lld"
+rustflags = [
+    "-C", "linker-flavor=lld-link",
+    "-C", "link-arg=/ENTRY:mainCRTStartup",
+    "-C", "link-arg=/SUBSYSTEM:CONSOLE",
+    "-C", "link-arg=/NODEFAULTLIB",
+    "-C", "link-arg=/Brepro",
+    "-C", "debuginfo=0",
+    "-C", "link-arg=/DEBUG:NONE",
+]
+
 [target.i686-pc-windows-msvc]
 # 32-bit (x86) test programs, run through WOW64 (ARCHITECTURE "Plan:
 # WOW64"): linked as the x64 ones are; no SafeSEH tables (nothing here

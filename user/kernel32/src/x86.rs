@@ -74,6 +74,10 @@ pub const CONTEXT_PARTS: &[(u32, &[(usize, usize)])] = &[
 /// gives the native AMD64 answers).
 pub const PROCESSOR_ARCHITECTURE: u16 = 0;
 pub const PROCESSOR_TYPE: u32 = 586;
+/// What GetNativeSystemInfo reports: the machine's, AMD64 (WOW64 runs on
+/// x64): PROCESSOR_ARCHITECTURE_AMD64, PROCESSOR_AMD_X8664.
+pub const NATIVE_PROCESSOR_ARCHITECTURE: u16 = 9;
+pub const NATIVE_PROCESSOR_TYPE: u32 = 8664;
 
 /// The native (64-bit) system directory as a 32-bit program names it:
 /// Sysnative, which the file system redirector leaves as System32 (its
@@ -102,16 +106,19 @@ pub fn teb_write_u32(offset: usize, value: u32) {
     teb_write(offset, value as usize);
 }
 
-/// The time stamp counter.
-pub fn rdtsc() -> u64 {
+/// A free-running counter: the time stamp counter.
+pub fn cycles() -> u64 {
     // SAFETY: rdtsc only reads the time stamp counter.
     unsafe { core::arch::x86::_rdtsc() }
 }
 
-/// The time stamp counter and IA32_TSC_AUX (rdtscp).
-pub fn rdtscp(aux: &mut u32) -> u64 {
+/// The processor running this thread: the number the kernel keeps in
+/// IA32_TSC_AUX (read with rdtscp).
+pub fn current_processor() -> u32 {
+    let mut aux = 0u32;
     // SAFETY: rdtscp reads the time stamp counter and TSC_AUX.
-    unsafe { core::arch::x86::__rdtscp(aux) }
+    unsafe { core::arch::x86::__rdtscp(&mut aux) };
+    aux & 0xfff
 }
 
 pub use core::arch::x86::{__cpuid as cpuid, __cpuid_count as cpuid_count};

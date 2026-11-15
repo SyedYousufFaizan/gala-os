@@ -217,14 +217,22 @@ pub extern "C" fn _controlfp_s(current: *mut u32, new: u32, mask: u32) -> i32 {
 /// 0x10, _SW_DENORMAL 0x80000) of the hardware flags (bits 0-5 of MXCSR
 /// and of the x87 status word: invalid, denormal, zero divide, overflow,
 /// underflow, precision).
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn abstract_status(flags: u32) -> u32 {
     const MAP: [(u32, u32); 6] =
         [(0x1, 0x10), (0x2, 0x8_0000), (0x4, 0x8), (0x8, 0x4), (0x10, 0x2), (0x20, 0x1)];
     MAP.iter().filter(|(hw, _)| flags & hw != 0).fold(0, |s, (_, a)| s | a)
 }
 
+/// The raised-exception flags: ARM64's are the port's.
+#[cfg(target_arch = "aarch64")]
+fn status(clear: bool) -> u32 {
+    crate::arch::fp_status(clear)
+}
+
 /// The hardware's raised-exception flags (MXCSR's, and on x86 the x87's
 /// too), cleared when `clear`.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn status(clear: bool) -> u32 {
     let mut mxcsr = 0u32;
     // SAFETY: reads MXCSR.
@@ -250,8 +258,15 @@ fn status(clear: bool) -> u32 {
     abstract_status(flags)
 }
 
+/// Clears the raised-exception flags: ARM64's are the port's.
+#[cfg(target_arch = "aarch64")]
+pub(crate) fn clear_flags(_abstract_mask: u32) {
+    crate::arch::fp_status(true);
+}
+
 /// Clears the raised-exception flags of `abstract_mask` (_SW_* bits; the
 /// x87's too on x86).
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) fn clear_flags(abstract_mask: u32) {
     const MAP: [(u32, u32); 6] =
         [(0x1, 0x10), (0x2, 0x8_0000), (0x4, 0x8), (0x8, 0x4), (0x10, 0x2), (0x20, 0x1)];

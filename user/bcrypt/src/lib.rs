@@ -44,7 +44,7 @@ use sha2::Digest;
 #[cfg(target_arch = "x86")]
 use ntrt as _;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -72,7 +72,7 @@ pub extern "system" fn BCryptGetFipsAlgorithmMode(enabled: *mut u8) -> u32 {
     0
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 

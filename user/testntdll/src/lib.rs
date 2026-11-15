@@ -15,9 +15,9 @@
 #![no_std]
 #![allow(non_snake_case, non_upper_case_globals)]
 
-// The architecture's parts: x64 (System32's ntdll) or x86 (the 32-bit
-// ntdll in SysWOW64, ARCHITECTURE "Plan: WOW64"). First: they define the
-// system call stub macro.
+// The architecture's parts: x64 (System32's ntdll), x86 (the 32-bit
+// ntdll in SysWOW64, ARCHITECTURE "Plan: WOW64") or ARM64 (a stub that
+// compiles, ROADMAP PT). First: they define the system call stub macro.
 #[cfg(target_arch = "x86_64")]
 #[macro_use]
 #[path = "x64.rs"]
@@ -25,6 +25,10 @@ mod arch;
 #[cfg(target_arch = "x86")]
 #[macro_use]
 #[path = "x86.rs"]
+mod arch;
+#[cfg(target_arch = "aarch64")]
+#[macro_use]
+#[path = "aarch64.rs"]
 mod arch;
 
 mod address_wait;
@@ -1103,7 +1107,7 @@ struct LdrEntry {
     pad2: u32,
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(target_pointer_width = "64")]
 const _: () = {
     assert!(core::mem::size_of::<LdrData>() == 0x58);
     assert!(core::mem::offset_of!(LdrEntry, full_name) == 0x48);
@@ -2492,6 +2496,8 @@ pub struct ExceptionPointers {
     context: *mut u8,
 }
 
+// The exception dispatchers' (seh.rs, seh_x86.rs; ARM64's is the port's).
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const EXCEPTION_CONTINUE_EXECUTION: i32 = -1;
 const MAX_HANDLERS: usize = 16;
 
@@ -2600,7 +2606,8 @@ pub extern "system" fn RtlRemoveVectoredContinueHandler(cookie: *mut core::ffi::
 }
 
 /// Calls the handlers of one table in order; whether one of them returned
-/// EXCEPTION_CONTINUE_EXECUTION.
+/// EXCEPTION_CONTINUE_EXECUTION. The exception dispatchers'.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn call_handlers(table: &[(usize, usize)], pointers: &mut ExceptionPointers) -> bool {
     for &(cookie, raw) in table {
         if cookie == 0 {

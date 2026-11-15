@@ -98,7 +98,7 @@ unsafe extern "C" {
 #[cfg(target_arch = "x86")]
 use ntrt as _;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -244,14 +244,15 @@ const IOCTL_AFD_SUPER_ACCEPT: u32 = 0x12083;
 const IOCTL_AFD_SUPER_CONNECT: u32 = 0x120c7;
 
 /// Referenced by code that uses floating point (MSVC target convention).
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 
 /// WSAStartup calls not yet matched by WSACleanup.
 static STARTED: AtomicU32 = AtomicU32::new(0);
 
-/// TEB.LastErrorValue: gs:[0x68] on x64, fs:[0x34] in the 32-bit TEB.
+/// TEB.LastErrorValue: gs:[0x68] on x64, fs:[0x34] in the 32-bit TEB,
+/// [x18 + 0x68] on ARM64 (x18 holds the TEB).
 fn set_last_error(code: u32) {
     // SAFETY: TEB.LastErrorValue of the current thread.
     #[cfg(target_arch = "x86_64")]
@@ -262,6 +263,11 @@ fn set_last_error(code: u32) {
     #[cfg(target_arch = "x86")]
     unsafe {
         core::arch::asm!("mov fs:[0x34], {:e}", in(reg) code, options(nostack))
+    };
+    // SAFETY: as above, through x18.
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("str {:w}, [x18, #0x68]", in(reg) code, options(nostack))
     };
 }
 
@@ -276,6 +282,11 @@ fn last_error() -> u32 {
     #[cfg(target_arch = "x86")]
     unsafe {
         core::arch::asm!("mov {:e}, fs:[0x34]", out(reg) value, options(nostack, readonly))
+    };
+    // SAFETY: as above, through x18.
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("ldr {:w}, [x18, #0x68]", out(reg) value, options(nostack, readonly))
     };
     value
 }

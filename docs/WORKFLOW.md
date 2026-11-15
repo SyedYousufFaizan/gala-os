@@ -179,6 +179,17 @@ cargo xtask export-tests    # refresh user/bin (CI compares)
   target add aarch64-unknown-none` if the toolchain lacks it). A new
   arch function used outside `arch` needs its aarch64 stub (it may end
   in `unported`).
+- **gala's DLLs build for ARM64** (`aarch64-pc-windows-msvc`, CI's
+  Clippy step: a clippy run and a build, since Clippy does not assemble
+  inline assembly; wow64 excepted). Each DLL's architecture-specific
+  code is in its per-architecture module (`x64.rs`, `x86.rs`,
+  `aarch64.rs`: kernel32, msvcrt, ntdll) or behind a `cfg` with an ARM64
+  branch: the TEB through x18 (`[x18 + 0x68]` is LastErrorValue, as
+  `gs:[0x68]` on x64), 64-bit layouts under `target_pointer_width =
+  "64"` rather than `target_arch = "x86_64"`, `_fltused` and ntdll's
+  C helpers under `not(target_arch = "x86")`. Where ARM64 needs the
+  port (its CONTEXT services, unwinding, FPCR), the stub records the gap
+  in the ledger and ends the process (`unported`).
 - **shasha features: the `gala` command first.** Everything the
   graphical shell does can be done from a terminal. Make a new feature a
   named action (`nt::desktop::Action`, or a new GalaDesktopAction

@@ -148,8 +148,22 @@ code (`set_teb32`: x86-64's compatibility mode).
 Limits (ROADMAP PT): `mm::paging` is x86-64's page-table format (generic
 over table access for host tests); the user thread-pointer bases keep
 x86-64's names (`gs_base`, `fs_base`, `teb32`) and the FP control
-register MXCSR's; `boot` is Limine's x86-64 protocol; gala's DLLs are not
-checked for aarch64 yet.
+register MXCSR's; `boot` is Limine's x86-64 protocol.
+
+gala's DLLs build for ARM64 too (`aarch64-pc-windows-msvc`, CI's Clippy
+step: Clippy and a build, which assembles inline assembly). Their
+architecture-specific parts are per-architecture modules (kernel32's,
+msvcrt's and ntdll's `x64.rs`, `x86.rs`, `aarch64.rs`; kernel32's 64-bit
+layouts, shared by x64 and ARM64, in `win64.rs`) or `cfg` branches: the
+TEB is `gs:` on x64, `fs:` on x86 and x18 on ARM64 (Microsoft's ARM64
+ABI). The ARM64 modules are stubs in the kernel's sense: the documented
+layouts and the processor's own operations are filled in, and what
+needs the port (CONTEXT services, unwinding, FPCR, rpcrt4's assembly
+calls) records the gap in the ledger and ends the process, or is not
+built for ARM64 (ROADMAP PT lists which). gala's ntdll makes system
+calls on the kernel stub's convention (the number in x8, `svc #0`,
+arguments in x0-x7 and on the stack, the result in x0). wow64 runs x86
+code on x64 and is not built for ARM64.
 
 ## Boot
 

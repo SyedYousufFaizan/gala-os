@@ -62,7 +62,7 @@ fn from_kernel(data: *mut u8, length: usize) -> bool {
 // The memory routines the compiler may call: ntdll's on x64, ntrt's x86
 // runtime on x86 (a raw-dylib import does not give the symbols the
 // compiler calls there).
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -85,7 +85,17 @@ type Word = u64;
 #[cfg(target_arch = "x86")]
 type Word = u32;
 
+/// ARM64: no processor source yet (RNDR, FEAT_RNG, comes with the port,
+/// ROADMAP AR); the kernel's (`from_kernel`) is used before this.
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+type Word = u64;
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn random_word() -> Option<Word> {
+    None
+}
+
 /// One random word from RDRAND (10 tries, as recommended), else RDSEED.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn random_word() -> Option<Word> {
     let ecx = __cpuid(1).ecx;
     if ecx & (1 << 30) != 0 {

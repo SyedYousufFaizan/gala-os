@@ -43,7 +43,7 @@ use gala_heap as _;
 
 /// MSVC-target codegen references this marker symbol directly, so it cannot
 /// come from an import. On x86, ntrt's.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 
@@ -60,7 +60,7 @@ pub extern "system" fn mainCRTStartup(_instance: usize, _reason: u32, _reserved:
     1
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {

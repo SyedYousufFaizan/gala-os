@@ -109,7 +109,8 @@ In order, after it:
 10. **LN**: lints before every commit (the owner: quality built in
     before committing, not found later).
 11. **PT**: the portability seams for a second architecture (the owner:
-    the ARM64 port itself later): the kernel's done, user mode's next.
+    the ARM64 port itself later): the kernel's and the DLLs' done; ntrt
+    and the test programs come with AR's user mode.
 12. **On the Windows machine under KVM** (the owner): the performance
     profile and the optimization after it, in one chunk with BR's
     conformance blockers (item 0) and BR stage 1's hotspots: gala boots
@@ -158,7 +159,7 @@ has a section under "Open items".
 | U5 | gala-um: a window on the host | planned | the desktop in a host window (X11/Wayland), with its input; headless in um-test |
 | U6 | Windows applications in CI through gala-um | planned | a Windows app and its FlaUI tests headless in a stock GitHub Actions runner; needs U4 and U5 |
 | LN | Lints before every commit | in progress | `cargo xtask lint` from a committed pre-commit hook: architecture code, check-then-sleep, split atomic operations, hard-coded answers |
-| PT | Portability seams for a second architecture | in progress | the kernel's seam done (`arch`'s interface, the per-architecture ABIs `nt::abi`/`lx::machine`, an aarch64 stub CI checks); user mode's next; the ARM64 port itself is in "Later" |
+| PT | Portability seams for a second architecture | in progress | the kernel's seam done (`arch`'s interface, the per-architecture ABIs `nt::abi`/`lx::machine`, an aarch64 stub CI checks); gala's DLLs built for ARM64 in CI (stubs where the port is needed); ntrt and the test programs with AR; the ARM64 port itself is in "Later" |
 | HS | Hygiene sweeps | parked | first sweep and its four leftovers done; no further sweeps until gala runs live (the owner) |
 
 ### NT core services (done, by test)
@@ -382,7 +383,8 @@ flagged and one that must not):
    CI's Clippy commands, read from ci.yml's Clippy step (one list), and
    the committed pre-push hook runs it.
 2. Architecture code only in `kernel/src/arch`: done, the kernel's
-   clippy for `aarch64-unknown-none` (item PT; in the pre-push run).
+   clippy for `aarch64-unknown-none` and gala's DLLs' clippy and build
+   for `aarch64-pc-windows-msvc` (item PT; in the pre-push run).
 3. No check-then-sleep: `wait-site` (done) allows the kernel's raw
    `prepare_wait` only at the reviewed sites (each registers and tests
    its condition under the lock its waker takes); a new one needs a
@@ -428,13 +430,30 @@ in WORKFLOW "Rules for every change"):
   signal frame) with the system call table `lx/syscalls.rs`; their
   aarch64 counterparts are stubs. gala-um is x86_64-only
   (`compile_error!` elsewhere).
+- User mode (step 1): gala's DLLs build for `aarch64-pc-windows-msvc`;
+  CI's Clippy step runs Clippy and a build for them (a build, because
+  Clippy does not assemble inline assembly: x86 `asm!` outside the
+  per-architecture modules then fails). kernel32, msvcrt (and ucrtbase)
+  and ntdll have an `aarch64.rs` beside `x64.rs`/`x86.rs` (kernel32's
+  64-bit layouts shared in `win64.rs`); the other DLLs reach the TEB
+  through x18 and take 64-bit layouts by pointer width. Filled in: the
+  TEB, ARM64's CONTEXT layout and a new thread's context, SLIST_HEADER
+  with an exclusive pair, the memory routines and `__chkstk`, ntdll's
+  system call stubs on the kernel stub's convention (number in x8,
+  `svc #0`). Recorded and ending the process (`unported`): the processor
+  number, FPCR and the FP status, rpcrt4's guarded calls and server
+  routine calls, the APC dispatcher (traps); not built for ARM64:
+  ntdll's exception dispatch and unwinding (`seh.rs`, x64's unwind
+  format), kernel32's CONTEXT buffers and XState functions
+  (`context.rs`), msvcrt's variadic functions, setjmp/longjmp and
+  rpcrt4's NdrClientCall2, each ARM64's own (item AR). Unverified until
+  the port records them on ARM64 Windows: GetSystemInfo's processor
+  type (0 for now) and SLIST_HEADER's header bits (x64's for now).
 
 **Next**:
-1. User mode: gala's DLLs compiled for `aarch64-pc-windows-msvc` where
-   they have no architecture-specific code, as the same guard. Their x86
-   parts: ntdll's (`user/testntdll`) and ntrt's x64/x86 modules (system
-   call stubs, context, unwinding), kernel32's `x64.rs` and `x86.rs` (a
-   new thread's context).
+1. User mode's rest: ntrt (the test programs' runtime: system call
+   stubs, context) and the test programs for ARM64, with item AR's
+   user mode. wow64 is x86 on x64 by nature and is not built for ARM64.
 2. The kernel's remaining x86-shaped parts, each named here with why it
    stays for now:
    - `mm::paging` is x86-64's page-table format (entry bits, PAT), kept

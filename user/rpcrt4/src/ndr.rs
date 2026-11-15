@@ -1070,6 +1070,9 @@ pub extern "system" fn RpcSsDestroyClientContext(ctx: *mut usize) {
     }
 }
 
+// x64's; ARM64's variadic convention is the port's (build.rs exports it
+// for x64 only).
+#[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(
     // NdrClientCall2(desc, format, ...): spills the variadic arguments to
     // their home slots, so the procedure's arguments are contiguous from
