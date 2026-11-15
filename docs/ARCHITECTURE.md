@@ -3136,7 +3136,7 @@ own name).
 | networking | ws2_32 ("ws2_32.dll"), mswsock (forwarders to ws2_32), wsock32 (Winsock 1.1: forwarders to ws2_32 with the standard ordinals), iphlpapi, winhttp, wininet, urlmon, dhcpcsvc, netapi32, mpr, wldap32 |
 | UI | user32, gdi32, comctl32, comdlg32, uxtheme, msimg32, riched20, msftedit, oleacc, uiautomationcore ("Windows on the screen", "UI Automation"), msctf (input scopes, "Other DLLs"), gdiplus (GDI+'s flat API: bitmaps, PNG, solid fills, "Other DLLs"), windows.ui (Windows.UI.ViewManagement.UISettings, "Other DLLs") |
 | COM, shell | ole32, combase (forwarders to ole32), oleaut32, rpcrt4, shell32, shlwapi, xmllite, msxml6, appxdeploymentclient (Windows.Management.Deployment.PackageManager with no packages) |
-| other | winmm, powrprof, version, dbghelp, pdh, setupapi, odbc32, xolehlp, webservices (Windows Web Services' XML reader, "Other DLLs"), wintrust, clusapi, resutils, msi (Windows Installer's queries: nothing installed, "Other DLLs"), rstrtmgr (the Restart Manager, "Other DLLs"), wofutil (the Windows Overlay Filter's API: no filter, "Other DLLs"), sppc (the Software Protection Platform's client over gala's license store, "Other DLLs"), wldp (Windows Lockdown Policy: unlocked, no policy in force) |
+| other | winmm, powrprof, version, dbghelp, pdh, setupapi, odbc32, xolehlp, webservices (Windows Web Services' XML reader, "Other DLLs"), wintrust, clusapi, resutils, msi (Windows Installer: nothing installed, and reading a database, "Other DLLs"), rstrtmgr (the Restart Manager, "Other DLLs"), wofutil (the Windows Overlay Filter's API: no filter, "Other DLLs"), sppc (the Software Protection Platform's client over gala's license store, "Other DLLs"), wldp (Windows Lockdown Policy: unlocked, no policy in force) |
 
 Programs in System32 beside the DLLs: `user/conhost` (conhost.exe,
 "Consoles") and `user/cmd` (cmd.exe, "Other DLLs and programs").
@@ -5315,8 +5315,9 @@ of their own, clients of it) is the yardstick.
   (`user/<dll>/src/unimplemented.rs`, the `gala_stubs` crate's
   `unimplemented_exports!`; ntdll has its own copy). A stub cannot fail
   in the function's own terms (it does not know the return type), so a
-  call reports `dll!function` ("not implemented") and ends the process
-  with STATUS_NOT_IMPLEMENTED (`unimplemented_test`). The stubs live in a
+  call reports `dll!function` ("stub", the one kind whose line says the
+  process ended) and ends the process with STATUS_NOT_IMPLEMENTED
+  (`unimplemented_test`). The stubs live in a
   `.gstub` section: LdrGetProcedureAddress (GetProcAddress) treats an
   export resolving there as absent (by name STATUS_ENTRYPOINT_NOT_FOUND,
   by ordinal STATUS_ORDINAL_NOT_FOUND, as a missing export), so programs probing for optional
@@ -9571,7 +9572,12 @@ document whole into the tree above, and `Scan` hands out one node at a
 time (`next_event(text)` -> `Event`) for a caller that pulls, as
 WS_XML_READER's does. The text is passed to each call and not held, so
 the scan is an offset into the document and borrows nothing; a caller
-can keep the document and the scan side by side.
+can keep the document and the scan side by side. A scan can be told
+that its text is a fragment (`allow_fragment`): more than one root
+element, every other rule unchanged, which is what webservices.dll's
+WS_XML_READER_PROPERTY_ALLOW_FRAGMENT asks for. It also says where it
+has got to (`position`: the line from 1 and the bytes into it), which
+is what that DLL's ROW and COLUMN are made of.
 **ZIP64** (`zip.rs`): the zip64 end record, locator and extra field
 (MSIX packages are zip64 with data descriptors; the central directory is
 authoritative); entries of 4 GiB or more are refused (archives are in
@@ -9668,22 +9674,61 @@ stations and desktops a program creates are refused until stage 3).
   INSTALLSTATE_INVALIDARG or ERROR_INVALID_PARAMETER; MsiSetInternalUI
   keeps the process's level and owner window (an invalid level returns
   INSTALLUILEVEL_NOCHANGE yet its known flags replace the current ones,
-  as on Windows); MsiCloseHandle knows no handle
-  but 0; MsiOpenDatabaseW opens nothing -- ERROR_OPEN_FAILED whether the
-  path is absent or is a file that is no database, for each mode that
-  only opens, and ERROR_CREATE_FAILED for a create mode. Windows asked
-  to create a database creates one and gala does not: msi's one
-  deliberate divergence, for the same reason installing is absent.
-  MsiOpenDatabaseW refuses a NULL or empty path and a NULL handle with
+  as on Windows). Each "nothing installed" answer is recorded
+  (`msi.dll!<function>: nothing installed`, kind other, the ordinal as
+  detail). The exports carry Windows' ordinals (build.rs; ODT's
+  setup.exe and the integrator.exe it runs both import them by
+  ordinal). Installing a package is galapkg's business (its MSI reader,
+  ROADMAP PK), not msi.dll's, so MsiInstallProductW installs nothing --
+  and is exported all the same, because integrator.exe delay-loads it
+  and a delay load that cannot be resolved ends the process with
+  0xc06d007f before it can handle anything, where a refusal it can see
+  it reports. It answers Windows' own code for every path that is no
+  package to begin with: ERROR_INVALID_PARAMETER for a NULL path,
+  ERROR_PATH_NOT_FOUND for an empty one and for a missing directory,
+  ERROR_FILE_NOT_FOUND for a missing file,
+  ERROR_INSTALL_PACKAGE_OPEN_FAILED for a directory and for every other
+  reason an open can fail, ERROR_INSTALL_PACKAGE_INVALID for a file that
+  is no package. The other installing functions stay absent until a run
+  shows one imported.
+
+  A database on disk is another matter, since reading one asks nothing
+  of an installer: `user/msi/src/db.rs` is the API over galapkg's MSI
+  reader, and it is what Office's integrator.exe reads the
+  Click-to-Run MSIs with. MsiOpenDatabaseW opens a file for reading in
+  the modes that only open (READONLY, TRANSACT, DIRECT) and answers
+  ERROR_OPEN_FAILED where the path is absent or the file is no database;
+  it refuses a NULL or empty path and a NULL handle with
   ERROR_INVALID_PARAMETER, and writes 0 through the handle in every case
   it gets past the pointer check -- only the NULL path pointer, refused
-  first, leaves the caller's handle untouched. Each "nothing installed"
-  answer is recorded (`msi.dll!<function>:
-  nothing installed`, kind other, the ordinal as detail). The exports
-  carry Windows' ordinals (build.rs; ODT's setup.exe and the
-  integrator.exe it runs both import them by
-  ordinal). Installing (MsiInstallProduct and the rest) is absent:
-  galapkg's MSI reader (ROADMAP PK) installs packages, not msi.dll.
+  first, leaves the caller's handle untouched. Handles (databases, views
+  and records in one table of slots under one SRW lock, a handle being
+  its slot index plus 1, so 0 is no handle and closing it succeeds),
+  MsiDatabaseIsTablePersistentW, MsiDatabaseOpenViewW, MsiViewExecute
+  (which is where the rows are read, the cursor before the first),
+  MsiViewFetch (a record per row; past the last, ERROR_NO_MORE_ITEMS and
+  the cursor rewound, as Windows does), MsiViewClose (the rows dropped,
+  the view kept), MsiRecordGetFieldCount, MsiRecordGetStringW
+  (ERROR_MORE_DATA and the length needed, which it also reports when
+  given no buffer at all), MsiRecordGetInteger (MSI_NULL_INTEGER for a
+  field that holds no integer) and MsiRecordIsNull. A query is a SELECT
+  of a whole table or of named columns of one; the table and the columns
+  must be the database's, or ERROR_BAD_QUERY_SYNTAX.
+
+  **Limits**, each recorded in the ledger where a program asks for it
+  (ROADMAP OF): a query with a WHERE or an ORDER BY, and the query
+  parameters a record stands in for, are refused rather than answered
+  wrongly; a query that changes a database runs as
+  ERROR_FUNCTION_FAILED, which is Windows' own answer for a database
+  opened read-only, and a create mode or persist path is
+  ERROR_CREATE_FAILED, where Windows would create one; and a package
+  gala does read, asked of MsiInstallProductW, is
+  ERROR_INSTALL_FAILURE -- Windows' own code for an install that failed
+  -- with the package named in the ledger, where Windows would install
+  it. Windows also
+  keeps bookkeeping per database file that gala does not: while a
+  database is open it refuses a second open of the same file, and gala
+  opens it.
 - rstrtmgr (`user/rstrtmgr`, x64 and x86; `rstrtmgr_test`,
   `wow64_rstrtmgr_test`): the Restart
   Manager, which installers ask what uses the files they will replace
@@ -9786,21 +9831,56 @@ stations and desktops a program creates are refused until stage 3).
   waits) and the reads setup.exe makes: WsReadToStartElement (the
   element by local name and namespace, `found` FALSE with S_OK when it
   is not there and WS_E_INVALID_FORMAT when the caller passed no
-  `found`), WsReadStartElement, and WsReadType with
-  WS_ELEMENT_TYPE_MAPPING for WS_WSZ_TYPE (a string onto the heap) and
-  WS_UINT32_TYPE (a number; WS_E_NUMERIC_OVERFLOW for one that does not
-  fit). The document is read node by node with gala's XML reader ("XML",
-  `gala_xml`'s `Scan`), so a malformed document fails at the read that
-  reaches it and faults the reader -- every later call on it is
-  WS_E_OBJECT_FAULTED -- as Windows' reader does, and not when the input
-  is set. A writer is an object and nothing more (WsCreateWriter,
-  WsFreeWriter: setup.exe creates one and imports no write function).
-  Limits: the buffer input and the text encoding only; every other
-  WS_TYPE, type mapping, read option, reader property and encoding is
-  recorded in the missing-features ledger with the number it was handed
-  and answered WS_E_NOT_SUPPORTED, so a program that needs more says
-  which. A null namespace matches an element in any namespace, which of
-  the two readings Windows takes not being measured, so it is recorded
+  `found`), WsReadStartElement, WsReadEndElement, and WsReadType for
+  WS_WSZ_TYPE (a string onto the heap) and WS_UINT32_TYPE (a number;
+  WS_E_NUMERIC_OVERFLOW for one that does not fit) under both element
+  mappings. The reader reads ahead: a read that consumes a node leaves
+  it on the node after that one, which is what Windows' reader does
+  (its ROW and COLUMN stand there, measured) and the reason a document
+  with two root elements fails at the first root's end tag and not at
+  the read after it. WS_ELEMENT_TYPE_MAPPING reads a whole element,
+  start tag to end tag, and leaves the reader past it;
+  WS_ELEMENT_CONTENT_TYPE_MAPPING reads from inside an element whose
+  start tag the caller has read and leaves the reader on the end tag,
+  for the caller's own WsReadEndElement -- the way setup.exe reads the
+  answer. The content mapping refuses nothing on where the reader
+  stands: it takes the text from there up to the first node that is not
+  text and consumes neither that node nor the end tag, so an element
+  that holds elements holds the empty string, as Windows reads it. A
+  read of a value the document does not hold -- a number that is not
+  one, a number too big for its type, an element where a value was
+  expected -- faults the reader, as a malformed document does.
+  WsGetReaderProperty answers for the settings and the position, in
+  Windows' own order of refusals (measured): a reader with no input
+  refuses every id with WS_E_INVALID_OPERATION and a faulted one with
+  WS_E_OBJECT_FAULTED; then an id the reader does not report is
+  E_INVALIDARG; then a buffer that is not the property's own size is
+  E_INVALIDARG, is left untouched, and faults the reader.
+  WS_XML_READER_PROPERTY_MAX_DEPTH (32 by default) is enforced on a
+  start tag as it is read ahead, which is the read Windows refuses with
+  WS_E_QUOTA_EXCEEDED; ALLOW_FRAGMENT (FALSE) allows more than one root
+  element (`gala_xml`'s `Scan::allow_fragment`); CHARSET, IN_ATTRIBUTE,
+  ROW and COLUMN are reported and not set, ROW being the line counted
+  from 0 (the strings in errors count it from 1) and COLUMN the bytes
+  into that line. How Windows divides ROW and COLUMN over a document
+  written on several lines is not separately measured; gala counts the
+  line ends its scan has passed. The document is read node by node with
+  gala's XML reader ("XML", `gala_xml`'s `Scan`), so a malformed
+  document fails at the read that reaches it and faults the reader --
+  every later call on it is WS_E_OBJECT_FAULTED -- as Windows' reader
+  does, and not when the input is set. A writer is an object and
+  nothing more (WsCreateWriter, WsFreeWriter: setup.exe creates one and
+  imports no write function). Limits: the buffer input and the text
+  encoding only; every other WS_TYPE, type mapping, read option and
+  encoding is recorded in the missing-features ledger with the number
+  it was handed and answered WS_E_NOT_SUPPORTED, so a program that
+  needs more says which. MAX_ATTRIBUTES, MAX_NAMESPACES,
+  READ_DECLARATION and the stream and trim sizes are taken, kept and
+  recorded as "other" instead of refused: the reader is created and the
+  ledger names what a program asked for, where a refusal that ends the
+  process would hide everything after it. A null namespace matches an
+  element in any namespace, which of the two readings Windows takes not
+  being measured, so it is recorded
   too. The SOAP side -- channels, service proxies, calls, custom headers
   -- is stubs for SQL Server LocalDB ("Stub-only DLLs").
 - gdiplus (`user/gdiplus`, x64 and x86; `gdiplus_test`,

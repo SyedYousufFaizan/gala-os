@@ -708,6 +708,13 @@ pub struct Scan {
     stack: Vec<Open>,
     /// The root element has been closed.
     root_done: bool,
+    /// More than one root element is allowed: the text is a fragment,
+    /// not a document (webservices.dll's
+    /// WS_XML_READER_PROPERTY_ALLOW_FRAGMENT, ARCHITECTURE "Other
+    /// DLLs"). Everything else holds: each root is well-formed, and
+    /// nothing but white space, comments and processing instructions
+    /// may stand between them.
+    fragment: bool,
     /// An empty element's tag was handed out as a start, so its end is
     /// the next event.
     pending_end: bool,
@@ -731,15 +738,31 @@ impl Scan {
             line_start: 0,
             stack: Vec::new(),
             root_done: false,
+            fragment: false,
             pending_end: false,
             started: false,
         }
+    }
+
+    /// A scan over a fragment: more than one root element, with the
+    /// same rules otherwise (each root well-formed, and nothing but
+    /// white space, comments and processing instructions between them).
+    pub fn allow_fragment(mut self) -> Self {
+        self.fragment = true;
+        self
     }
 
     /// How many elements the scan is inside: 0 outside the root, 1 on
     /// the root's content.
     pub fn depth(&self) -> usize {
         self.stack.len()
+    }
+
+    /// Where the scan has got to: the line, counted from 1, and how
+    /// many bytes into it, counted from 0. It is the end of the node
+    /// last handed out, which is where the next one starts.
+    pub fn position(&self) -> (u32, usize) {
+        (self.line, self.pos - self.line_start)
     }
 
     /// The local name of the element the scan is inside, innermost
@@ -806,7 +829,11 @@ impl Scan {
                 if p.pos == p.s.len() {
                     return Ok(Event::End);
                 }
-                return p.err("content after the root element");
+                if !self.fragment {
+                    return p.err("content after the root element");
+                }
+                // A fragment's next root element, read like the first.
+                self.root_done = false;
             }
             if !p.starts("<") || p.starts("</") {
                 return p.err("no root element");
@@ -880,6 +907,34 @@ impl Scan {
 mod tests {
     use super::*;
     use alloc::vec;
+
+    /// A second root element is content after the root element, unless
+    /// the scan was told the text is a fragment.
+    #[test]
+    fn fragments_need_the_flag() {
+        let text = "<a>1</a>\n<b>2</b>";
+        let names = |scan: &mut Scan| -> Result<Vec<String>, Error> {
+            let mut names = Vec::new();
+            loop {
+                match scan.next_event(text)? {
+                    Event::StartElement { name, .. } => names.push(name),
+                    Event::End => return Ok(names),
+                    _ => {}
+                }
+            }
+        };
+
+        let whole = alloc::format!("{}", names(&mut Scan::new()).unwrap_err());
+        assert!(whole.contains("content after the root element"), "{whole}");
+        assert_eq!(names(&mut Scan::new().allow_fragment()).unwrap(), vec!["a", "b"]);
+
+        // What a fragment does not allow: text between its roots.
+        let mut scan = Scan::new().allow_fragment();
+        assert!(matches!(scan.next_event("<a/>x<b/>"), Ok(Event::StartElement { .. })));
+        assert!(matches!(scan.next_event("<a/>x<b/>"), Ok(Event::EndElement)));
+        let loose = alloc::format!("{}", scan.next_event("<a/>x<b/>").unwrap_err());
+        assert!(loose.contains("no root element"), "{loose}");
+    }
 
     #[test]
     fn namespaces_resolve() {

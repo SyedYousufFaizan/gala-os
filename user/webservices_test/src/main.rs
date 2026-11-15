@@ -109,6 +109,14 @@ unsafe extern "system" {
         error: *mut c_void,
     ) -> i32;
     fn WsReadStartElement(reader: *mut c_void, error: *mut c_void) -> i32;
+    fn WsReadEndElement(reader: *mut c_void, error: *mut c_void) -> i32;
+    fn WsGetReaderProperty(
+        reader: *mut c_void,
+        id: u32,
+        value: *mut c_void,
+        value_size: u32,
+        error: *mut c_void,
+    ) -> i32;
     fn WsReadType(
         reader: *mut c_void,
         type_mapping: u32,
@@ -154,6 +162,15 @@ struct WsXmlReaderTextEncoding {
     char_set: u32,
 }
 
+/// WebServices.h's WS_XML_READER_PROPERTY: which setting, a pointer to
+/// its value and the value's size.
+#[repr(C)]
+struct WsXmlReaderProperty {
+    id: u32,
+    value: *mut c_void,
+    value_size: u32,
+}
+
 /// WebServices.h's WS_XML_READER_BUFFER_INPUT: the base
 /// WS_XML_READER_INPUT (its type) and the bytes to read.
 #[repr(C)]
@@ -169,6 +186,19 @@ const WS_XML_READER_ENCODING_TYPE_TEXT: u32 = 1;
 const WS_CHARSET_UTF8: u32 = 1;
 const WS_ERROR_PROPERTY_STRING_COUNT: u32 = 0;
 const WS_ELEMENT_TYPE_MAPPING: u32 = 1;
+const WS_ELEMENT_CONTENT_TYPE_MAPPING: u32 = 3;
+const WS_XML_READER_PROPERTY_MAX_DEPTH: u32 = 0;
+const WS_XML_READER_PROPERTY_ALLOW_FRAGMENT: u32 = 1;
+const WS_XML_READER_PROPERTY_MAX_ATTRIBUTES: u32 = 2;
+const WS_XML_READER_PROPERTY_READ_DECLARATION: u32 = 3;
+const WS_XML_READER_PROPERTY_CHARSET: u32 = 4;
+const WS_XML_READER_PROPERTY_ROW: u32 = 5;
+const WS_XML_READER_PROPERTY_COLUMN: u32 = 6;
+const WS_XML_READER_PROPERTY_UTF8_TRIM_SIZE: u32 = 7;
+const WS_XML_READER_PROPERTY_STREAM_BUFFER_SIZE: u32 = 8;
+const WS_XML_READER_PROPERTY_IN_ATTRIBUTE: u32 = 9;
+const WS_XML_READER_PROPERTY_ALLOW_INVALID_REFS: u32 = 13;
+const WS_XML_READER_PROPERTY_MAX_NAMESPACES: u32 = 14;
 const WS_UINT32_TYPE: u32 = 7;
 const WS_WSZ_TYPE: u32 = 17;
 const WS_READ_REQUIRED_VALUE: u32 = 1;
@@ -291,6 +321,9 @@ fn section(what: &[u8]) {
 const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 const WS_E_INVALID_FORMAT: i32 = 0x803d_0000u32 as i32;
 const WS_E_OBJECT_FAULTED: i32 = 0x803d_0001u32 as i32;
+const WS_E_INVALID_OPERATION: i32 = 0x803d_0003u32 as i32;
+const WS_E_QUOTA_EXCEEDED: i32 = 0x803d_0008u32 as i32;
+const WS_E_NUMERIC_OVERFLOW: i32 = 0x803d_0002u32 as i32;
 
 /// A value no call under test returns, so a check that sees it is
 /// reading an output the call did not write.
@@ -302,6 +335,23 @@ const DOC: &[u8] = b"<r><a>hello</a><n>42</n></r>";
 
 /// The same, with an end tag that closes the wrong element.
 const BAD: &[u8] = b"<r><a></r>";
+
+/// Three elements deep, to see a depth limit bite.
+const DEEP: &[u8] = b"<r><b><c>1</c></b></r>";
+
+/// Two root elements: a fragment, not a document.
+const TWO_ROOTS: &[u8] = b"<a>1</a><b>2</b>";
+
+/// An element with nothing in it, written both ways.
+const EMPTY: &[u8] = b"<r><e></e></r>";
+const SELF_CLOSED: &[u8] = b"<r><e/></r>";
+
+/// A number too big for 32 bits, and text that is no number at all.
+const TOO_BIG: &[u8] = b"<r><n>99999999999</n></r>";
+const NOT_A_NUMBER: &[u8] = b"<r><n>abc</n></r>";
+
+/// An element whose content is an element, which is no string.
+const CHILD: &[u8] = b"<r><a><b>x</b></a></r>";
 
 /// `text`, NUL-terminated, against `want` as ASCII: the index of the
 /// first differing unit and that unit, or None when the two are equal.
@@ -554,6 +604,793 @@ fn faulted(c: &mut Checks, heap: *mut c_void, error: *mut c_void) -> Result<(), 
     Ok(())
 }
 
+/// A reader over `doc`, created with the properties given and filled
+/// with the whole document: what every section below starts from.
+///
+/// The input and encoding structures are this function's, which the
+/// reader must not keep: Windows' reader copies what they say, and the
+/// document's own bytes stay the caller's (`doc` outlives the reader).
+fn reader_over(
+    c: &mut Checks,
+    doc: &[u8],
+    properties: *const c_void,
+    property_count: u32,
+    error: *mut c_void,
+) -> Result<*mut c_void, u32> {
+    let encoding = WsXmlReaderTextEncoding {
+        encoding_type: WS_XML_READER_ENCODING_TYPE_TEXT,
+        char_set: WS_CHARSET_UTF8,
+    };
+    let input = WsXmlReaderBufferInput {
+        input_type: WS_XML_READER_INPUT_TYPE_BUFFER,
+        encoded_data: doc.as_ptr().cast(),
+        encoded_data_size: doc.len() as u32,
+    };
+    let mut reader: *mut c_void = null_mut();
+    // SAFETY: the shapes WebServices.h declares, and a handle this
+    // frame owns until it is returned.
+    unsafe {
+        c.hr(WsCreateReader(properties, property_count, &mut reader, error), S_OK)?;
+        c.ok(!reader.is_null(), 0)?;
+        c.hr(
+            WsSetInput(
+                reader,
+                (&raw const encoding).cast(),
+                (&raw const input).cast(),
+                null(),
+                0,
+                error,
+            ),
+            S_OK,
+        )?;
+        c.hr(WsFillReader(reader, doc.len() as u32, null(), error), S_OK)?;
+    }
+    Ok(reader)
+}
+
+/// One reader property, as the caller hands it over.
+fn one(id: u32, value: *mut c_void, value_size: u32) -> [WsXmlReaderProperty; 1] {
+    [WsXmlReaderProperty { id, value, value_size }]
+}
+
+/// That the reader is faulted: a property it reports for every usable
+/// reader is refused instead.
+fn is_faulted(c: &mut Checks, reader: *mut c_void, error: *mut c_void) -> Result<(), u32> {
+    let mut row: u64 = u64::from(SENTINEL);
+    // SAFETY: an eight-byte buffer, passed as the eight bytes the row is.
+    unsafe {
+        c.hr(
+            WsGetReaderProperty(
+                reader,
+                WS_XML_READER_PROPERTY_ROW,
+                (&raw mut row).cast(),
+                8,
+                error,
+            ),
+            WS_E_OBJECT_FAULTED,
+        )?;
+    }
+    Ok(())
+}
+
+/// One four-byte property of the reader.
+fn property(c: &mut Checks, reader: *mut c_void, id: u32, error: *mut c_void) -> Result<u32, u32> {
+    let mut got: u32 = SENTINEL;
+    // SAFETY: a four-byte buffer, passed as the four bytes it is.
+    unsafe {
+        c.hr(WsGetReaderProperty(reader, id, (&raw mut got).cast(), 4, error), S_OK)?;
+    }
+    Ok(got)
+}
+
+/// Where the reader stands: the row, counted from 0 (the error strings
+/// count it from 1), and the column, as many bytes into the line, which
+/// is the end of the node the reader is on.
+fn at(
+    c: &mut Checks,
+    reader: *mut c_void,
+    row: u64,
+    column: u64,
+    error: *mut c_void,
+) -> Result<(), u32> {
+    // SAFETY: an eight-byte buffer, passed as the eight bytes the two
+    // position properties are.
+    unsafe {
+        let mut got: u64 = u64::from(SENTINEL);
+        c.hr(
+            WsGetReaderProperty(
+                reader,
+                WS_XML_READER_PROPERTY_ROW,
+                (&raw mut got).cast(),
+                8,
+                error,
+            ),
+            S_OK,
+        )?;
+        c.eq(got, row)?;
+        let mut got: u64 = u64::from(SENTINEL);
+        c.hr(
+            WsGetReaderProperty(
+                reader,
+                WS_XML_READER_PROPERTY_COLUMN,
+                (&raw mut got).cast(),
+                8,
+                error,
+            ),
+            S_OK,
+        )?;
+        c.eq(got, column)?;
+    }
+    Ok(())
+}
+
+/// A reader's settings: which ones a reader may be created with, which
+/// ones it answers for, the defaults it reports, and where its two
+/// positions stand as a document is read.
+fn properties(c: &mut Checks, heap: *mut c_void, error: *mut c_void) -> Result<(), u32> {
+    let mut value: u32 = 1;
+    let mut wide: u64 = 1;
+    let v = (&raw mut value).cast::<c_void>();
+    let w = (&raw mut wide).cast::<c_void>();
+
+    // SAFETY: every property array below outlives its own call, and
+    // each reader a call hands back is freed here.
+    unsafe {
+        // A property the reader reports and does not take (the two
+        // positions, the character set, whether it is in an attribute,
+        // and the id one past the last WebServices.h names), an id that
+        // is no property at all, a value of the wrong size, and no
+        // value: each is a bad argument and no reader.
+        for properties in [
+            one(WS_XML_READER_PROPERTY_CHARSET, v, 4),
+            one(WS_XML_READER_PROPERTY_ROW, w, 8),
+            one(WS_XML_READER_PROPERTY_COLUMN, w, 8),
+            one(WS_XML_READER_PROPERTY_IN_ATTRIBUTE, v, 4),
+            one(15, v, 4),
+            one(99, v, 4),
+            one(WS_XML_READER_PROPERTY_MAX_DEPTH, v, 2),
+            one(WS_XML_READER_PROPERTY_MAX_DEPTH, null_mut(), 4),
+        ] {
+            let mut reader: *mut c_void = null_mut();
+            c.hr(WsCreateReader(properties.as_ptr().cast(), 1, &mut reader, error), E_INVALIDARG)?;
+            c.ok(reader.is_null(), reader as u64)?;
+        }
+        // The same property twice.
+        let twice = [
+            WsXmlReaderProperty { id: WS_XML_READER_PROPERTY_MAX_DEPTH, value: v, value_size: 4 },
+            WsXmlReaderProperty { id: WS_XML_READER_PROPERTY_MAX_DEPTH, value: v, value_size: 4 },
+        ];
+        let mut reader: *mut c_void = null_mut();
+        c.hr(WsCreateReader(twice.as_ptr().cast(), 2, &mut reader, error), E_INVALIDARG)?;
+        c.ok(reader.is_null(), reader as u64)?;
+
+        // The settings a reader takes, the stream and MIME ones it has
+        // nothing to do with among them: all accepted.
+        for id in [
+            WS_XML_READER_PROPERTY_MAX_DEPTH,
+            WS_XML_READER_PROPERTY_ALLOW_FRAGMENT,
+            WS_XML_READER_PROPERTY_MAX_ATTRIBUTES,
+            WS_XML_READER_PROPERTY_READ_DECLARATION,
+            WS_XML_READER_PROPERTY_UTF8_TRIM_SIZE,
+            WS_XML_READER_PROPERTY_STREAM_BUFFER_SIZE,
+            10,
+            11,
+            12,
+            WS_XML_READER_PROPERTY_ALLOW_INVALID_REFS,
+            WS_XML_READER_PROPERTY_MAX_NAMESPACES,
+        ] {
+            let mut reader: *mut c_void = null_mut();
+            c.hr(WsCreateReader(one(id, v, 4).as_ptr().cast(), 1, &mut reader, error), S_OK)?;
+            c.ok(!reader.is_null(), u64::from(id))?;
+            WsFreeReader(reader);
+        }
+
+        // A reader with no input answers for nothing, whatever is asked
+        // of it: a property it would report, one it would not, and a
+        // buffer of the wrong size are the same refusal, and the buffer
+        // is left alone.
+        let mut reader: *mut c_void = null_mut();
+        c.hr(WsCreateReader(null(), 0, &mut reader, error), S_OK)?;
+        for (id, size) in [
+            (WS_XML_READER_PROPERTY_MAX_DEPTH, 4),
+            (WS_XML_READER_PROPERTY_UTF8_TRIM_SIZE, 4),
+            (WS_XML_READER_PROPERTY_MAX_DEPTH, 2),
+        ] {
+            let mut got: u32 = SENTINEL;
+            c.hr(
+                WsGetReaderProperty(reader, id, (&raw mut got).cast(), size, error),
+                WS_E_INVALID_OPERATION,
+            )?;
+            c.eq(u64::from(got), u64::from(SENTINEL))?;
+        }
+        WsFreeReader(reader);
+    }
+
+    // The defaults, on a reader created with no properties at all.
+    let reader = reader_over(c, DOC, null(), 0, error)?;
+    for (id, want) in [
+        (WS_XML_READER_PROPERTY_MAX_DEPTH, 32),
+        (WS_XML_READER_PROPERTY_ALLOW_FRAGMENT, 0),
+        (WS_XML_READER_PROPERTY_MAX_ATTRIBUTES, 128),
+        (WS_XML_READER_PROPERTY_READ_DECLARATION, 1),
+        (WS_XML_READER_PROPERTY_CHARSET, WS_CHARSET_UTF8),
+        (WS_XML_READER_PROPERTY_IN_ATTRIBUTE, 0),
+        (WS_XML_READER_PROPERTY_MAX_NAMESPACES, 32),
+    ] {
+        let got = property(c, reader, id, error)?;
+        c.eq(u64::from(got), u64::from(want))?;
+    }
+
+    // Where the reader stands, read by read. A read that consumes a
+    // node reads ahead to the one after it, which is what these
+    // positions show: 18 is past <n>'s start tag, which the read of
+    // <a> went on to.
+    let root = WsXmlString::new(b"r");
+    let text_element = WsXmlString::new(b"a");
+    let number_element = WsXmlString::new(b"n");
+    let mut found = SENTINEL as i32;
+    let mut text: *mut u16 = null_mut();
+    let mut number = SENTINEL;
+    at(c, reader, 0, 0, error)?;
+    // SAFETY: the reader is this function's, the names are static, and
+    // `text` is the heap's.
+    unsafe {
+        c.hr(WsReadToStartElement(reader, &root, null(), &raw mut found, error), S_OK)?;
+        at(c, reader, 0, 3, error)?;
+        c.hr(WsReadStartElement(reader, error), S_OK)?;
+        at(c, reader, 0, 6, error)?;
+        c.hr(WsReadToStartElement(reader, &text_element, null(), &raw mut found, error), S_OK)?;
+        at(c, reader, 0, 6, error)?;
+        c.hr(
+            WsReadType(
+                reader,
+                WS_ELEMENT_TYPE_MAPPING,
+                WS_WSZ_TYPE,
+                null(),
+                WS_READ_REQUIRED_POINTER,
+                heap,
+                (&raw mut text).cast(),
+                size_of::<*mut u16>() as u32,
+                error,
+            ),
+            S_OK,
+        )?;
+        at(c, reader, 0, 18, error)?;
+        c.hr(WsReadToStartElement(reader, &number_element, null(), &raw mut found, error), S_OK)?;
+        at(c, reader, 0, 18, error)?;
+        c.hr(WsReadStartElement(reader, error), S_OK)?;
+        at(c, reader, 0, 20, error)?;
+        c.hr(
+            WsReadType(
+                reader,
+                WS_ELEMENT_CONTENT_TYPE_MAPPING,
+                WS_UINT32_TYPE,
+                null(),
+                WS_READ_REQUIRED_VALUE,
+                heap,
+                (&raw mut number).cast(),
+                4,
+                error,
+            ),
+            S_OK,
+        )?;
+        c.eq(u64::from(number), 42)?;
+        at(c, reader, 0, 24, error)?;
+        c.hr(WsReadEndElement(reader, error), S_OK)?;
+        at(c, reader, 0, 28, error)?;
+        c.hr(WsReadEndElement(reader, error), S_OK)?;
+        at(c, reader, 0, 28, error)?;
+
+        // A buffer that is not the property's own size: a bad argument
+        // that leaves the buffer alone and faults the reader, so every
+        // call after it says the reader is faulted.
+        let mut got: u32 = SENTINEL;
+        c.hr(
+            WsGetReaderProperty(
+                reader,
+                WS_XML_READER_PROPERTY_ALLOW_FRAGMENT,
+                (&raw mut got).cast(),
+                1,
+                error,
+            ),
+            E_INVALIDARG,
+        )?;
+        c.eq(u64::from(got), u64::from(SENTINEL))?;
+        c.hr(
+            WsGetReaderProperty(
+                reader,
+                WS_XML_READER_PROPERTY_MAX_DEPTH,
+                (&raw mut got).cast(),
+                4,
+                error,
+            ),
+            WS_E_OBJECT_FAULTED,
+        )?;
+        WsFreeReader(reader);
+    }
+
+    // A reader created with the settings it takes reports them back.
+    let mut depth: u32 = 7;
+    let mut yes: i32 = 1;
+    let mut attributes: u32 = 5;
+    let properties = [
+        WsXmlReaderProperty {
+            id: WS_XML_READER_PROPERTY_MAX_DEPTH,
+            value: (&raw mut depth).cast(),
+            value_size: 4,
+        },
+        WsXmlReaderProperty {
+            id: WS_XML_READER_PROPERTY_ALLOW_FRAGMENT,
+            value: (&raw mut yes).cast(),
+            value_size: 4,
+        },
+        WsXmlReaderProperty {
+            id: WS_XML_READER_PROPERTY_MAX_ATTRIBUTES,
+            value: (&raw mut attributes).cast(),
+            value_size: 4,
+        },
+    ];
+    let reader = reader_over(c, TWO_ROOTS, properties.as_ptr().cast(), 3, error)?;
+    for (id, want) in [
+        (WS_XML_READER_PROPERTY_MAX_DEPTH, 7u32),
+        (WS_XML_READER_PROPERTY_ALLOW_FRAGMENT, 1),
+        (WS_XML_READER_PROPERTY_MAX_ATTRIBUTES, 5),
+    ] {
+        let got = property(c, reader, id, error)?;
+        c.eq(u64::from(got), u64::from(want))?;
+    }
+    // SAFETY: a four-byte buffer, and the reader is done with here.
+    unsafe {
+        // A setting the reader takes but does not report back: the id
+        // is not one it answers for.
+        let mut got: u32 = SENTINEL;
+        c.hr(
+            WsGetReaderProperty(
+                reader,
+                WS_XML_READER_PROPERTY_UTF8_TRIM_SIZE,
+                (&raw mut got).cast(),
+                4,
+                error,
+            ),
+            E_INVALIDARG,
+        )?;
+        WsFreeReader(reader);
+    }
+    Ok(())
+}
+
+/// WS_ELEMENT_CONTENT_TYPE_MAPPING: the value inside the element whose
+/// start tag the caller has read, leaving the reader on the end tag --
+/// the way setup.exe reads the configuration service's answer. The
+/// element mapping reads the start tag too and leaves the reader past
+/// the end tag instead, so each refuses where the other belongs.
+fn content(c: &mut Checks, heap: *mut c_void, error: *mut c_void) -> Result<(), u32> {
+    let root = WsXmlString::new(b"r");
+    let text_element = WsXmlString::new(b"a");
+    let number_element = WsXmlString::new(b"n");
+    let empty_element = WsXmlString::new(b"e");
+
+    let reader = reader_over(c, DOC, null(), 0, error)?;
+    let mut found = SENTINEL as i32;
+    let mut text: *mut u16 = null_mut();
+    let mut number = SENTINEL;
+    // SAFETY: the reader is this function's and is freed before it
+    // returns; `text` is the heap's and outlives the reads.
+    unsafe {
+        c.hr(WsReadToStartElement(reader, &root, null(), &raw mut found, error), S_OK)?;
+        c.hr(WsReadStartElement(reader, error), S_OK)?;
+        c.hr(WsReadToStartElement(reader, &text_element, null(), &raw mut found, error), S_OK)?;
+        c.hr(WsReadStartElement(reader, error), S_OK)?;
+        c.hr(
+            WsReadType(
+                reader,
+                WS_ELEMENT_CONTENT_TYPE_MAPPING,
+                WS_WSZ_TYPE,
+                null(),
+                WS_READ_REQUIRED_POINTER,
+                heap,
+                (&raw mut text).cast(),
+                size_of::<*mut u16>() as u32,
+                error,
+            ),
+            S_OK,
+        )?;
+        c.ok(!text.is_null(), 0)?;
+        let diff = wide_diff(text, b"hello");
+        c.ok(diff.is_none(), diff_code(diff))?;
+        // On the end tag of <a>: the caller's own WsReadEndElement
+        // leaves the element, and the reader is then on <n>.
+        c.hr(WsReadEndElement(reader, error), S_OK)?;
+        c.hr(WsReadToStartElement(reader, &number_element, null(), &raw mut found, error), S_OK)?;
+        c.eq(found as u32 as u64, 1)?;
+        c.hr(WsReadStartElement(reader, error), S_OK)?;
+        c.hr(
+            WsReadType(
+                reader,
+                WS_ELEMENT_CONTENT_TYPE_MAPPING,
+                WS_UINT32_TYPE,
+                null(),
+                WS_READ_REQUIRED_VALUE,
+                heap,
+                (&raw mut number).cast(),
+                4,
+                error,
+            ),
+            S_OK,
+        )?;
+        c.eq(u64::from(number), 42)?;
+        // Out of <n>, then out of <r>: the end of the document, where
+        // there is no start element to find and no end tag to read.
+        c.hr(WsReadEndElement(reader, error), S_OK)?;
+        c.hr(WsReadEndElement(reader, error), S_OK)?;
+        found = SENTINEL as i32;
+        c.hr(WsReadToStartElement(reader, &root, null(), &raw mut found, error), S_OK)?;
+        c.eq(found as u32 as u64, 0)?;
+        c.hr(WsReadEndElement(reader, error), WS_E_INVALID_FORMAT)?;
+        WsFreeReader(reader);
+    }
+
+    // The content mapping where the element mapping belongs, on a
+    // start element: not refused, because a start tag is not text --
+    // there is no content, so a string is the empty one and the reader
+    // has not moved. It then reads into the element as it would have.
+    let reader = reader_over(c, DOC, null(), 0, error)?;
+    // SAFETY: as above.
+    unsafe {
+        c.hr(WsReadToStartElement(reader, &root, null(), &raw mut found, error), S_OK)?;
+        c.hr(WsReadStartElement(reader, error), S_OK)?;
+        c.hr(WsReadToStartElement(reader, &text_element, null(), &raw mut found, error), S_OK)?;
+        at(c, reader, 0, 6, error)?;
+        text = null_mut();
+        c.hr(
+            WsReadType(
+                reader,
+                WS_ELEMENT_CONTENT_TYPE_MAPPING,
+                WS_WSZ_TYPE,
+                null(),
+                WS_READ_REQUIRED_POINTER,
+                heap,
+                (&raw mut text).cast(),
+                size_of::<*mut u16>() as u32,
+                error,
+            ),
+            S_OK,
+        )?;
+        let diff = wide_diff(text, b"");
+        c.ok(diff.is_none(), diff_code(diff))?;
+        at(c, reader, 0, 6, error)?;
+        c.hr(WsReadStartElement(reader, error), S_OK)?;
+        at(c, reader, 0, 11, error)?;
+        WsFreeReader(reader);
+    }
+
+    // A number has no empty form, so the same position is where a
+    // number is asked for and nothing is found: the text is not a
+    // number, and the reader is faulted after it.
+    let reader = reader_over(c, DOC, null(), 0, error)?;
+    // SAFETY: as above.
+    unsafe {
+        c.hr(WsReadToStartElement(reader, &root, null(), &raw mut found, error), S_OK)?;
+        c.hr(WsReadStartElement(reader, error), S_OK)?;
+        c.hr(WsReadToStartElement(reader, &number_element, null(), &raw mut found, error), S_OK)?;
+        number = SENTINEL;
+        c.hr(
+            WsReadType(
+                reader,
+                WS_ELEMENT_CONTENT_TYPE_MAPPING,
+                WS_UINT32_TYPE,
+                null(),
+                WS_READ_REQUIRED_VALUE,
+                heap,
+                (&raw mut number).cast(),
+                4,
+                error,
+            ),
+            WS_E_INVALID_FORMAT,
+        )?;
+        c.eq(u64::from(number), u64::from(SENTINEL))?;
+        is_faulted(c, reader, error)?;
+        WsFreeReader(reader);
+    }
+
+    // The element mapping where the content mapping belongs, inside an
+    // element: it wants a start element and the text is not one.
+    let reader = reader_over(c, DOC, null(), 0, error)?;
+    // SAFETY: as above.
+    unsafe {
+        c.hr(WsReadToStartElement(reader, &root, null(), &raw mut found, error), S_OK)?;
+        c.hr(WsReadStartElement(reader, error), S_OK)?;
+        c.hr(WsReadToStartElement(reader, &text_element, null(), &raw mut found, error), S_OK)?;
+        c.hr(WsReadStartElement(reader, error), S_OK)?;
+        text = null_mut();
+        c.hr(
+            WsReadType(
+                reader,
+                WS_ELEMENT_TYPE_MAPPING,
+                WS_WSZ_TYPE,
+                null(),
+                WS_READ_REQUIRED_POINTER,
+                heap,
+                (&raw mut text).cast(),
+                size_of::<*mut u16>() as u32,
+                error,
+            ),
+            WS_E_INVALID_FORMAT,
+        )?;
+        c.ok(text.is_null(), 1)?;
+        is_faulted(c, reader, error)?;
+        WsFreeReader(reader);
+    }
+
+    // A number the document does not hold: too big for the type, and
+    // not a number at all. Neither touches the caller's value, and both
+    // fault the reader -- every read of a value the document does not
+    // hold does.
+    for (doc, want) in [(TOO_BIG, WS_E_NUMERIC_OVERFLOW), (NOT_A_NUMBER, WS_E_INVALID_FORMAT)] {
+        let reader = reader_over(c, doc, null(), 0, error)?;
+        // SAFETY: as above.
+        unsafe {
+            c.hr(WsReadToStartElement(reader, &root, null(), &raw mut found, error), S_OK)?;
+            c.hr(WsReadStartElement(reader, error), S_OK)?;
+            c.hr(
+                WsReadToStartElement(reader, &number_element, null(), &raw mut found, error),
+                S_OK,
+            )?;
+            c.hr(WsReadStartElement(reader, error), S_OK)?;
+            number = SENTINEL;
+            c.hr(
+                WsReadType(
+                    reader,
+                    WS_ELEMENT_CONTENT_TYPE_MAPPING,
+                    WS_UINT32_TYPE,
+                    null(),
+                    WS_READ_REQUIRED_VALUE,
+                    heap,
+                    (&raw mut number).cast(),
+                    4,
+                    error,
+                ),
+                want,
+            )?;
+            c.eq(u64::from(number), u64::from(SENTINEL))?;
+            is_faulted(c, reader, error)?;
+            WsFreeReader(reader);
+        }
+    }
+
+    // An element whose content is an element: no string, read whole;
+    // the empty string, read as content, with the child's start tag
+    // left for the caller -- and the reader is not faulted by it.
+    for content_mapping in [false, true] {
+        let reader = reader_over(c, CHILD, null(), 0, error)?;
+        // SAFETY: as above.
+        unsafe {
+            c.hr(WsReadToStartElement(reader, &root, null(), &raw mut found, error), S_OK)?;
+            c.hr(WsReadStartElement(reader, error), S_OK)?;
+            c.hr(WsReadToStartElement(reader, &text_element, null(), &raw mut found, error), S_OK)?;
+            if content_mapping {
+                c.hr(WsReadStartElement(reader, error), S_OK)?;
+            }
+            text = null_mut();
+            let hr = WsReadType(
+                reader,
+                if content_mapping {
+                    WS_ELEMENT_CONTENT_TYPE_MAPPING
+                } else {
+                    WS_ELEMENT_TYPE_MAPPING
+                },
+                WS_WSZ_TYPE,
+                null(),
+                WS_READ_REQUIRED_POINTER,
+                heap,
+                (&raw mut text).cast(),
+                size_of::<*mut u16>() as u32,
+                error,
+            );
+            if content_mapping {
+                c.hr(hr, S_OK)?;
+                let diff = wide_diff(text, b"");
+                c.ok(diff.is_none(), diff_code(diff))?;
+                let child = WsXmlString::new(b"b");
+                found = SENTINEL as i32;
+                c.hr(WsReadToStartElement(reader, &child, null(), &raw mut found, error), S_OK)?;
+                c.eq(found as u32 as u64, 1)?;
+            } else {
+                c.hr(hr, WS_E_INVALID_FORMAT)?;
+                // What the caller's buffer holds after a read that
+                // failed is no part of the contract and nothing a
+                // caller may read: Windows puts an empty string there
+                // for this failure and nothing for the one above.
+                is_faulted(c, reader, error)?;
+            }
+            WsFreeReader(reader);
+        }
+    }
+
+    // An element with nothing in it, written both ways: its content is
+    // the empty string, and the reader is on its end tag.
+    for doc in [EMPTY, SELF_CLOSED] {
+        let reader = reader_over(c, doc, null(), 0, error)?;
+        // SAFETY: as above.
+        unsafe {
+            c.hr(WsReadToStartElement(reader, &root, null(), &raw mut found, error), S_OK)?;
+            c.hr(WsReadStartElement(reader, error), S_OK)?;
+            c.hr(
+                WsReadToStartElement(reader, &empty_element, null(), &raw mut found, error),
+                S_OK,
+            )?;
+            c.eq(found as u32 as u64, 1)?;
+            c.hr(WsReadStartElement(reader, error), S_OK)?;
+            text = null_mut();
+            c.hr(
+                WsReadType(
+                    reader,
+                    WS_ELEMENT_CONTENT_TYPE_MAPPING,
+                    WS_WSZ_TYPE,
+                    null(),
+                    WS_READ_REQUIRED_POINTER,
+                    heap,
+                    (&raw mut text).cast(),
+                    size_of::<*mut u16>() as u32,
+                    error,
+                ),
+                S_OK,
+            )?;
+            c.ok(!text.is_null(), 0)?;
+            let diff = wide_diff(text, b"");
+            c.ok(diff.is_none(), diff_code(diff))?;
+            c.hr(WsReadEndElement(reader, error), S_OK)?;
+            WsFreeReader(reader);
+        }
+    }
+    Ok(())
+}
+
+/// WS_XML_READER_PROPERTY_ALLOW_FRAGMENT: more than one root element,
+/// which is what setup.exe reads the answer as. Without it, the end tag
+/// of the first root is where the reader meets content after the root
+/// element -- it reads ahead, so the failure is there and not at the
+/// next read -- and the reader is faulted after.
+fn fragments(c: &mut Checks, heap: *mut c_void, error: *mut c_void) -> Result<(), u32> {
+    let first = WsXmlString::new(b"a");
+    let second = WsXmlString::new(b"b");
+    let third = WsXmlString::new(b"c");
+
+    for allow in [false, true] {
+        let mut yes: i32 = 1;
+        let properties = one(WS_XML_READER_PROPERTY_ALLOW_FRAGMENT, (&raw mut yes).cast(), 4);
+        let (p, n) = if allow { (properties.as_ptr().cast(), 1) } else { (null::<c_void>(), 0u32) };
+        let reader = reader_over(c, TWO_ROOTS, p, n, error)?;
+        let mut found = SENTINEL as i32;
+        let mut number = SENTINEL;
+        // SAFETY: the property array outlives the call; the reader is
+        // freed at the end of the pass.
+        unsafe {
+            c.hr(WsReadToStartElement(reader, &first, null(), &raw mut found, error), S_OK)?;
+            c.eq(found as u32 as u64, 1)?;
+            c.hr(WsReadStartElement(reader, error), S_OK)?;
+            c.hr(
+                WsReadType(
+                    reader,
+                    WS_ELEMENT_CONTENT_TYPE_MAPPING,
+                    WS_UINT32_TYPE,
+                    null(),
+                    WS_READ_REQUIRED_VALUE,
+                    heap,
+                    (&raw mut number).cast(),
+                    4,
+                    error,
+                ),
+                S_OK,
+            )?;
+            c.eq(u64::from(number), 1)?;
+            if !allow {
+                c.hr(WsReadEndElement(reader, error), WS_E_INVALID_FORMAT)?;
+                c.hr(
+                    WsReadToStartElement(reader, &second, null(), &raw mut found, error),
+                    WS_E_OBJECT_FAULTED,
+                )?;
+                WsFreeReader(reader);
+                continue;
+            }
+            c.hr(WsReadEndElement(reader, error), S_OK)?;
+            found = SENTINEL as i32;
+            c.hr(WsReadToStartElement(reader, &second, null(), &raw mut found, error), S_OK)?;
+            c.eq(found as u32 as u64, 1)?;
+            c.hr(WsReadStartElement(reader, error), S_OK)?;
+            number = SENTINEL;
+            c.hr(
+                WsReadType(
+                    reader,
+                    WS_ELEMENT_CONTENT_TYPE_MAPPING,
+                    WS_UINT32_TYPE,
+                    null(),
+                    WS_READ_REQUIRED_VALUE,
+                    heap,
+                    (&raw mut number).cast(),
+                    4,
+                    error,
+                ),
+                S_OK,
+            )?;
+            c.eq(u64::from(number), 2)?;
+            c.hr(WsReadEndElement(reader, error), S_OK)?;
+            // Past the last root: no start element to find.
+            found = SENTINEL as i32;
+            c.hr(WsReadToStartElement(reader, &third, null(), &raw mut found, error), S_OK)?;
+            c.eq(found as u32 as u64, 0)?;
+            WsFreeReader(reader);
+        }
+    }
+
+    // A fragment read root by root with the element mapping, which
+    // takes the whole of one root at a time.
+    let mut yes: i32 = 1;
+    let properties = one(WS_XML_READER_PROPERTY_ALLOW_FRAGMENT, (&raw mut yes).cast(), 4);
+    let reader = reader_over(c, TWO_ROOTS, properties.as_ptr().cast(), 1, error)?;
+    let mut found = SENTINEL as i32;
+    let mut number = SENTINEL;
+    // SAFETY: as above.
+    unsafe {
+        for (name, want) in [(&first, 1u32), (&second, 2)] {
+            c.hr(WsReadToStartElement(reader, name, null(), &raw mut found, error), S_OK)?;
+            c.eq(found as u32 as u64, 1)?;
+            c.hr(
+                WsReadType(
+                    reader,
+                    WS_ELEMENT_TYPE_MAPPING,
+                    WS_UINT32_TYPE,
+                    null(),
+                    WS_READ_REQUIRED_VALUE,
+                    heap,
+                    (&raw mut number).cast(),
+                    4,
+                    error,
+                ),
+                S_OK,
+            )?;
+            c.eq(u64::from(number), u64::from(want))?;
+        }
+        WsFreeReader(reader);
+    }
+    Ok(())
+}
+
+/// WS_XML_READER_PROPERTY_MAX_DEPTH: how deep a start element may be.
+/// The read that reaches a deeper tag is WS_E_QUOTA_EXCEEDED and faults
+/// the reader -- with a limit of 2 that is the read which moves into
+/// <b>, because reading ahead is what reaches <c> -- and a limit of 3
+/// lets the whole of <r><b><c> through.
+fn depth(c: &mut Checks, error: *mut c_void) -> Result<(), u32> {
+    for (limit, stops) in [(2u32, true), (3, false)] {
+        let mut value = limit;
+        let properties = one(WS_XML_READER_PROPERTY_MAX_DEPTH, (&raw mut value).cast(), 4);
+        let reader = reader_over(c, DEEP, properties.as_ptr().cast(), 1, error)?;
+        let mut found = SENTINEL as i32;
+        // SAFETY: the property array outlives the call; the reader is
+        // freed at the end of the pass.
+        unsafe {
+            for (i, name) in [b"r".as_slice(), b"b", b"c"].into_iter().enumerate() {
+                let want = WsXmlString::new(name);
+                c.hr(WsReadToStartElement(reader, &want, null(), &raw mut found, error), S_OK)?;
+                c.eq(found as u32 as u64, 1)?;
+                if stops && i == 1 {
+                    c.hr(WsReadStartElement(reader, error), WS_E_QUOTA_EXCEEDED)?;
+                    let third = WsXmlString::new(b"c");
+                    c.hr(
+                        WsReadToStartElement(reader, &third, null(), &raw mut found, error),
+                        WS_E_OBJECT_FAULTED,
+                    )?;
+                    break;
+                }
+                c.hr(WsReadStartElement(reader, error), S_OK)?;
+            }
+            WsFreeReader(reader);
+        }
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), u32> {
     let mut c = Checks(0);
 
@@ -565,6 +1402,14 @@ fn run() -> Result<(), u32> {
     reading(&mut c, heap, error)?;
     section(b"faulted");
     faulted(&mut c, heap, error)?;
+    section(b"properties");
+    properties(&mut c, heap, error)?;
+    section(b"content");
+    content(&mut c, heap, error)?;
+    section(b"fragments");
+    fragments(&mut c, heap, error)?;
+    section(b"depth");
+    depth(&mut c, error)?;
 
     // SAFETY: both objects were created above and nothing holds them.
     unsafe {

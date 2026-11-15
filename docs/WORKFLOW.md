@@ -72,7 +72,7 @@ cargo xtask export-tests    # refresh user/bin (CI compares)
   request once its checks are green, or by a direct push after the local
   gate (`cargo xtask test`) passed; main's ruleset allows both for now.
   Its jobs:
-  - `linux` (Ubuntu 24.04): the format and clippy lines, `cargo xtask
+  - `linux` (Ubuntu 26.04): the format and clippy lines, `cargo xtask
     lx-expect && git diff --exit-code user/lx`, `cargo xtask test
     --no-boot` (everything but the boots) and `cargo xtask export-tests &&
     git diff --exit-code user/bin` (checked-in binaries and transcripts
@@ -815,6 +815,11 @@ XTASK_HOTSWAP_WHY=1 cargo xtask hotswap-diff ...   # why each function counts as
   only be patched: take the snapshot before the program that loads the
   DLL starts (an Office fix in a DLL integrator.exe loads: before
   `process integrator.exe (pid`), or keep the change one a patch takes.
+  Some DLLs no Office snapshot can take: setup.exe maps msi.dll as it
+  starts, so every later snapshot has it mapped, and an export the
+  change adds would not be visible to a resolver even if the patch took
+  it ("What they cannot cover"), which is what a delay load by ordinal
+  resolves through -- an msi.dll export goes from boot.
   With a list, a changed DLL not in it is replaced whole (not patched):
   the flag alone patches every changed DLL. A 4-byte function cannot take the jump
   (refused: make the old build's function longer, or swap its callers).
@@ -955,13 +960,16 @@ Vulkan-Headers) Vulkan on lavapipe through the Khronos loader (PREBUILT
   any other. A fallback on a host that has `/dev/kvm` is called out
   with it, and QEMU's standard error says what it could not open.
 - **Docker**: `cargo xtask docker-test [xtask args]` builds
-  `docker/test.Dockerfile` (Ubuntu 24.04, OVMF, xorriso, the pinned
+  `docker/test.Dockerfile` (Ubuntu 26.04, OVMF, xorriso, the pinned
   toolchain, QEMU's build dependencies, and the host-side programs the
   tests run next to the VM: the ssh and sftp clients, psql, 7z, unzip,
   msitools, musl-gcc, weston and Xvfb) and runs `cargo xtask test` (or
   the given arguments) inside it with the repository at /work and build
   output in `target/docker`. It passes `/dev/kvm` through when the host
-  has it, mounts `~/.cache/gala-qemu-docker` at
+  has it, runs the container with `seccomp=unconfined` (the default
+  profile blocks clone3, which the Linux test programs call: thread_test
+  then waits for a thread that was never made and `docker-test
+  lx-expect` reads as a hung test), mounts `~/.cache/gala-qemu-docker` at
   `/root/.cache/gala-qemu` (the container's `HOME` is /root) and builds
   the pinned QEMU there first when it is missing, and forwards every
   `XTASK_*` variable and the proxy settings. That cache is the
@@ -1045,7 +1053,7 @@ networking).
   carries on regardless, so those two are not required; it fails on a
   missing dependency rather than warning, one at a time, so read the
   last line of its output rather than the first.
-- Why not the distribution's: QEMU 8.1.0-8.2.5 (Ubuntu 24.04 ships
+- Why not the distribution's: QEMU 8.1.0-8.2.5 (Ubuntu 24.04's
   8.2.2) keeps running stale translations of code rewritten on a
   translated block's second page, which corrupted JIT-compiled code
   ("Known intermittent"). `straddle_test` (single-threaded TCG) rewrites
@@ -1054,7 +1062,8 @@ networking).
   it is the quick way to tell whether a QEMU build has the bug. On the
   pinned QEMU `java_stress` passed 15 of 15 boots; on 8.2.2, 2 of 6
   failed. A newer distribution QEMU is no safer: on 10.2.1 (Ubuntu
-  26.04's) the `hello` scenario wedges **under KVM** before the kernel
+  26.04's, so what CI's runners and the test image carry) the `hello`
+  scenario wedges **under KVM** before the kernel
   logs a phase, three runs of three timing out at 120 s with CPU 1 at
   the reset vector (`EIP=0000fff0 CS=f000`, `HLT=1`) and no state dump,
   while `lx_hello`, `lx_hello_pie` and `go_hello` passed in the same
@@ -1115,9 +1124,15 @@ Run a program directly:
   that process (`handle SIGSYS nostop noprint`, `handle SIGURG nostop
   noprint`), and `thread apply all bt` shows where NT threads are inside
   the NT layer.
-- A run that hangs gets SIGQUIT at its timeout (`timeout -s QUIT`,
-  SIGKILL 5 s later) and prints the threads part of the state dump to
-  stderr; for a live one, `kill -QUIT <pid of exe>`.
+- A run that hangs gets SIGQUIT at its deadline (SIGKILL 5 s later)
+  and prints the threads part of the state dump to stderr; for a live
+  one, `kill -QUIT <pid of exe>`. xtask times the run itself
+  (`run_with_deadline`) rather than through `timeout -s QUIT -k 5`:
+  Ubuntu 26.04's coreutils is uutils (`timeout --version` says which a
+  host has), whose timeout(1) kills the program at the deadline instead
+  of sending the chosen signal first and waiting, which left every hung
+  run without the dump it is read from. A host tool's flavour must not
+  decide whether a hang explains itself.
 - A failure that reproduces in gala-um is in the NT layer or the
   user-mode DLLs; one that does not points at the kernel's machine code
   (paging, switches, interrupts) or at the emulator.
@@ -1469,7 +1484,14 @@ kernel32 through `raw-dylib`), run under gala and under Windows
   runs as a non-admin user in session 1, with many CPUs, a battery, its
   own UI language): files and directories go in `%TEMP%` (GetTempPathW),
   not C:\ (a user may not create files there) or C:\gala, and an
-  earlier run's leftovers are removed first; values that depend on the
+  earlier run's leftovers are removed first; a path a test only *names*
+  comes from a directory it knows is there too (its own image's, from
+  GetModuleFileNameW, or `%TEMP%`) whenever the answer turns on that
+  directory existing -- MsiInstallProductW answers ERROR_FILE_NOT_FOUND
+  for a missing package in a directory that is there and
+  ERROR_PATH_NOT_FOUND for one in a directory that is not, so
+  `C:\gala\no-such.msi` passed on gala and on a machine this project
+  had run on and failed on CI's stock runner (`msi_test`); values that depend on the
   machine (the processor count, devices, the system locale, the build,
   the volume's number) are read from another API, not typed in; per-user
   state another process may hold (the clipboard) is skipped, naming the
@@ -1656,8 +1678,10 @@ kernel32 through `raw-dylib`), run under gala and under Windows
 - A missing export stops the load (as on Windows), so add it to the
   DLL's `src/unimplemented.rs` (`gala_stubs::unimplemented_exports!`)
   to get the program running. The stub logs at once (`[warn ]
-  <program>: <dll>!<function> not implemented, ending the process`),
-  records `dll!function` in the ledger and ends the process with
+  <program>: <dll>!<function> not implemented, ending the process
+  (detail <the number the record carried>)`; a gap that is reported and
+  lived with logs the same line without the "ending the process"),
+  records `dll!function` in the ledger ("stub") and ends the process with
   STATUS_NOT_IMPLEMENTED when called. Implementing one means removing it
   from that list.
 - GetProcAddress returns NULL for stubs, so a test that checks a
@@ -2089,9 +2113,36 @@ source).
   dlopen()ed is not DT_NEEDED), found through DT_RUNPATH `$ORIGIN`.
   They use libc as a program does (printf, malloc, dlopen), not raw
   system calls: what they check is that glibc's programs run. CI's
-  rebuild (ubuntu-24.04: gcc 13.3, glibc 2.39) must give the same bytes:
+  rebuild (ubuntu-26.04: gcc 15.2, glibc 2.43) must give the same bytes:
   their start-up files (`crt1.o`, `crti.o`) come from the host's
-  libc6-dev, so the binaries are rebuilt on that Ubuntu release.
+  libc6-dev, so the binaries are rebuilt on that Ubuntu release. The
+  release alone does not pin them: 26.04 publishes two builds of each
+  package under one version, the plain amd64 one and an amd64v3 one
+  optimised for x86-64-v3, and a machine opts into the variant with
+  `APT::Architecture-Variants` (GitHub's runner image does; `apt-cache
+  policy cpp-15-x86-64-linux-gnu` then names `resolute/main amd64v3
+  Packages`). Every package installed on such a machine is that build,
+  and two of them reach the bytes: gcc defaults to `-march=x86-64-v3`
+  and emits AVX2 where the plain one emits none, and `musl-dev`'s static
+  libc is compiled that way too (3961 VEX-encoded instructions against
+  the plain build's none), so the binaries differ whichever of the two
+  it is. `build.sh` refuses in either case -- the compilers by their
+  default `-march`, musl's libc by what comes out of the first program
+  it builds -- and CI's `linux` job clears the variant for its whole
+  job, before it installs anything, by writing `#clear
+  APT::Architecture-Variants;` into `/etc/apt/apt.conf.d/99-plain-amd64`
+  (a name that sorts after the image's). A file of one's own that clears
+  the option, rather than the deletion of the image's file that sets it:
+  one runner image keeps that file in
+  `/etc/apt/apt.conf.d/90arch-variant` and another does not, while
+  `#clear` -- or `-o APT::Architecture-Variants=` on a single command --
+  outranks any file whatever its name. `apt-config dump | grep -i
+  variant` then shows it empty. Check what came of it in the code, not
+  in `-march=` alone, which says nothing about musl-dev: no `__AVX2__`
+  from `gcc -dM -E -`, and no VEX-encoded instruction in
+  `/usr/lib/x86_64-linux-musl/libc.a` or in a binary the build produced.
+  The toolchain is what the rebuild rests on, and a job that states it
+  names the cause where a byte diff cannot.
   The binaries are checked in under `user/lx/bin`, not `user/bin`
   (`export-tests` copies only the Windows build's outputs); the kernel's
   host tests `include_bytes!` them.
@@ -2124,7 +2175,11 @@ source).
   `SEATED_TESTS`, gtk_test) gets weston's X11 backend instead
   (`--backend=x11 --use-pixman`) in an Xvfb of its own (apt package
   `xvfb`; Xvfb picks a free display and names it with `-displayfd`;
-  its log is `xvfb.log` in the run directory): Xvfb's keyboard and
+  its log is `xvfb.log` in the run directory, and under WSL that log
+  reads "Mode of /tmp/.X11-unix should be set to 1777" because WSLg
+  mounts that directory read-only, so no Xvfb there can make its
+  socket and the seated tests run in the test image instead):
+  Xvfb's keyboard and
   pointer make weston's seat, and nothing types or clicks there, so
   such a program drives itself when run by lx-expect (gtk_test clicks
   its own button: its header). In gala their scenarios (`lx_wl`) start the kernel's server
@@ -2249,7 +2304,9 @@ source).
   check; cross-check it with the host's dash and coreutils (shell.sh's
   part after its setup, or httpd.sh behind a `busybox() { "$@"; }`
   shim; busybox is a test subject: it runs inside gala, where its
-  behaviour is what is tested; see "Third-party code on the host"). busybox.net's build has no standalone shell, so `shell.sh`
+  behaviour is what is tested; see "Third-party code on the host"). On
+  Ubuntu 26.04 that cross-check is against uutils coreutils rather than
+  GNU's: where the two differ, POSIX decides. busybox.net's build has no standalone shell, so `shell.sh`
   first makes `/lx/bb.bin/<applet>` symbolic links to busybox and puts
   that directory first in PATH (an applet it needs goes in that list);
   httpd.sh still calls `busybox <applet>`. To try a command line quickly, change `lx_busybox`'s
@@ -2880,7 +2937,7 @@ it on first use.
 - Unpackers: unzip for zips (`apt install unzip`; a fresh Ubuntu, WSL's
   included, has none, and the prebuilt fails to spawn it), msitools'
   `msiextract` for an MSI (`apt install msitools`), 7-Zip (`7z` from
-  p7zip-full) for a `.7z` archive (mesa-dist-win's; members are file
+  7zip) for a `.7z` archive (mesa-dist-win's; members are file
   paths such as `x64/opengl32.dll`), an NSIS installer or a 7-Zip
   self-extractor, and for a Chocolatey `.nupkg` the installer in
   its `tools/` unpacked with 7-Zip; a nuget.org `.nupkg` (a library
@@ -3291,7 +3348,12 @@ about a minute under TCG. Read, in order:
   has the `amd64-unicode` stubs, so `Target amd64-unicode` gives an x64
   installer, which gala can run: there is no WOW64 for 32-bit ones; it
   has no amd64 plug-ins, so the script uses none). The build is
-  reproducible; without makensis the checked-in installers are written
+  reproducible for one makensis and not across versions, so a host whose
+  nsis is not CI's image's (Ubuntu 26.04's 3.10-2 against 24.04's) makes
+  other bytes and `export-tests` rewrites the installers and the SHA-256s
+  in their manifests: that belongs to no change, so restore
+  `user/pk_install_test/source` (or export in the image: `cargo xtask
+  docker-test`) rather than committing it. Without makensis the checked-in installers are written
   back from the working tree unchanged, so `export-tests` leaves the same
   bytes either way (make_source.py removes and remakes `source/installers`
   on every run, so keeping them means writing them back, not skipping

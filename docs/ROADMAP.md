@@ -2205,20 +2205,24 @@ need gala's.
      read from Windows' own export directory on this machine (build
      26200; the method checked by reading back the nine ordinals msi
      already carries, all of which matched): it opens an installer
-     database, which gala has no engine for. Done: msi's
-     MsiOpenDatabaseW, x64 and x86, answering as Windows does for a
-     database it cannot open -- ERROR_OPEN_FAILED for a path that is not
-     there and for a file that is not a database alike, whichever of the
-     modes that only open is asked; ERROR_CREATE_FAILED for a create
-     mode that cannot create one; ERROR_INVALID_PARAMETER without a path,
-     with an empty one or without a handle; the handle set to 0 except
-     where the NULL path pointer is refused before it is touched -- test
-     first in `msi_test` and `wow64_msi_test` (every answer measured on
-     this machine's Windows 11 build 26200, both widths). Asked to
-     create a database where it can, Windows creates one (16 KiB,
-     measured) and gala does not: the one place msi's answer is
-     deliberately not Windows', a database engine being galapkg's
-     business (ROADMAP PK), not msi.dll's.
+     database. Done: msi's MsiOpenDatabaseW, x64 and x86 -- the modes
+     that only open (READONLY, TRANSACT, DIRECT) open the file for
+     reading; ERROR_OPEN_FAILED for a path that is not there and for a
+     file that is not a database alike; ERROR_CREATE_FAILED for a create
+     mode and for a persist path, recorded in the ledger as the gap it
+     is; ERROR_INVALID_PARAMETER without a path, with an empty one or
+     without a handle; the handle set to 0 except where the NULL path
+     pointer is refused before it is touched -- test first in `msi_test`
+     and `wow64_msi_test` (every answer measured on this machine's
+     Windows 11 build 26200, both widths). Two answers are deliberately
+     not Windows'. Asked to create a database where it can, Windows
+     creates one (16 KiB, measured) and gala does not, a database engine
+     being galapkg's business (ROADMAP PK), not msi.dll's. And Windows
+     keeps bookkeeping per database file which gala does not: while one
+     is open, a second open of the same file is refused
+     (ERROR_CREATE_FAILED for another read-only one, ERROR_OPEN_FAILED
+     for a writing one, both measured) where gala opens it, so the test
+     asks the open modes with no other handle on the file.
      A failure there fails the install as before: the
      service ends with 17002 and setup.exe with 0x426a (17002,
      "C2RClient returned a failing exit code") -- at 90%
@@ -2235,16 +2239,109 @@ need gala's.
      point cannot be taken at all. Done: gala's webservices.dll, x64 and
      x86 (ARCHITECTURE "Other DLLs", webservices) -- the 15 functions
      setup.exe delay-loads are the XML reader subset alone (heaps, error
-     objects, a reader over a buffer of text, WsReadToStartElement,
-     WsReadStartElement and WsReadType; no channel, no service proxy, no
-     security binding), reading the document node by node with
-     `gala_xml`'s `Scan` so that a malformed one fails at the read that
-     reaches it, as Windows' reader does; test first in
-     `webservices_test` and `wow64_webservices_test`, every answer
-     measured on this machine's Windows 11 build 26200 in both widths.
-     Where a run with egress gets to after the configuration service is
-     what the next one from boot says. Seen
-     too, not fatal so far: `slc.dll` a missing DLL (loaded by name at
+     objects, a reader over a buffer of text with its settings and its
+     position, WsReadToStartElement, WsReadStartElement,
+     WsReadEndElement and WsReadType under both element mappings; no
+     channel, no service proxy, no security binding), reading the
+     document node by node with `gala_xml`'s `Scan` so that a malformed
+     one fails at the read that reaches it, as Windows' reader does, and
+     reading one node ahead as Windows' reader does, which is what its
+     ROW and COLUMN show; test first in `webservices_test` and
+     `wow64_webservices_test`, every answer measured on this machine's
+     Windows 11 build 26200 in both widths.
+     With webservices in place, the first run from boot with egress on
+     the owner's Windows machine under KVM (Intel i9-8950HK, 2 vCPUs;
+     2558 s of VM time of the 3600 s limit, nothing waiting for a host
+     CPU) got through the download, STAGEREGISTRY,
+     UNINSTALLCENTENNIAL and APPLYCONFIGURATION's publish, Migrate and
+     Fonts, to 92% of the scenario's progress, with Office's files
+     published on disk: WINWORD.EXE and EXCEL.EXE are among the
+     10 985 files, under `%ProgramFiles%\Microsoft Office\root\Office16`
+     -- and
+     then failed in the integrator's last task, which reads the MSIs it
+     is handed: `C2RManifest::ConfigureMSIs`, "MsiAPICallFailure
+     (MsiOpenDatabase call failed. , Error:0x6e)", ErrorCode 30050, for
+     `Integrator Mode[Install] Scope[Global] Phase[Complete]
+     Scenario[C2R] Actions[Extension Msi ]
+     Msi[C2RInt.16.msi,C2RIntLoc.en-us.16.msi,*]`. 0x6e is
+     ERROR_OPEN_FAILED, which is what gala's MsiOpenDatabaseW answered
+     every database with until it could read one. integrator.exe exits
+     30050 twice, the C2R task fails, and the service and setup.exe end
+     with 17002.
+     Done: reading an installer database. What Office asks of one is
+     bounded, from the names Integrator.exe looks up at run time (it
+     imports msi.dll from no import directory): MsiOpenDatabase,
+     MsiDatabaseIsTablePersistentW, MsiDatabaseOpenViewW,
+     MsiViewExecute, MsiViewFetch and MsiRecordGetStringW, and the
+     queries in it are ``SELECT * FROM `Feature` `` and ``SELECT * FROM
+     `Property` `` -- a reader for the container and the two tables, and
+     a query that selects a whole table, not an engine. That is what
+     msi.dll's `db` is, over galapkg's MSI reader: handles, views with a
+     cursor, records, and SELECTs of a whole table or of named columns
+     (ARCHITECTURE "Other DLLs", msi). Test first in `msi_test` and
+     `wow64_msi_test` over the checked-in fixture
+     (`user/galapkg/testdata/msi/basic.msi`, so the one program runs
+     both on Windows and in gala), every answer measured on this
+     machine's Windows 11 build 26200 in both widths -- three of them
+     answers the documentation does not suggest: a field past the
+     record's last reads as empty rather than failing,
+     MsiRecordGetStringW reports the length it needs when it is given no
+     buffer, and a fetch past the last row returns ERROR_NO_MORE_ITEMS
+     and rewinds the cursor.
+     Not there yet, each recorded in the ledger where a program asks for
+     it: a query with a WHERE or an ORDER BY (Windows runs it, gala
+     refuses it as ERROR_BAD_QUERY_SYNTAX and records that the query was
+     not understood rather than wrong), the query parameters a record
+     stands in for, and any query that changes a database
+     (ERROR_FUNCTION_FAILED, which is Windows' own answer for a database
+     opened read-only).
+     With the reader in place the run's third integrator.exe got past
+     ConfigureMSIs and died of 0xc06d007f on `msi.dll` ordinal 88,
+     which is MsiInstallProductW, read from Windows' own export
+     directory on this machine as ordinal 92 was (build 26200; the
+     method checked again by reading back all nineteen ordinals msi
+     already carries, all of which matched): it installs a package.
+     Done: msi's MsiInstallProductW, x64 and x86 --
+     ERROR_INVALID_PARAMETER without a path, ERROR_PATH_NOT_FOUND for
+     an empty one, and for a path that is no package Windows' own
+     answer for why not (ERROR_FILE_NOT_FOUND for a missing file,
+     ERROR_PATH_NOT_FOUND for a missing directory,
+     ERROR_INSTALL_PACKAGE_OPEN_FAILED for a directory and for every
+     other reason an open can fail, ERROR_INSTALL_PACKAGE_INVALID for a
+     file that is not a package) -- test first in `msi_test` and
+     `wow64_msi_test` (every answer measured on this machine's Windows
+     11 build 26200, both widths). One answer is deliberately not
+     Windows': a package gala does read it cannot install, an installer
+     engine being galapkg's business (ROADMAP PK), so it answers
+     ERROR_INSTALL_FAILURE, Windows' own code for an install that
+     failed, and the ledger carries which package was asked for. The
+     export is there all the same because the import is delay-loaded:
+     an unresolved one ends the process before it can handle anything,
+     where a refusal it can see leaves it to report the failure.
+     With the export in place the run from boot (the owner's Windows
+     machine under KVM, 2 vCPUs, 1229 s of VM time) gets past the delay
+     load and the blocker moves to the install itself: the third
+     integrator.exe runs its ConfigureMSIs task for 314 s instead of
+     dying, asks MsiInstallProductW for `C:\Program Files\Microsoft
+     Office\root\Integration\C2RInt.16.msi` and
+     C2RIntLoc.en-us.16.msi, and takes ERROR_INSTALL_FAILURE for a
+     retryable error (EnsureMsiNotBusy and InstallMsi eleven times over
+     five minutes, then "Install of MSI encountered a retryable error
+     but no time remains for retry."); ConfigureMSIs then fails 1603 and
+     Integrator::Main ends 0x643, a fourth pass does the same for 302 s,
+     and the service and setup.exe end with 0x426a as before. The
+     registry holds 42 907 keys by then, against 22 291 at the
+     ordinal-88 death. Next: those two integration MSIs have to be
+     installed, which means galapkg's engine behind MsiInstallProductW
+     (ROADMAP PK) and not another answer -- Office retries 1603, so no
+     refusal gets the install further.
+     Seen too, not fatal so far: `wevtutil.exe` is absent, so the
+     integrator's InstallEtwManifest aborts (ErrorCode 2) and carries
+     on; `schtasks.exe` is absent, so PublishCustomExtension cannot
+     delete the "Office Feature Updates" task and carries on;
+     `InspectorOfficeGadget.exe` cannot start nine times (0xc0000135,
+     no .NET Framework); `OfficeC2RClient.exe` exits 1. And: `slc.dll`
+     a missing DLL (loaded by name at
      run time), Office's product key not decoded by gala's sppc
      (SLInstallProofOfPurchase answers SL_E_INVALID_PRODUCT_KEY; no
      run has called it yet), and osppcext.dll!SLActivateProduct
