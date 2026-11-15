@@ -1461,6 +1461,9 @@ const USER_DLLS_X86: &[Dll] = &[
     Dll { package: "wldp", file: "wldp.dll", exported_as: "testwldp32.dll" },
     // msi (ODT's setup.exe delay-loads it by ordinal; wow64_msi_test).
     Dll { package: "msi", file: "msi.dll", exported_as: "testmsi32.dll" },
+    // webservices (ODT's setup.exe delay-loads it to read the
+    // configuration service's answer; wow64_webservices_test).
+    Dll { package: "webservices", file: "webservices.dll", exported_as: "testwebservices32.dll" },
     // gdiplus (ODT's setup.exe delay-loads it to draw its window;
     // wow64_gdiplus_test).
     Dll { package: "gdiplus", file: "gdiplus.dll", exported_as: "testgdiplus32.dll" },
@@ -3774,6 +3777,14 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("wow64_msi_test", "x86/ntdll.dll", "Windows/SysWOW64"),
     ("wow64_msi_test", "x86/kernel32.dll", "Windows/SysWOW64"),
     ("wow64_msi_test", "x86/msi.dll", "Windows/SysWOW64"),
+    // webservices' XML reader (user/webservices_test), x64 and x86.
+    ("webservices_test", "ntdll.dll", "Windows/System32"),
+    ("webservices_test", "kernel32.dll", "Windows/System32"),
+    ("webservices_test", "webservices.dll", "Windows/System32"),
+    ("wow64_webservices_test", "wow64.dll", "Windows/System32"),
+    ("wow64_webservices_test", "x86/ntdll.dll", "Windows/SysWOW64"),
+    ("wow64_webservices_test", "x86/kernel32.dll", "Windows/SysWOW64"),
+    ("wow64_webservices_test", "x86/webservices.dll", "Windows/SysWOW64"),
     // The notification area, PNG icons, LoadIconMetric (user/tray_test),
     // x64 on the screen and x86 on a Test presenter.
     ("tray_test", "kernel/assets/wallpapers/night.qoi", "Windows/Web/Wallpaper"),
@@ -4137,6 +4148,7 @@ const USER_PROGRAMS: &[&str] = &[
     "office_api_test",
     "office_k32_test",
     "msi_test",
+    "webservices_test",
     "rstrtmgr_test",
     "wofutil_test",
     "sppc_test",
@@ -4186,6 +4198,7 @@ const USER_PROGRAMS_X86: &[&str] = &[
     "wow64_office_k32_test",
     "wow64_cert_test",
     "wow64_msi_test",
+    "wow64_webservices_test",
     "wow64_rstrtmgr_test",
     "wow64_hardlink_test",
     "wow64_threadpool_test",
@@ -7972,6 +7985,17 @@ const SCENARIOS: &[Scenario] = &[
         expect: &["msi_test: ok", "exited with status 0x00000000"],
     },
     Scenario {
+        // webservices.dll's XML reader as ODT's setup.exe reads the
+        // configuration service's answer with it: a heap, an error
+        // object and its strings, a reader over a buffer, reading to and
+        // into an element, a string and a number, and a document whose
+        // end tags do not match (user/webservices_test).
+        name: "webservices_test",
+        cmdline: "qemu_exit run=webservices_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["webservices_test: ok", "exited with status 0x00000000"],
+    },
+    Scenario {
         // The Restart Manager: sessions, what uses registered files (this
         // process, a child), shutdown and restart, filters
         // (user/rstrtmgr_test).
@@ -8166,6 +8190,13 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit run=wow64_msi_test.exe",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["wow64_msi_test: ok", "exited with status 0x00000000"],
+    },
+    Scenario {
+        // The same through WOW64 (user/webservices_test built for x86).
+        name: "wow64_webservices_test",
+        cmdline: "qemu_exit run=wow64_webservices_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["wow64_webservices_test: ok", "exited with status 0x00000000"],
     },
     Scenario {
         // combase.dll: HSTRINGs, RoInitialize, activation from the
@@ -12346,6 +12377,7 @@ const NOT_IN_UM: &[(&str, &str)] = &[
     ("wow64_office_k32_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
     ("wow64_cert_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
     ("wow64_msi_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
+    ("wow64_webservices_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
     ("wow64_gdiplus_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
     ("wow64_uisettings_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
     ("wow64_rstrtmgr_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
