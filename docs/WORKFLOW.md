@@ -439,7 +439,17 @@ xtask that change how a scenario boots:
   the host's even when starved (ARCHITECTURE "What a guest's clock
   follows"). Every log has `xtask: vm time: <run> run of <wall> wall
   (<w> waiting for a host CPU)`, the triage repeats it, and the state
-  dump's wait after a timeout counts run time too.
+  dump's wait after a timeout counts run time too. What run time does
+  not discount is waiting for host storage: a vCPU blocked in a disk
+  read is running, not starved, so on slow storage a run-time limit
+  behaves like a wall limit and the I/O-heavy scenarios are the ones
+  that feel it. Measured on a laptop whose guest disk is ext4 inside
+  WSL's VHDX behind a Docker bind mount, where three of them need
+  several times the 120 s and pass when given it: volume_test 445 s in
+  the kernel, pagefile_fail 298 s, pagefile_test 282 s. Raising
+  `XTASK_TIMEOUT` is how to tell a slow scenario from a stuck one
+  before believing either -- a timeout alone does not say which, and a
+  scenario that is only slow says nothing about the code.
 - **A scenario that runs many processes** (a database, a runtime) can
   pass alone and time out under the full suite (2-3x slower); its client
   then reports a dropped connection, not a timeout. Look for "timed out
