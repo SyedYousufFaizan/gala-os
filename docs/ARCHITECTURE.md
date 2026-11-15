@@ -11831,7 +11831,10 @@ The running parts (milestone 1; `lxrun=`):
   process (made at its first image, removed at its end) `<pid>/ns/<kind>`
   links named as Linux's initial namespaces (`user:[4026531837]`: one set
   for all), `exe` (set at each execve) and `auxv` (the pairs up to
-  AT_NULL); `self` is the caller's pid in the walk and for readlink.
+  AT_NULL), `mounts` (the shared tree as a tmpfs at `/`, `/proc` and
+  `/run`: GIO's mount monitor reads it; `/proc/mounts` is a link to
+  `self/mounts` as on Linux); `self` is the caller's pid in the walk and
+  for readlink.
   readlink of `/proc/<pid>/fd/<n>` (and `self`'s) answers from that
   process's descriptor table (`file::fd_link`): a file's path as it sees
   it, `pipe:[N]`, `socket:[N]`, `anon_inode:[eventfd]` and the like, a
