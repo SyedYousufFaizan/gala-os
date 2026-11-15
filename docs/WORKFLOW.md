@@ -439,7 +439,17 @@ xtask that change how a scenario boots:
   the host's even when starved (ARCHITECTURE "What a guest's clock
   follows"). Every log has `xtask: vm time: <run> run of <wall> wall
   (<w> waiting for a host CPU)`, the triage repeats it, and the state
-  dump's wait after a timeout counts run time too.
+  dump's wait after a timeout counts run time too. What run time does
+  not discount is waiting for host storage: a vCPU blocked in a disk
+  read is running, not starved, so on slow storage a run-time limit
+  behaves like a wall limit and the I/O-heavy scenarios are the ones
+  that feel it. Measured on a laptop whose guest disk is ext4 inside
+  WSL's VHDX behind a Docker bind mount, where three of them need
+  several times the 120 s and pass when given it: volume_test 445 s in
+  the kernel, pagefile_fail 298 s, pagefile_test 282 s. Raising
+  `XTASK_TIMEOUT` is how to tell a slow scenario from a stuck one
+  before believing either -- a timeout alone does not say which, and a
+  scenario that is only slow says nothing about the code.
 - **A scenario that runs many processes** (a database, a runtime) can
   pass alone and time out under the full suite (2-3x slower); its client
   then reports a dropped connection, not a timeout. Look for "timed out
@@ -1963,10 +1973,25 @@ a cache on the host:
   `Office\Data\<version>\...`), about 3.2 GB, each checked against
   its pinned SHA-256 (`OFFICE_SOURCE` in xtask). A new build: change
   OFFICE_SOURCE_VERSION, run `cargo xtask office-source --pin` and paste
-  the table it prints. The CDN serves the plain files over HTTP; ODT's
+  the table it prints. Only version-named files are fetched and pinned.
+  The CDN serves the plain files over HTTP; ODT's
   own `/download` inside gala fails in the agent sandbox (its HTTPS
   configuration requests meet the sandbox's TLS interception, whose CA
   the guest does not trust: `crypt32.dll!SSL: CERT_E_UNTRUSTEDROOT`).
+- **The channel's `v64.cab` is a pointer, not content**: the CDN
+  composes it per request. Three fetches minutes apart gave three
+  different files (12,403 and twice 12,409 bytes, every sum different),
+  all naming the same version, so no checksum pins it: a pin on it fails
+  on its own, with nothing changed here and no new build. Its
+  `<Available Build>` is also the build the rollout offers
+  (16.0.12527.22286 while the cache holds 16.0.20527.20196) rather than
+  the one under `Office\Data`, so an offline source carrying it would
+  send the client after a build the cache does not have. The cache's
+  `v64.cab` is therefore written from the version's own
+  `v64_<version>.cab` (`write_version_pointer`; unit tests
+  `every_pinned_file_names_its_version` and
+  `the_offline_source_points_at_the_build_it_holds`), which is what a
+  real `setup.exe /download` leaves behind.
 - `XTASK_LOW_DISK=1 cargo xtask boot-test office_install_local$` makes a
   fresh disk and puts the cache on it as `C:\OfficeSource` before the
   boot (`diskimage::inject`: the volume formatted by the kernel's own

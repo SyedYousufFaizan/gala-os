@@ -4257,6 +4257,9 @@ const USER_DLLS_X86: &[Dll] = &[
     Dll { package: "wldp", file: "wldp.dll", exported_as: "testwldp32.dll" },
     // msi (ODT's setup.exe delay-loads it by ordinal; wow64_msi_test).
     Dll { package: "msi", file: "msi.dll", exported_as: "testmsi32.dll" },
+    // webservices (ODT's setup.exe delay-loads it to read the
+    // configuration service's answer; wow64_webservices_test).
+    Dll { package: "webservices", file: "webservices.dll", exported_as: "testwebservices32.dll" },
     // gdiplus (ODT's setup.exe delay-loads it to draw its window;
     // wow64_gdiplus_test).
     Dll { package: "gdiplus", file: "gdiplus.dll", exported_as: "testgdiplus32.dll" },
@@ -6594,6 +6597,14 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("wow64_msi_test", "x86/ntdll.dll", "Windows/SysWOW64"),
     ("wow64_msi_test", "x86/kernel32.dll", "Windows/SysWOW64"),
     ("wow64_msi_test", "x86/msi.dll", "Windows/SysWOW64"),
+    // webservices' XML reader (user/webservices_test), x64 and x86.
+    ("webservices_test", "ntdll.dll", "Windows/System32"),
+    ("webservices_test", "kernel32.dll", "Windows/System32"),
+    ("webservices_test", "webservices.dll", "Windows/System32"),
+    ("wow64_webservices_test", "wow64.dll", "Windows/System32"),
+    ("wow64_webservices_test", "x86/ntdll.dll", "Windows/SysWOW64"),
+    ("wow64_webservices_test", "x86/kernel32.dll", "Windows/SysWOW64"),
+    ("wow64_webservices_test", "x86/webservices.dll", "Windows/SysWOW64"),
     // The notification area, PNG icons, LoadIconMetric (user/tray_test),
     // x64 on the screen and x86 on a Test presenter.
     ("tray_test", "kernel/assets/wallpapers/night.qoi", "Windows/Web/Wallpaper"),
@@ -6957,6 +6968,7 @@ const USER_PROGRAMS: &[&str] = &[
     "office_api_test",
     "office_k32_test",
     "msi_test",
+    "webservices_test",
     "rstrtmgr_test",
     "wofutil_test",
     "sppc_test",
@@ -7006,6 +7018,7 @@ const USER_PROGRAMS_X86: &[&str] = &[
     "wow64_office_k32_test",
     "wow64_cert_test",
     "wow64_msi_test",
+    "wow64_webservices_test",
     "wow64_rstrtmgr_test",
     "wow64_hardlink_test",
     "wow64_threadpool_test",
@@ -10839,6 +10852,17 @@ const SCENARIOS: &[Scenario] = &[
         expect: &["msi_test: ok", "exited with status 0x00000000"],
     },
     Scenario {
+        // webservices.dll's XML reader as ODT's setup.exe reads the
+        // configuration service's answer with it: a heap, an error
+        // object and its strings, a reader over a buffer, reading to and
+        // into an element, a string and a number, and a document whose
+        // end tags do not match (user/webservices_test).
+        name: "webservices_test",
+        cmdline: "qemu_exit run=webservices_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["webservices_test: ok", "exited with status 0x00000000"],
+    },
+    Scenario {
         // The Restart Manager: sessions, what uses registered files (this
         // process, a child), shutdown and restart, filters
         // (user/rstrtmgr_test).
@@ -11033,6 +11057,13 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit run=wow64_msi_test.exe",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["wow64_msi_test: ok", "exited with status 0x00000000"],
+    },
+    Scenario {
+        // The same through WOW64 (user/webservices_test built for x86).
+        name: "wow64_webservices_test",
+        cmdline: "qemu_exit run=wow64_webservices_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["wow64_webservices_test: ok", "exited with status 0x00000000"],
     },
     Scenario {
         // combase.dll: HSTRINGs, RoInitialize, activation from the
@@ -15393,6 +15424,7 @@ const NOT_IN_UM: &[(&str, &str)] = &[
     ("wow64_office_k32_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
     ("wow64_cert_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
     ("wow64_msi_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
+    ("wow64_webservices_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
     ("wow64_gdiplus_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
     ("wow64_uisettings_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
     ("wow64_rstrtmgr_test", "32-bit code (WOW64): its segments are the kernel's GDT"),
@@ -19944,9 +19976,11 @@ const OFFICE_SOURCE_URL: &str =
     "http://officecdn.microsoft.com/pr/492350f6-3a01-4f97-b9c0-c7c6ddf67d60/Office/Data";
 /// The files under `Office\Data` (`{v}`: the version) and their SHA-256s:
 /// those the Click-to-Run client fetched for these products in
-/// office_install's runs (its log names each).
+/// office_install's runs (its log names each). Every name carries the
+/// version, which is what makes a checksum meaningful: the channel's
+/// unversioned `v64.cab` is a pointer the CDN composes per request, not
+/// content, and the cache writes its own (`write_version_pointer`).
 const OFFICE_SOURCE: &[(&str, &str)] = &[
-    ("v64.cab", "bc33d6f5431f494bbfd36a912b49c3cc488513c50b5ef7bea9f801cb594ba07a"),
     ("v64_{v}.cab", "231c411348a65fde60f14081f35d9771ea42b60b62e7fd14bbc1f412be58bbd1"),
     ("{v}/i640.cab", "72b07bef01bc57d9684b380abe01a65910d80411e5bd4cad901c73bcbd87148f"),
     ("{v}/i641033.cab", "1ddca4b1ed0f68b646ff7f367acec502f4306124fadbbbc630b816da2a017802"),
@@ -19961,6 +19995,27 @@ const OFFICE_SOURCE: &[(&str, &str)] = &[
         "e9ec4b9e32b34f0e6debb4006ee99722ac6e765f1472ac27282c13572bd82f6a",
     ),
 ];
+
+/// Writes the cache's `Office\Data\v64.cab`, the descriptor the
+/// Click-to-Run client reads from a SourcePath to learn which version is
+/// there, from that version's own `v64_<version>.cab`.
+///
+/// The channel's `v64.cab` is not that file and cannot be pinned: the CDN
+/// composes it per request (three fetches minutes apart gave three
+/// different files, of 12,403 and twice 12,409 bytes, every sum
+/// different), and its `<Available Build>` is the build the rollout
+/// offers (16.0.12527.22286 while this cache holds 16.0.20527.20196),
+/// not the one under `Office\Data`. An offline source carrying it would
+/// send the client after a build the cache does not have. A real
+/// `setup.exe /download` leaves behind a `v64.cab` that describes the
+/// version it downloaded; so does this.
+fn write_version_pointer(data: &Path, version: &str) -> Result {
+    let from = data.join(format!("v64_{version}.cab"));
+    let to = data.join("v64.cab");
+    fs::copy(&from, &to)
+        .map(|_| ())
+        .map_err(|e| format!("cannot write {} from {}: {e}", to.display(), from.display()))
+}
 
 /// The cache's directory for OFFICE_SOURCE_VERSION (outside the
 /// repository's tracked files, like PREBUILT's).
@@ -20012,6 +20067,7 @@ fn office_source_command(args: &[String]) -> Result {
             return Err(format!("{}: SHA-256 {got}, pinned {sum}", file.display()));
         }
     }
+    write_version_pointer(&data, OFFICE_SOURCE_VERSION)?;
     if !pin {
         fs::write(base.join(".complete"), OFFICE_SOURCE_VERSION).map_err(|e| e.to_string())?;
         eprintln!("xtask: Office {OFFICE_SOURCE_VERSION}'s source is in {}", base.display());
@@ -23976,5 +24032,40 @@ mod snapshot_scenarios {
             .filter(|s| s.name == "hotswap_machine" || s.name == "khotswap_both")
             .collect();
         assert_eq!(plan_vms(&pair).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod office_source_cache {
+    use super::*;
+
+    /// A pinned file's name carries its version. The channel's
+    /// unversioned `v64.cab` is composed per request -- its checksum
+    /// changed between two fetches minutes apart -- so a pin on one
+    /// breaks on its own, with nothing changed here and no new build.
+    #[test]
+    fn every_pinned_file_names_its_version() {
+        for (name, _) in OFFICE_SOURCE {
+            assert!(name.contains("{v}"), "{name} does not name its version");
+        }
+    }
+
+    /// The offline source describes the build it holds: the client reads
+    /// `v64.cab` from SourcePath, and the CDN's own names the build the
+    /// rollout offers, which the cache does not have.
+    #[test]
+    fn the_offline_source_points_at_the_build_it_holds() {
+        let data = std::env::temp_dir().join(format!("xtask-office-source-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(&data).expect("the temporary directory");
+        let version = "16.0.1.2";
+        let descriptor = b"the version's own descriptor";
+        fs::write(data.join(format!("v64_{version}.cab")), descriptor).expect("the descriptor");
+        write_version_pointer(&data, version).expect("the pointer");
+        assert_eq!(
+            fs::read(data.join("v64.cab")).expect("the pointer's bytes"),
+            descriptor.as_slice()
+        );
+        let _ = fs::remove_dir_all(&data);
     }
 }
