@@ -346,6 +346,9 @@ mod tests {
         let c = ci_clippy(&yml);
         assert!(c.len() > 10, "{c:?}");
         assert!(c.iter().any(|l| l.contains("aarch64-unknown-none")));
+        assert!(
+            c.iter().any(|l| l.starts_with("cargo build") && l.contains("aarch64-pc-windows-msvc"))
+        );
     }
 
     #[test]

@@ -44,11 +44,16 @@ unsafe extern "system" {
     fn GalaRecordMissing(name: *const u8, length: usize, what: u32, detail: u64) -> u32;
 }
 
-/// The thread's last error (TEB.LastErrorValue, x64 +0x68): dbghelp
-/// imports only ntdll.
+/// The thread's last error (TEB.LastErrorValue, the 64-bit TEB's +0x68):
+/// dbghelp imports only ntdll.
 fn set_last_error(code: u32) {
-    // SAFETY: this thread's TEB.
-    unsafe { core::arch::asm!("mov gs:[0x68], {:e}", in(reg) code, options(nostack)) };
+    // SAFETY: this thread's TEB (through GS on x64, x18 on ARM64).
+    unsafe {
+        #[cfg(target_arch = "x86_64")]
+        core::arch::asm!("mov gs:[0x68], {:e}", in(reg) code, options(nostack));
+        #[cfg(target_arch = "aarch64")]
+        core::arch::asm!("str {:w}, [x18, #0x68]", in(reg) code, options(nostack));
+    }
 }
 
 /// MiniDumpWriteDump(hProcess, ProcessId, hFile, DumpType, ...): gala

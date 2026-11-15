@@ -23,7 +23,7 @@ unsafe extern "system" {
 // The C runtime helpers the compiler may call, exported by ntdll. On x86
 // they come from ntrt's x86 runtime: a raw-dylib import does not give the
 // symbols the compiler calls there (ARCHITECTURE "Plan: WOW64").
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -67,7 +67,7 @@ use ntrt as _;
 
 /// The C runtime's marker that floating point is used (the linker wants
 /// it once core's float code is linked in). On x86, ntrt's.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 

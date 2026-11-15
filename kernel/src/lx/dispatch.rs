@@ -91,7 +91,7 @@ pub struct Call<'a> {
 impl Call<'_> {
     /// System call argument `i` (where the architecture's Linux ABI has
     /// it: `machine::syscall_arg`).
-    fn arg(&self, i: usize) -> u64 {
+    pub fn arg(&self, i: usize) -> u64 {
         super::machine::syscall_arg(self.frame, i)
     }
 }
@@ -125,7 +125,11 @@ fn dispatch(frame: &mut SyscallFrame) {
         && crate::events::syscall_pid_wanted(call.process.id);
     let args = if traced { core::array::from_fn(|i| call.arg(i)) } else { [0; 6] };
     let started = if traced { platform::monotonic_ns() } else { 0 };
-    let result = handle(&call, number);
+    // A thread's seccomp filters (or strict mode) answer first.
+    let result = match super::seccomp::check(&call, number) {
+        None => handle(&call, number),
+        Some(answer) => answer,
+    };
     let rax = match result {
         Ok(v) => v,
         Err(e) => errno::to_return(e),
@@ -205,6 +209,7 @@ fn handle(call: &Call<'_>, number: u64) -> Result {
         nr::SETRLIMIT => super::resource::setrlimit(call, a(0), a(1)),
         nr::GETRANDOM => super::resource::getrandom(call, a(0), a(1), a(2)),
         nr::WAIT4 => super::fork::wait4(call, a(0), a(1), a(2), a(3)),
+        nr::SECCOMP => super::seccomp::seccomp(call, a(0), a(1), a(2)),
         nr::WAITID => super::fork::waitid(call, a(0), a(1), a(2), a(3), a(4)),
         nr::INOTIFY_INIT => super::inotify::init1(call, 0),
         nr::INOTIFY_INIT1 => super::inotify::init1(call, a(0)),
@@ -367,6 +372,15 @@ fn handle(call: &Call<'_>, number: u64) -> Result {
         // The one user: setting the ids it has is allowed, anything else
         // is EPERM (an unprivileged process).
         nr::SETUID => same_id(a(0), super::identity::of_process(&call.process).uid),
+        // setfsuid/setfsgid(id): the filesystem id is the process's own
+        // (fsid_test): returned, and kept (another id is not taken
+        // without the capability; uid 0's would be: ledgered).
+        nr::SETFSUID => {
+            Ok(u64::from(fs_id("setfsuid", a(0), super::identity::of_process(&call.process).uid)))
+        }
+        nr::SETFSGID => {
+            Ok(u64::from(fs_id("setfsgid", a(0), super::identity::of_process(&call.process).gid)))
+        }
         nr::SETGID => same_id(a(0), super::identity::of_process(&call.process).gid),
         // setresuid/setresgid(r, e, s): each -1 (unchanged) or the
         // process's own id (it has no other: no saved set-user-id yet).
@@ -455,7 +469,7 @@ fn missing(call: &Call<'_>, number: u64) -> Result {
     crate::warn!(
         "{}",
         Missing {
-            program: call.process.name,
+            program: call.process.name_now(),
             pid: call.process.id,
             number,
             personality: call.process.personality
@@ -467,7 +481,7 @@ fn missing(call: &Call<'_>, number: u64) -> Result {
 /// The log line of an unimplemented system call: the program, the call
 /// by its Linux name and number, the dispatcher and the personality.
 struct Missing {
-    program: &'static str,
+    program: crate::nt::process::CurrentName,
     pid: u64,
     number: u64,
     personality: Personality,
@@ -605,6 +619,16 @@ fn fcntl(call: &Call<'_>, fd: u64, cmd: u64, arg: u64) -> Result {
             Err(EINVAL)
         }
     }
+}
+
+/// setfsuid/setfsgid: the previous filesystem id (`own`, the only one);
+/// a change to another id, which uid 0 would make, is ledgered.
+fn fs_id(name: &'static str, id: u64, own: u32) -> u32 {
+    let id = id as u32;
+    if own == 0 && id != u32::MAX && id != own {
+        ledger::record(name, "linux option missing", u64::from(id));
+    }
+    own
 }
 
 fn same_id(id: u64, own: u32) -> Result {
@@ -1121,7 +1145,12 @@ mod tests {
     #[test]
     fn a_missing_call_is_named_from_the_table() {
         let line = |number| {
-            let m = Missing { program: "a", pid: 4, number, personality: Personality::Linux };
+            let m = Missing {
+                program: crate::nt::process::CurrentName::of_path(b"a"),
+                pid: 4,
+                number,
+                personality: Personality::Linux,
+            };
             alloc::format!("{m}")
         };
         assert_eq!(

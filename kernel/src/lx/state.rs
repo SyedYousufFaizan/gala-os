@@ -296,6 +296,9 @@ pub struct LxThread {
     /// sigaltstack(2): its alternate signal stack (`DISABLED_STACK`: none),
     /// where SA_ONSTACK handlers run (`sigcalls::push_frame`).
     pub altstack: lx_abi::signal::Stack,
+    /// Its seccomp state (`lx::seccomp`): a thread it makes and a fork's
+    /// child get its own; execve keeps it.
+    pub seccomp: super::seccomp::Seccomp,
 }
 
 /// No alternate signal stack (a new thread's, after execve).
@@ -362,6 +365,9 @@ pub struct LxProcess {
     /// PR_SET_NO_NEW_PRIVS: set once, kept by its children and across
     /// execve (gala has no set-user-id programs it would hold back).
     pub no_new_privs: core::sync::atomic::AtomicBool,
+    /// Some thread of it has seccomp state (`lx::seccomp::check` looks
+    /// only then).
+    pub seccomp_used: core::sync::atomic::AtomicBool,
     /// PR_SET_PDEATHSIG: the signal it gets when its parent ends (0:
     /// none); not a fork's child's, kept across execve.
     pub pdeathsig: core::sync::atomic::AtomicU32,
@@ -422,6 +428,7 @@ pub fn create(
         exe: IrqMutex::new(exe),
         rlimits: IrqMutex::new(super::resource::Limits::default()),
         no_new_privs: core::sync::atomic::AtomicBool::new(false),
+        seccomp_used: core::sync::atomic::AtomicBool::new(false),
         pdeathsig: core::sync::atomic::AtomicU32::new(0),
         life: super::pidfd::Life::new()?,
         auxv: IrqMutex::new(Vec::new()),
@@ -480,6 +487,9 @@ pub fn fork(parent: &LxProcess, pid: u64, vfork: bool) -> Result<KArc<LxProcess>
         rlimits: IrqMutex::new(rlimits),
         no_new_privs: core::sync::atomic::AtomicBool::new(
             parent.no_new_privs.load(core::sync::atomic::Ordering::Relaxed),
+        ),
+        seccomp_used: core::sync::atomic::AtomicBool::new(
+            parent.seccomp_used.load(core::sync::atomic::Ordering::Relaxed),
         ),
         auxv: IrqMutex::new(auxv),
         pdeathsig: core::sync::atomic::AtomicU32::new(0),
@@ -591,16 +601,12 @@ impl fmt::Display for Ending {
 }
 
 /// Linux process `pid` has ended with `status`: what is left of its
-/// output lines is logged, then how it ended; its state goes, its fds
-/// close, and then its parent is told (`child_ended`).
+/// output lines is logged, then how it ended; its fds close, then it
+/// leaves the table and becomes its parent's zombie in one step
+/// (`become_zombie`), and then its parent is told (`child_ended`).
 pub fn ended(pid: u64, status: NtStatus) {
     super::procfs::ended(pid);
-    let state = {
-        let mut table = TABLE.lock();
-        let i = table.iter().position(|p| p.pid == pid);
-        i.map(|i| table.remove(i))
-    };
-    let Some(state) = state else { return };
+    let Some(state) = get(pid) else { return };
     // A session leader's end leaves its terminal without a session.
     if state.sid.load(Ordering::Relaxed) == pid {
         super::pty::session_ended(pid);
@@ -620,6 +626,7 @@ pub fn ended(pid: u64, status: NtStatus) {
     // parent hears of it.
     let fds = core::mem::take(&mut *state.fds.lock());
     drop(fds);
+    let (parent, reaped) = become_zombie(&state, status);
     // Its pidfds are readable from now on, before its parent hears.
     state.life.end();
     // Its own children are nobody's now (no reaper yet: they are not
@@ -635,36 +642,51 @@ pub fn ended(pid: u64, status: NtStatus) {
             super::sigcalls::send_from_kernel(child, sig);
         }
     }
-    if state.parent != 0
-        && let Some(parent) = get(state.parent)
-    {
-        child_ended(&parent, &state, status);
+    if let Some(parent) = parent {
+        child_ended(&parent, &state, status, reaped);
     }
 }
 
-/// Child `child` of `parent` ended with `status`: it becomes a zombie
-/// for wait4 (unless the parent ignores SIGCHLD or set SA_NOCLDWAIT:
-/// then it is reaped at once, wait(2)), the parent gets its exit signal
-/// (SIGCHLD: discarded at its default action), and threads waiting in
-/// wait4 wake.
-fn child_ended(parent: &LxProcess, child: &LxProcess, status: NtStatus) {
+/// Process `child` (ended with `status`) leaves the table and, in the
+/// same step (under the table's lock), moves from its parent's running
+/// children to its zombies for wait4 (unless the parent ignores SIGCHLD
+/// or set SA_NOCLDWAIT: then it is reaped at once, wait(2)). So a kill
+/// or pidfd_send_signal always finds it, running or a zombie, until it
+/// is reaped (0, as Linux's), and ESRCH after. The parent (if it is
+/// still there) and whether the child was reaped at once.
+fn become_zombie(child: &LxProcess, status: NtStatus) -> (Option<KArc<LxProcess>>, bool) {
+    let mut table = TABLE.lock();
+    table.retain(|p| p.pid != child.pid);
+    let parent = match child.parent {
+        0 => None,
+        ppid => table.iter().find(|p| p.pid == ppid).cloned(),
+    };
+    let Some(parent) = parent else { return (None, true) };
     let reap_now = {
         let sigs = parent.signals.lock();
         let chld = sigs.action(SIGCHLD);
         chld.handler == SIG_IGN || chld.flags & SA_NOCLDWAIT != 0
     };
-    let waiters = {
-        let mut c = parent.children.lock();
-        c.running.retain(|&p| p != child.pid);
-        if !reap_now && c.ended.try_push((child.pid, status)).is_err() {
-            crate::warn!(
-                "lx: pid {}: no memory to keep child {}'s status: wait4 will not see it",
-                parent.pid,
-                child.pid
-            );
-        }
-        core::mem::take(&mut c.waiters)
-    };
+    let mut c = parent.children.lock();
+    c.running.retain(|&p| p != child.pid);
+    if !reap_now && c.ended.try_push((child.pid, status)).is_err() {
+        crate::warn!(
+            "lx: pid {}: no memory to keep child {}'s status: wait4 will not see it",
+            parent.pid,
+            child.pid
+        );
+    }
+    drop(c);
+    drop(table);
+    (Some(parent), reap_now)
+}
+
+/// Child `child` of `parent` ended with `status` and is its zombie (or
+/// was reaped at once: `reap_now`, `become_zombie`): the parent gets its
+/// exit signal (SIGCHLD: discarded at its default action), and threads
+/// waiting in wait4 wake.
+fn child_ended(parent: &LxProcess, child: &LxProcess, status: NtStatus, reap_now: bool) {
+    let waiters = core::mem::take(&mut parent.children.lock().waiters);
     let (code, value) = signal::child_code(status);
     let info = if child.exit_signal == SIGCHLD {
         let uid = crate::nt::process::by_id(child.pid)
@@ -709,6 +731,7 @@ impl LxProcess {
             robust_list: 0,
             comm,
             altstack: DISABLED_STACK,
+            seccomp: super::seccomp::Seccomp::default(),
         })?;
         if let Err(e) = self.signals.lock().add_thread(tid, mask) {
             self.threads.lock().retain(|t| t.tid != tid);
@@ -750,6 +773,29 @@ impl LxProcess {
     /// Thread `tid`'s alternate signal stack.
     pub fn altstack(&self, tid: u64) -> lx_abi::signal::Stack {
         self.threads.lock().iter().find(|t| t.tid == tid).map_or(DISABLED_STACK, |t| t.altstack)
+    }
+
+    /// Thread `tid`'s seccomp state.
+    pub fn seccomp(&self, tid: u64) -> super::seccomp::Seccomp {
+        self.threads
+            .lock()
+            .iter()
+            .find(|t| t.tid == tid)
+            .map(|t| t.seccomp.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn set_seccomp(&self, tid: u64, s: super::seccomp::Seccomp) {
+        if let Some(t) = self.threads.lock().iter_mut().find(|t| t.tid == tid) {
+            t.seccomp = s;
+        }
+    }
+
+    /// Every thread's (SECCOMP_FILTER_FLAG_TSYNC).
+    pub fn set_seccomp_all(&self, s: &super::seccomp::Seccomp) {
+        for t in self.threads.lock().iter_mut() {
+            t.seccomp = s.clone();
+        }
     }
 
     pub fn set_altstack(&self, tid: u64, s: lx_abi::signal::Stack) {

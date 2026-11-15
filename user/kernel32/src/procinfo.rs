@@ -909,11 +909,12 @@ pub extern "system" fn GetApplicationRestartSettings(
 // (the other PSS_CAPTURE flags) are not taken: those flags are recorded
 // in the ledger and their query classes answer ERROR_NOT_FOUND.
 
-/// sizeof(PSS_PROCESS_INFORMATION) on x64: ExitStatus, PebBaseAddress,
-/// AffinityMask, BasePriority, ProcessId (28), ParentProcessId (32),
-/// Flags, the four times (40..72), PriorityClass (72), the VM counters
-/// (80..176), ExecuteFlags (176), ImageFileName[MAX_PATH] (180).
-#[cfg(target_arch = "x86_64")]
+/// sizeof(PSS_PROCESS_INFORMATION) on 64-bit Windows (x64, ARM64):
+/// ExitStatus, PebBaseAddress, AffinityMask, BasePriority, ProcessId (28),
+/// ParentProcessId (32), Flags, the four times (40..72), PriorityClass
+/// (72), the VM counters (80..176), ExecuteFlags (176),
+/// ImageFileName[MAX_PATH] (180).
+#[cfg(target_pointer_width = "64")]
 const PSS_PROCESS_INFORMATION_SIZE: usize = 704;
 const PSS_QUERY_PROCESS_INFORMATION: u32 = 0;
 
@@ -926,7 +927,7 @@ pub extern "system" fn PssCaptureSnapshot(
     _context_flags: u32,
     snapshot: *mut Handle,
 ) -> u32 {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_pointer_width = "64")]
     {
         if snapshot.is_null() {
             return ERROR_INVALID_PARAMETER;
@@ -952,7 +953,7 @@ pub extern "system" fn PssCaptureSnapshot(
         }
         0
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(not(target_pointer_width = "64"))]
     {
         let _ = (process, flags, snapshot);
         unsupported(b"kernel32.dll!PssCaptureSnapshot(32-bit)", 0);
@@ -963,7 +964,7 @@ pub extern "system" fn PssCaptureSnapshot(
 /// PSS_PROCESS_INFORMATION of `process` from ProcessBasicInformation,
 /// ProcessTimes, ProcessVmCounters, its priority class and (for this
 /// process) its image's path.
-#[cfg(target_arch = "x86_64")]
+#[cfg(target_pointer_width = "64")]
 fn capture(process: Handle, info: &mut [u8; PSS_PROCESS_INFORMATION_SIZE]) -> Result<(), u32> {
     let query = |class: u32, buf: &mut [u8]| -> Result<(), u32> {
         // SAFETY: our buffer of its size.
@@ -1030,7 +1031,7 @@ pub extern "system" fn PssQuerySnapshot(
     buf: *mut u8,
     len: u32,
 ) -> u32 {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_pointer_width = "64")]
     {
         if snapshot.is_null() || buf.is_null() {
             return ERROR_INVALID_PARAMETER;
@@ -1048,7 +1049,7 @@ pub extern "system" fn PssQuerySnapshot(
         };
         0
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(not(target_pointer_width = "64"))]
     {
         let _ = (
             snapshot,

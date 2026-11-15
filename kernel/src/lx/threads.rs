@@ -107,7 +107,10 @@ pub fn clone_thread(
         Err(status) => return failed(status_text(status), EAGAIN),
     };
     let tid = thread::id_of(&object);
-    if call.lx.add_thread(tid, mask_of(call), call.lx.comm(call.tid)).is_err() {
+    let added = call.lx.add_thread(tid, mask_of(call), call.lx.comm(call.tid));
+    // A new thread gets its creator's seccomp state.
+    call.lx.set_seccomp(tid, call.lx.seccomp(call.tid));
+    if added.is_err() {
         // It never ran: it ends at once, never entering user mode.
         thread::request_termination(&object, NtStatus::NO_MEMORY);
         thread::resume(&object);

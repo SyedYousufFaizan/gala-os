@@ -46,7 +46,7 @@ mod winrt;
 #[cfg(target_arch = "x86")]
 use ntrt as _;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -62,7 +62,7 @@ unsafe extern "C" {
 }
 
 /// MSVC-target codegen references this marker symbol directly.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 
@@ -499,8 +499,8 @@ impl ThreadState {
     }
 }
 
-/// TEB.ReservedForOle (x64 0x1758, x86 0xf80).
-#[cfg(target_arch = "x86_64")]
+/// TEB.ReservedForOle (x64 0x1758, x86 0xf80; ARM64's TEB is x64's).
+#[cfg(target_pointer_width = "64")]
 const TEB_RESERVED_FOR_OLE: usize = 0x1758;
 #[cfg(target_arch = "x86")]
 const TEB_RESERVED_FOR_OLE: usize = 0xf80;
@@ -516,6 +516,11 @@ fn teb() -> usize {
     #[cfg(target_arch = "x86")]
     unsafe {
         core::arch::asm!("mov {}, fs:[0x18]", out(reg) teb, options(nostack, readonly))
+    };
+    // SAFETY: x18 holds the TEB in user mode (the ARM64 ABI).
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("mov {}, x18", out(reg) teb, options(nomem, nostack, preserves_flags))
     };
     teb
 }

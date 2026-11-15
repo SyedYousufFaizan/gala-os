@@ -20,7 +20,7 @@ use ntrt as _;
 
 /// MSVC-target codegen references this marker symbol directly, so it cannot
 /// come from an import.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 

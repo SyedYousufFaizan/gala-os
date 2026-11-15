@@ -1428,6 +1428,8 @@ fn a_tile_initial_from_the_title_or_else_the_program() {
     assert_eq!(tile_initial(&gimp, &program), ('G', &program[..]));
     let notes = w("Notes");
     assert_eq!(tile_initial(&notes, &program), ('N', &notes[..]));
+    let svg = w("in.svg - Inkscape");
+    assert_eq!(tile_initial(&svg, &program), ('I', &svg[..]));
     let star = w("*untitled");
     assert_eq!(tile_initial(&star, &[]), ('*', &star[..]));
     assert_eq!(tile_initial(&[], &[]), ('?', &[][..]));

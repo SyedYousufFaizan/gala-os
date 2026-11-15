@@ -43,6 +43,8 @@ const PR_SET_NAME: u64 = 15;
 const PR_GET_NAME: u64 = 16;
 const PR_CAPBSET_READ: u64 = 23;
 const PR_SET_NO_NEW_PRIVS: u64 = 38;
+const PR_GET_SECCOMP: u64 = 21;
+const PR_SET_SECCOMP: u64 = 22;
 const PR_GET_NO_NEW_PRIVS: u64 = 39;
 const PR_GET_AUXV: u64 = 0x4155_5856;
 /// The size of Linux's saved auxiliary vector (AT_VECTOR_SIZE u64 words
@@ -69,6 +71,8 @@ pub fn prctl(call: &Call<'_>, option: u64, args: [u64; 4]) -> Result {
             Ok(0)
         }
         // Once set, kept (no way back), by children too.
+        PR_GET_SECCOMP => super::seccomp::get_mode(call),
+        PR_SET_SECCOMP => super::seccomp::set_mode(call, arg2, arg3),
         PR_SET_NO_NEW_PRIVS => {
             if arg2 != 1 || arg3 | arg4 | arg5 != 0 {
                 return Err(EINVAL);

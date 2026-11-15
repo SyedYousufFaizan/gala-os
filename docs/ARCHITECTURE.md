@@ -148,8 +148,22 @@ code (`set_teb32`: x86-64's compatibility mode).
 Limits (ROADMAP PT): `mm::paging` is x86-64's page-table format (generic
 over table access for host tests); the user thread-pointer bases keep
 x86-64's names (`gs_base`, `fs_base`, `teb32`) and the FP control
-register MXCSR's; `boot` is Limine's x86-64 protocol; gala's DLLs are not
-checked for aarch64 yet.
+register MXCSR's; `boot` is Limine's x86-64 protocol.
+
+gala's DLLs build for ARM64 too (`aarch64-pc-windows-msvc`, CI's Clippy
+step: Clippy and a build, which assembles inline assembly). Their
+architecture-specific parts are per-architecture modules (kernel32's,
+msvcrt's and ntdll's `x64.rs`, `x86.rs`, `aarch64.rs`; kernel32's 64-bit
+layouts, shared by x64 and ARM64, in `win64.rs`) or `cfg` branches: the
+TEB is `gs:` on x64, `fs:` on x86 and x18 on ARM64 (Microsoft's ARM64
+ABI). The ARM64 modules are stubs in the kernel's sense: the documented
+layouts and the processor's own operations are filled in, and what
+needs the port (CONTEXT services, unwinding, FPCR, rpcrt4's assembly
+calls) records the gap in the ledger and ends the process, or is not
+built for ARM64 (ROADMAP PT lists which). gala's ntdll makes system
+calls on the kernel stub's convention (the number in x8, `svc #0`,
+arguments in x0-x7 and on the stack, the result in x0). wow64 runs x86
+code on x64 and is not built for ARM64.
 
 ## Boot
 
@@ -11683,9 +11697,12 @@ The running parts (milestone 1; `lxrun=`):
   shared copy-on-write are its parent's alone again, and a section's
   frames are freed only once no page table maps them, though the
   address space itself may outlive the process, held by a reap or by
-  `run`; `framecheck` caught the order), the fds close next, then the parent is told
-  (a zombie, SIGCHLD, its wait4 waiters woken), so a parent woken by a
-  child's end reads EOF from a pipe only the child held.
+  `run`; `framecheck` caught the order), the fds close next, then the
+  process leaves the table and becomes its parent's zombie in one step
+  under the table's lock (`become_zombie`: never neither, so a kill or
+  a pidfd always finds it until it is reaped), then the parent is told
+  (SIGCHLD, its wait4 waiters woken), so a parent woken by a child's end
+  reads EOF from a pipe only the child held.
 - **Memory** (`lx::mm`; mmap_test, dyn_test): mmap (the hint if free,
   else top-down below `MMAP_TOP`; MAP_FIXED replaces, MAP_FIXED_NOREPLACE
   gives EEXIST; MAP_DENYWRITE, MAP_STACK and the other hints ignored, as
@@ -12021,6 +12038,29 @@ The running parts (milestone 1; `lxrun=`):
   told (ledgered), P_PGID waits for any child (ledgered), siginfo given
   to pidfd_send_signal is unused (ledgered), no PIDFD_THREAD pidfds, no
   pidfd_getfd.
+- **seccomp** (`lx::seccomp`; seccomp_test, `lx_seccomp`): strict mode
+  and filters per thread (`LxThread::seccomp`: a thread it makes and a
+  fork's child get it, execve keeps it), checked in `dispatch` before
+  each call of a process that has some (`LxProcess::seccomp_used`).
+  Filters are classic BPF on the call's `seccomp_data` (nr,
+  AUDIT_ARCH_X86_64, ip, args), checked before they are taken as Linux's
+  seccomp_check_filter and bpf_check_classic check them (EINVAL), each
+  run newest first, the lowest action winning (the newest of equals):
+  ALLOW, LOG; ERRNO (its data); TRAP (SIGSYS to the thread, SYS_SECCOMP
+  with the data, the call's address, number and arch; the call skipped,
+  rax its number; forced to the default end if blocked or ignored);
+  TRACE and USER_NOTIF answer ENOSYS (no tracer, no listener);
+  KILL_THREAD, KILL_PROCESS end with SIGSYS. Strict mode allows read,
+  write, exit and rt_sigreturn, SIGKILL otherwise. A filter needs
+  no_new_privs or uid 0 (EACCES). The probes: GET_ACTION_AVAIL,
+  GET_NOTIF_SIZES (80, 24, 64); prctl's PR_GET_SECCOMP and
+  PR_SET_SECCOMP. Limits: no listener fd (NEW_LISTENER: EINVAL,
+  ledgered); a read of scratch memory before a write is not refused.
+- **A process's name after execve** (`Core::current_name`,
+  `name_now`): the new program's file name (the path given: a script's,
+  as `comm`), in the log lines (its exit, a missing call, the thread
+  dump); the first image's name (`Core::name`, static) stays for the
+  scheduler's thread names. The task manager shows `comm`.
 - **inotify** (`lx::inotify`; inotify_test, `lx_inotify`): instances
   (`Object::Inotify`; inotify_init, inotify_init1 with IN_NONBLOCK and
   IN_CLOEXEC) hold watches on nodes (add_watch resolves the path as stat
@@ -12709,7 +12749,7 @@ Offered globals: `wl_compositor` 6, `wl_shm` 2, `xdg_wm_base` 6,
 | a client connection | a `wayland::Connection`: the accepted socket, the connector's pid (SO_PEERCRED), its `Client` (object table, input buffer and descriptor queue, output) |
 | `wl_display` | `sync` answers `wl_callback.done` (a serial) at once; `get_registry` lists the globals; every destroyed client object, and every callback once done, is answered with `delete_id` |
 | `wl_compositor`, `wl_surface` | a surface holds its pending state (attach, damage and damage_buffer as a band of rows, frame callbacks) until `commit`; it is a window only once a role gives it one. Regions, buffer scale and transform other than 1 and normal and `offset` are accepted and not used yet (ledgered) |
-| `xdg_wm_base`, `xdg_surface`, `xdg_toplevel` | a `winstate` window owned by the client's process (`Desktop::create`, shown at once, cascaded from (64, 48)): the first commit without a buffer is answered with `configure_bounds` (the screen's size, version 4), `wm_capabilities` (none yet, version 5), `xdg_toplevel.configure` 0x0 and `xdg_surface.configure`; once acked, a commit with a buffer maps the window (titled by `set_title`, retitled when it changes), a null buffer unmaps it and the next commit configures it again. The frame's close button (and `gala close`: `Action::Close`, a WM_SYSCOMMAND SC_CLOSE in the window's input) sends `xdg_toplevel.close`; the client decides. The desktop's sizing is a configure ("Configure from the desktop" below); `set_maximized`, `unset_maximized` and `set_minimized` are the desktop's actions on the window (`Action::Maximize`, `Restore`, `Minimize`, as its caption buttons), whose answer comes back as input; before mapping they are ignored (ledgered). The app id is kept; the window geometry is what a frameless window shows ("Frameless windows") and what its popups are placed against; move, resize, menus, min and max sizes and fullscreen are accepted and not acted on yet (ledgered). Pings are not sent: the desktop marks no window as not responding yet (a hung user32 window is not ghosted either); `xdg_wm_base.ping` on a timer comes with that, and pongs are accepted |
+| `xdg_wm_base`, `xdg_surface`, `xdg_toplevel` | a `winstate` window owned by the client's process (`Desktop::create`, shown at once, cascaded from (64, 48)): the first commit without a buffer is answered with `configure_bounds` (the screen's size, version 4), `wm_capabilities` (none yet, version 5), `xdg_toplevel.configure` 0x0 and `xdg_surface.configure`; once acked, a commit with a buffer maps the window (titled by `set_title`, retitled when it changes), a null buffer unmaps it and the next commit configures it again. The frame's close button (and `gala close`: `Action::Close`, a WM_SYSCOMMAND SC_CLOSE in the window's input) sends `xdg_toplevel.close`; the client decides. The desktop's sizing is a configure ("Configure from the desktop" below); `set_maximized`, `unset_maximized` and `set_minimized` are the desktop's actions on the window (`Action::Maximize`, `Restore`, `Minimize`, as its caption buttons), whose answer comes back as input; `set_maximized` before the window exists makes the configures maximized at the work area's size from then on and the desktop maximizes the window once it is made (`maximize_when_mapped`; `unset_maximized` takes it back; xdg-shell lets a client ask before its first commit, Inkscape does: wl_maximize_test, `lx_wl_maximize`), `set_minimized` then is ignored (ledgered). The app id is kept; the window geometry is what a frameless window shows ("Frameless windows") and what its popups are placed against; move, resize, menus, min and max sizes and fullscreen are accepted and not acted on yet (ledgered). Pings are not sent: the desktop marks no window as not responding yet (a hung user32 window is not ghosted either); `xdg_wm_base.ping` on a timer comes with that, and pongs are accepted |
 | `zxdg_decoration_manager_v1`, `zxdg_toplevel_decoration_v1` | the decoration mode, sent with each configure: server-side (shasha's frame) unless the client asked for client-side. A toplevel without a decoration object is client-side: "if compositor and client do not negotiate the use of a server-side decoration using this protocol, clients continue to self-decorate as they see fit" (the protocol's description). GTK 3 never binds the manager and draws its own title bar (gtk_test), GTK 4 negotiates; a client that draws no frame (weston-simple-shm, wl_test) is shown without one. Client-side is a frameless window (`STYLE_FRAMELESS`: all client area, its window geometry's size ("Frameless windows" below), on the taskbar and activated as framed ones). The mode is fixed when the window is made: `set_mode` on a mapped toplevel is answered with a configure carrying the window's mode (the protocol lets the compositor choose), the next mapping follows the new one. Its errors: `already_constructed`, `unconfigured_buffer` (on the manager), `orphaned` (a toplevel destroyed before its decoration), `invalid_mode` |
 | `wl_seat`, `wl_pointer`, `wl_keyboard` | the desktop's input for the client's windows ("Input" below): capabilities pointer and keyboard, name `seat0`; `get_touch` is `missing_capability`. A keyboard gets the keymap (xkb_v1, a sealed read-only file passed as SCM_RIGHTS, its size counting the NUL) and `repeat_info` 30/s after 500 ms (version 4; Windows' defaults); a pointer or keyboard made while the client has a focus gets its enter at once. `set_cursor` is accepted and not used (the desktop draws its pointer; a surface with another role is the `role` error) |
 | `xdg_positioner`, `xdg_popup` | a popup window (`STYLE_POPUP`: frameless, above the framed windows, never active, not on the taskbar, as user32's menus are) at the place the positioner gives against its parent's window geometry and the work area; a grab takes the keyboard focus and the desktop's popup grab, which a press outside the client's windows ends ("Popups" below) |

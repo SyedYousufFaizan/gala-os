@@ -24,8 +24,9 @@ fn user_space() -> u64 {
 }
 
 /// A 32-bit process's: 0x10000 up to its highest address (below 2 GiB, or
-/// 4 GiB for a large-address-aware executable, as WOW64 gives it).
-#[cfg(target_arch = "x86")]
+/// 4 GiB for a large-address-aware executable, as WOW64 gives it). ARM64
+/// (a stub, ROADMAP PT): the same, from what the system says.
+#[cfg(not(target_arch = "x86_64"))]
 fn user_space() -> u64 {
     (basic_information().maximum_address as u64 + 1).saturating_sub(0x1_0000)
 }

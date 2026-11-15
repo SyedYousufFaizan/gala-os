@@ -80,6 +80,9 @@ pub struct Core {
     /// joined by spaces, replaced by execve), for the task manager
     /// (`nt::tasks`); empty if there was no memory to keep it.
     pub command_line: IrqMutex<Vec<u8>>,
+    /// Its program's file name since an execve replaced its first image
+    /// (a Linux process: `set_current_name`); empty before, `name` then.
+    pub current_name: IrqMutex<CurrentName>,
     /// The primary token (nt::token).
     pub token: IrqMutex<ObjectRef>,
     /// Its session (nt::session): its primary token's TokenSessionId when
@@ -1104,6 +1107,7 @@ fn spawn_inner(spec: Spawn<'_>) -> Result<(KArc<Process>, ObjectRef), LoadError>
             commit_ended: core::sync::atomic::AtomicBool::new(false),
             cpu_ended_ns: core::sync::atomic::AtomicU64::new(0),
             command_line: IrqMutex::new(Vec::new()),
+            current_name: IrqMutex::new(CurrentName::EMPTY),
             token: IrqMutex::new(token),
             session,
             desk,
@@ -1225,6 +1229,50 @@ pub fn announce_start(process: &Process, rip: u64, command_line: &str) {
     );
 }
 
+/// A program's file name, kept without allocating (at most 64 bytes).
+#[derive(Clone, Copy)]
+pub struct CurrentName {
+    bytes: [u8; 64],
+    len: u8,
+}
+
+impl CurrentName {
+    pub const EMPTY: CurrentName = CurrentName { bytes: [0; 64], len: 0 };
+
+    /// The file name of `path` (after its last `/`), cut at 64 bytes on a
+    /// character's boundary.
+    pub fn of_path(path: &[u8]) -> CurrentName {
+        let name = path.rsplit(|&b| b == b'/').next().unwrap_or(path);
+        let s = core::str::from_utf8(name).unwrap_or("?");
+        let mut n = s.len().min(64);
+        while !s.is_char_boundary(n) {
+            n -= 1;
+        }
+        let mut bytes = [0; 64];
+        bytes[..n].copy_from_slice(&s.as_bytes()[..n]);
+        CurrentName { bytes, len: n as u8 }
+    }
+
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or("?")
+    }
+}
+
+impl core::fmt::Display for CurrentName {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Core {
+    /// Its program's name now: the one an execve gave it, else its first
+    /// image's (`name`). Logs and the process list show it.
+    pub fn name_now(&self) -> CurrentName {
+        let current = *self.current_name.lock();
+        if current.len == 0 { CurrentName::of_path(self.name.as_bytes()) } else { current }
+    }
+}
+
 /// Keeps `process`'s command line (the task manager's; execve's new one
 /// replaces it). Without the memory it stays as it was (logged).
 pub fn set_command_line(process: &Process, command_line: &str) {
@@ -1309,6 +1357,7 @@ pub fn create_bare(bare: Bare) -> Result<KArc<Process>, LoadError> {
             commit_ended: core::sync::atomic::AtomicBool::new(false),
             cpu_ended_ns: core::sync::atomic::AtomicU64::new(0),
             command_line: IrqMutex::new(Vec::new()),
+            current_name: IrqMutex::new(CurrentName::EMPTY),
             token: IrqMutex::new(token),
             session,
             desk,
@@ -1427,7 +1476,10 @@ pub fn finish(process: &KArc<Process>, last_status: NtStatus) {
     let lived_ms = process.exit_time.lock().saturating_sub(process.create_time) / 10_000;
     info!(
         "process {} (pid {}) exited with status {:#010x} after {} ms",
-        process.name, process.id, status.0, lived_ms
+        process.name_now(),
+        process.id,
+        status.0,
+        lived_ms
     );
     crate::events::emit(
         crate::events::Category::Process,
@@ -1669,6 +1721,7 @@ pub fn adopt(a: Adopted) -> Result<KArc<Process>, NtStatus> {
             commit_ended: AtomicBool::new(false),
             cpu_ended_ns: core::sync::atomic::AtomicU64::new(0),
             command_line: IrqMutex::new(Vec::new()),
+            current_name: IrqMutex::new(CurrentName::EMPTY),
             token: IrqMutex::new(token),
             session,
             desk,

@@ -1,0 +1,3 @@
+inkscape: exit status 0
+507cc888bf5284f73d9e484a14da6aba2fc509fdbeea28b7fa6d859a9c8bdb6f  out.png
+-- exit status 0

@@ -5,9 +5,9 @@
 
 use core::ffi::c_void;
 
-/// WSADATA: its fields come in another order on x64 (408 bytes) than on
-/// x86 (400 bytes).
-#[cfg(target_arch = "x86_64")]
+/// WSADATA: its fields come in another order on 64-bit Windows (x64,
+/// ARM64: 408 bytes) than on x86 (400 bytes).
+#[cfg(target_pointer_width = "64")]
 #[repr(C)]
 pub struct WsaData {
     pub version: u16,
