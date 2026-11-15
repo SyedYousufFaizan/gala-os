@@ -4007,6 +4007,16 @@ Scenarios that fail now and then, and what is known.
 - **timer_test** failed once in three full runs under the load of the
   full suite and passes alone; if it recurs, its log says which bound
   was missed.
+- **clock_test's rate check under host load**: with the clock set to
+  1000:1 the test asks that the performance counter advance 500 to 1000
+  times faster than real time, and real time is the guest's own clock,
+  which runs on while the VM waits for a host CPU. In a full run beside
+  another VM it measured 465 (30 s of program time in 64.5 ms of real
+  time; the log's `vm time` line: 7.4 s of its 14.5 s wall spent
+  off-CPU) and failed check 0x5b; it passes alone. The bound is not the
+  thing to widen -- the ratio has to be measured against time the guest
+  ran, which the guest cannot see today; until it can, run it with the
+  host quiet (`XTASK_VMS=1`).
 
 #### Reproducing the Java corruption: `java_stress`
 
@@ -4310,7 +4320,33 @@ and X is released by thread N` when IrqMutex guards drop out of order.
   false inversions.
 - A guard taken inside a format macro's arguments (`info!("{}",
   *a.lock())`) lives to the end of the statement: read such values into
-  locals first.
+  locals first. A guard bound to a name lives to the end of its block,
+  and binding that name again only shadows it (`let name = t.name.lock();
+  ... let name = service_name(n);` holds the lock to the end of the
+  loop's body): give such a guard a block of its own.
+- `lockdep: thread N copies user memory while holding X` comes from
+  `nt::process::with_faults`, which every copy of a program's memory
+  goes through: the copy makes a page that is not there and waits for
+  the file or the disk. Hold no lock over `Process::read`, `read_u64`,
+  `write`, `write_iosb` or anything that calls them (`crashreport::At`,
+  `abi::stub_return_address`, `wow64::saved_registers`); take what the
+  copy needs out of the lock first (the handle table's `get` clones the
+  entry for that).
+- The guard of a temporary in an `if let` scrutinee (`if let Some(e) =
+  p.handles.lock().get(h)`) lives to the end of the `if let` body: bind
+  the value first (`let e = p.handles.lock().get(h);`).
+- An event's or a log line's arguments are formatted with the debug
+  console's lock held (`events::emit`, `info!`), so a `Display` of a
+  value that reads the program's memory or takes another lock is that
+  mistake once removed: read what the line names into locals before the
+  macro (`nt::syscalls::syscall_event` reads a call's stack arguments
+  and looks the waited-on object up first).
+- A path whose lock is what keeps the work in order, and so cannot let
+  it go yet, makes a `sync::lockdep::UserMemoryUnchecked` guard with the
+  lock already held, says in a comment why, and gets an entry in
+  ROADMAP's "Stopgaps (to replace)". It is not a way around a new
+  mistake: a copy that waits still panics in `none_held_at_switch`, and
+  a new guard needs the owner's word.
 - Diagnostic code that peeks at a lock from an interrupt, an NMI or a
   panic uses `IrqMutex::try_lock_untracked`: a tracked `try_lock` there
   teaches lockdep an order no real path has, and a later correct path

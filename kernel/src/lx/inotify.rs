@@ -275,7 +275,9 @@ pub fn rm_watch(call: &Call<'_>, fd: u64, wd: u64) -> Result {
 }
 
 /// read(2) of an instance: the whole events that fit (EINVAL if the first
-/// does not), waiting for one unless non-blocking (EAGAIN).
+/// does not), waiting for one unless non-blocking (EAGAIN). The bytes
+/// leave the queue, and the lock, before they are copied to the program,
+/// so a copy that faults loses them -- as Linux's does.
 pub fn read(call: &Call<'_>, f: &Fd, i: &Inotify, buf: u64, count: u64) -> Result {
     let me = crate::nt::platform::current();
     loop {
@@ -298,9 +300,14 @@ pub fn read(call: &Call<'_>, f: &Fd, i: &Inotify, buf: u64, count: u64) -> Resul
                 if n == 0 {
                     return Err(EINVAL);
                 }
-                call.process.write(buf, &s.queue[..n]).map_err(|_| EFAULT)?;
+                // Not copied under the lock: a page of the program's that
+                // is not there is made on the way, which reads the disk
+                // and waits (`sync::lockdep::none_held_at_user_memory`).
+                let events = crate::mm::heap::try_to_vec(&s.queue[..n]).map_err(|_| ENOMEM)?;
                 s.queue.drain(..n);
                 s.last = s.last.and_then(|l| l.checked_sub(n));
+                drop(s);
+                call.process.write(buf, &events).map_err(|_| EFAULT)?;
                 return Ok(n as u64);
             }
             if f.nonblock() {

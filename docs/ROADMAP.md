@@ -5234,7 +5234,45 @@ Each entry: what, why it matters, the structural fix, the owning item.
   fix: PK stages 4 and 5 (MSIX, MSI), then gala installs winget's
   choice and the fallback goes. Item PK.
 
+- **AFD serves a socket request with the endpoint's lock held**
+  (`nt::afd::try_complete`, `submit`, `cancel`): serving a request copies
+  the program's memory -- `attempt` its buffers, `finish` its
+  IO_STATUS_BLOCK -- while the endpoint's `pending` lock is held, and a
+  copy makes a page that is not there, which reads the file or the disk
+  and waits. That is a lock held across a wait: a kernel panic in a run
+  where the page has been dropped under memory pressure (the state dump
+  held `thread.name` the same way, which is how this came up). The lock
+  is also what keeps a socket's receives, sends, accepts and connects in
+  order, so the copies cannot simply move out of it; the three places
+  carry a `sync::lockdep::UserMemoryUnchecked` guard, which turns off
+  lockdep's check at every copy for them (a copy that does wait still
+  panics, in `none_held_at_switch`). Structural fix: serve one request
+  with the lock let go -- its entry stays in the list with its operation
+  taken out, so the requests of its kind still wait behind it, a cancel
+  that comes meanwhile is answered when the serve ends, and the handover
+  carries no half-served request; then the guards go and the check covers
+  the whole kernel. Item R1 (invariants).
+
 ### Defects known, not yet fixed
+
+- **A lock can be marked held by a thread that is not running**
+  (`sync::lockdep`): a held-lock slot belongs to the CPU and carries the
+  thread that took it, and `none_held_at_switch` panics if a thread
+  gives up its CPU with one held, so a slot's holder should be the thread
+  the CPU runs. Twice it was not, both found by the user-memory check
+  while it still looked at every slot: `memload_test` panicked with the
+  disk's lock (`Option<VirtioBlk>`) marked held by a thread that was
+  running on neither CPU, and `postgres` with a handle table's lock
+  marked held by a thread that was running on the other CPU. Either a
+  take lands in one CPU's slots and its release in another's, or a
+  thread leaves its CPU without the switch check seeing it -- and the
+  second is a real lock held across a wait. Until it is understood the
+  user-memory check only looks at the copying thread's own locks (a copy
+  is not where this is diagnosed), so neither sighting is reported any
+  more; `none_held`'s message already allows for a foreign holder. Where
+  to start: every slot checked at every lock taken, and the flight
+  recorder on the virtio-blk and handle-table paths. Item R1
+  (invariants).
 
 - **An NT delete through a hard link's second name removes the first
   name**: hard links exist (Linux link/linkat, seam 4), but NT's delete

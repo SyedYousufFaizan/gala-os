@@ -14995,6 +14995,26 @@ New code follows them; old code is brought in line (ROADMAP R1).
     back on, in a thread that is not the culprit. That message (locks
     released out of order, which is also a bug of its own) names each
     lock's holder for the same reason;
+  - **the same invariant at the user-memory copies**
+    (`nt::process::with_faults`, the one path every copy of a program's
+    memory takes): the copy makes a page that is not there, which reads
+    the file or the disk and waits, so a lock held over a copy is a lock
+    held across a wait. It is checked at every copy and not only at the
+    copies that do wait, because whether a page is there depends on what
+    the machine has been doing: a lock held over the state dump's reads
+    is a panic in a long run under memory pressure and nothing at all in
+    a test that has memory to spare. The message says which lock and
+    which thread (`lockdep: thread N copies user memory while holding
+    X`). A path that is not ready for it says so where it is, with a
+    `sync::lockdep::UserMemoryUnchecked` guard that turns the check off
+    for this CPU while it lives (`nt::afd`'s three, the only ones:
+    ROADMAP "Stopgaps"); the invariant still holds for such a path, a
+    copy that does wait panics as before. The check looks at the copying
+    thread's own locks: a slot whose holder is another thread is a lock
+    carried across a switch, which the two checks above report where it
+    happens, and one has been seen at a copy all the same (ROADMAP
+    "Defects known": a lock marked held by a thread that is not
+    running);
   - taking B while holding A records "A before B" in an open-addressed
     table of 8192 edges; if "B before A" was seen, it panics with both
     class names before the deadlock could happen;

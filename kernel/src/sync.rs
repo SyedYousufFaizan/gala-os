@@ -411,7 +411,7 @@ pub mod lockdep {
     #[cfg(all(debug_assertions, not(any(test, feature = "hosted"))))]
     mod held {
         use super::{MAX_HELD, Slots};
-        use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+        use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
         const CPUS: usize = crate::arch::smp::MAX_CPUS;
         static HELD: [[AtomicU16; MAX_HELD]; CPUS] =
             [const { [const { AtomicU16::new(0) }; MAX_HELD] }; CPUS];
@@ -443,6 +443,19 @@ pub mod lockdep {
         pub fn set_current(cpu: usize, thread: u64) {
             CURRENT[cpu.min(CPUS - 1)].store(thread, Ordering::Relaxed);
         }
+
+        /// How many `UserMemoryUnchecked` guards this CPU has (made with
+        /// a lock held, so interrupts are off and the CPU does not change
+        /// under them).
+        static UNCHECKED: [AtomicU32; CPUS] = [const { AtomicU32::new(0) }; CPUS];
+
+        pub fn unchecked() -> u32 {
+            UNCHECKED[here()].load(Ordering::Relaxed)
+        }
+
+        pub fn set_unchecked(n: u32) {
+            UNCHECKED[here()].store(n, Ordering::Relaxed);
+        }
     }
 
     #[cfg(all(debug_assertions, any(test, feature = "hosted")))]
@@ -456,6 +469,7 @@ pub mod lockdep {
             /// This host thread's number: here a kernel thread is a host
             /// thread, so the holder needs no word from the scheduler.
             static ID: u64 = NEXT.fetch_add(1, Ordering::Relaxed) + 1;
+            static UNCHECKED: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
         }
         static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -469,6 +483,16 @@ pub mod lockdep {
         }
 
         pub fn set_current(_cpu: usize, _thread: u64) {}
+
+        /// How many `UserMemoryUnchecked` guards this thread has (here a
+        /// kernel thread is a host thread).
+        pub fn unchecked() -> u32 {
+            UNCHECKED.try_with(|n| n.get()).unwrap_or(0)
+        }
+
+        pub fn set_unchecked(n: u32) {
+            let _ = UNCHECKED.try_with(|slot| slot.set(n));
+        }
     }
 
     /// Before taking a lock of class `name` (`check`: a blocking take);
@@ -585,6 +609,70 @@ pub mod lockdep {
         }
     }
 
+    /// Before the kernel copies user memory (`nt::process::with_faults`):
+    /// panics if the copying thread holds a lock (debug kernel builds). A
+    /// page that is not there is made on the way, which reads the file or
+    /// the disk and waits, so a lock held over a copy is a lock held
+    /// across a wait. Checked at every copy, not only at the copies that
+    /// do wait: whether a page is there depends on what the machine has
+    /// been doing, so without this the mistake shows up as a panic in a
+    /// long run under memory pressure and in no test.
+    ///
+    /// The copying thread's own locks only: the slots belong to the CPU,
+    /// and one whose holder is another thread is a lock carried across a
+    /// switch, which `none_held_at_switch` and `none_held` report where
+    /// it happens. Such a slot has been seen here all the same (ROADMAP
+    /// "A lock can be marked held by a thread that is not running"), and
+    /// a copy is not where that is diagnosed.
+    pub fn none_held_at_user_memory() {
+        #[cfg(debug_assertions)]
+        if ON.load(Ordering::Acquire) && held::unchecked() == 0 {
+            let me = held::current();
+            let mine = held::with(|slots| {
+                (0..MAX_HELD).map(|i| slots.get(i)).find(|&(c, by)| c != 0 && by == me)
+            });
+            if let Some((class, _)) = mine {
+                panic!(
+                    "lockdep: {} copies user memory while holding {}: the copy waits \
+                     for a page that is not there, and a lock may not be held across \
+                     a wait",
+                    Holder(me),
+                    name(class)
+                );
+            }
+        }
+    }
+
+    /// While one of these lives, this CPU may copy a program's memory
+    /// with a lock held: `none_held_at_user_memory` says nothing about
+    /// it. It is for the paths that still serve a request under their own
+    /// lock -- each names itself where it makes its guard, and ROADMAP
+    /// carries the work of turning it around. The invariant itself holds
+    /// for them too: a copy that does wait panics in `none_held_at_switch`
+    /// as before; it is only the deterministic check at every copy that
+    /// such a path is not ready for.
+    ///
+    /// Made with the lock already held: interrupts are off then, so the
+    /// CPU whose count it is does not change under it.
+    pub struct UserMemoryUnchecked(());
+
+    impl UserMemoryUnchecked {
+        /// `why`: the path, for whoever reads it here.
+        pub fn new(why: &'static str) -> Self {
+            let _ = why;
+            #[cfg(debug_assertions)]
+            held::set_unchecked(held::unchecked().saturating_add(1));
+            UserMemoryUnchecked(())
+        }
+    }
+
+    impl Drop for UserMemoryUnchecked {
+        fn drop(&mut self) {
+            #[cfg(debug_assertions)]
+            held::set_unchecked(held::unchecked().saturating_sub(1));
+        }
+    }
+
     /// The scheduler has made `thread` what CPU `cpu` runs: the thread
     /// lockdep names as the holder of the locks taken there from now on.
     /// `thread` is the thread's own number plus one (`sched`'s
@@ -677,6 +765,49 @@ pub mod lockdep {
             let message = held.unwrap_err();
             let text = message.downcast_ref::<std::string::String>().unwrap();
             assert!(text.contains("gives up its CPU while holding lockdep_switch_test"), "{text}");
+        }
+
+        #[test]
+        fn copying_a_program_s_memory_while_holding_a_lock_panics() {
+            let held = std::thread::spawn(|| {
+                let lock = IrqMutex::named("lockdep_usermem_test", ());
+                let _guard = lock.lock();
+                super::none_held_at_user_memory();
+            })
+            .join();
+            let message = held.unwrap_err();
+            let text = message.downcast_ref::<std::string::String>().unwrap();
+            assert!(
+                text.contains("copies user memory while holding lockdep_usermem_test"),
+                "{text}"
+            );
+        }
+
+        #[test]
+        fn a_path_that_says_it_is_not_ready_may_copy_with_a_lock_held() {
+            // Through, while its guard lives.
+            std::thread::spawn(|| {
+                let lock = IrqMutex::named("lockdep_unchecked_test", ());
+                let _guard = lock.lock();
+                let _unchecked = super::UserMemoryUnchecked::new("a path of this test's own");
+                super::none_held_at_user_memory();
+            })
+            .join()
+            .unwrap();
+            // Checked again once the guard is gone.
+            let held = std::thread::spawn(|| {
+                let lock = IrqMutex::named("lockdep_unchecked_test", ());
+                let _guard = lock.lock();
+                drop(super::UserMemoryUnchecked::new("a path of this test's own"));
+                super::none_held_at_user_memory();
+            })
+            .join();
+            let message = held.unwrap_err();
+            let text = message.downcast_ref::<std::string::String>().unwrap();
+            assert!(
+                text.contains("copies user memory while holding lockdep_unchecked_test"),
+                "{text}"
+            );
         }
 
         struct First;
