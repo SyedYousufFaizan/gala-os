@@ -3719,16 +3719,17 @@ the next breakthroughs).
    (`lx_gimp`, `user/lx/gimp/gui.sh`): GIMP 3.2 over gala's Wayland
    server, its window and its welcome dialog shown, the dialog closed with
    Escape, in.png opened (the title names it: `desktop: window titled`)
-   and painted on the canvas (its orange rectangle checked;
-   `test-lx_gimp.screen4.png`), GIMP quit with Ctrl+Q, exit status 0;
-   what it needed:
+   and painted on the canvas (its orange rectangle checked), Colors >
+   Invert (GIMP's action search; the rectangle blue), File > Export As
+   out.ppm, Ctrl+Q and Discard Changes: the exported file's SHA-256 is the
+   one the same keys give on Ubuntu 26.04 (the transcript); what it
+   needed:
    `/proc/<pid>/fd` links (GLib names an icon file by its link for
    glycin), the GSettings schemas compiled at assembly, GIMP's whole icon
-   theme (GTK aborts on a missing icon). Its transcript (the exit status)
-   is written, not recorded on Linux yet. Next: a filter from the menu
-   and File > Export with the saved file compared with Linux's;
-   then all of its plug-ins (about 130 processes queried at a first
-   start); its welcome dialog stays white (not drawn yet). The Linux roots moved to Ubuntu
+   theme (GTK aborts on a missing icon), the file-pnm plug-in and the
+   file chooser. Next: all of its plug-ins (about 130 processes queried
+   at a first start); its welcome dialog stays white (not drawn yet).
+   The Linux roots moved to Ubuntu
    26.04 LTS with it (WORKFLOW "Linux roots from Ubuntu 26.04"): glibc
    2.43, libffi, libwayland-client, weston and the "gtk3", "x11" and
    "gimp" roots are resolute's (traced on 26.04), and the scenarios on
@@ -3748,8 +3749,7 @@ the next breakthroughs).
    (`lx_altstack`: Rust's runtime), and an epoll_wait seeing what another
    thread ADDs or MODs meanwhile (`lx_epoll`: glycin's loader connection,
    armed from one thread while another waits), termios2 (`lx_pty`:
-   glibc 2.43's isatty asks with TCGETS2). Next: GIMP's filter and
-   export; seccomp's probes (GET_ACTION_AVAIL,
+   glibc 2.43's isatty asks with TCGETS2). Next: seccomp's probes (GET_ACTION_AVAIL,
    GET_NOTIF_SIZES; a filter mode's flags checked: EFAULT for a NULL
    program); xterm's setfsuid and setfsgid (ENOSYS now); pidfd_open
    (ENOSYS: GLib watches children with SIGCHLD then). Linux system calls

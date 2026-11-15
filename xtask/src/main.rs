@@ -7062,7 +7062,8 @@ const BOOT_TEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// (`lx_gimp_batch`: its brushes, patterns and gradients loaded and
 /// babl's conversions measured at a first start, two plug-in processes;
 /// 133 s of run time under TCG, 2.5 s on the host) and its window
-/// (`lx_gimp`: GTK, its UI's data and icons, three plug-ins; 178 s). They
+/// (`lx_gimp`: GTK, its UI's data and icons, its plug-ins; about 180 s
+/// before its screen check). They
 /// get this much instead of BOOT_TEST_TIMEOUT.
 const SLOW_SCENARIOS: &[&str] = &[
     "taskmgr",
