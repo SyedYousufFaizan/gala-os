@@ -11,6 +11,9 @@ const EC_UNKNOWN: u64 = 0x00;
 const EC_ILLEGAL_STATE: u64 = 0x0e;
 const EC_INSTRUCTION_ABORT_LOWER: u64 = 0x20;
 const EC_DATA_ABORT_LOWER: u64 = 0x24;
+const EC_INSTRUCTION_ABORT_SAME: u64 = 0x21;
+const EC_DATA_ABORT_SAME: u64 = 0x25;
+const EC_SVC64: u64 = 0x15;
 const EC_BRK: u64 = 0x3c;
 /// ESR_EL1.ISS's WnR bit for data aborts.
 const ISS_WNR: u64 = 1 << 6;
@@ -144,11 +147,28 @@ pub fn exception_name(vector: u8) -> &'static str {
         EC_ILLEGAL_STATE => "illegal execution state",
         EC_INSTRUCTION_ABORT_LOWER => "instruction abort from EL0",
         EC_DATA_ABORT_LOWER => "data abort from EL0",
+        EC_INSTRUCTION_ABORT_SAME => "instruction abort from EL1",
+        EC_DATA_ABORT_SAME => "data abort from EL1",
+        EC_SVC64 => "SVC (system call)",
         EC_BRK => "BRK instruction",
         _ => "exception",
     }
 }
 
-pub fn provoke(_fault: Fault) -> ! {
-    unported("interrupts::provoke")
+/// Raises `fault` on purpose (the exception path's tests): an undefined
+/// instruction (`udf`, ESR class 0), a data abort reading the unmapped
+/// first page (Limine maps no lower half: TTBR0 is unspecified, so the
+/// read faults at translation or as a TTBR0 walk; ESR class 0x25). A stack
+/// overflow needs the port's guard pages.
+pub fn provoke(fault: Fault) -> ! {
+    match fault {
+        // SAFETY: `udf` raises an undefined instruction exception.
+        Fault::InvalidOpcode => unsafe { core::arch::asm!("udf #0", options(nomem, nostack)) },
+        // SAFETY: the read faults (nothing maps the first page).
+        Fault::PageFault => unsafe {
+            core::ptr::read_volatile(core::ptr::without_provenance::<u64>(0x8));
+        },
+        Fault::StackOverflow => unported("interrupts::provoke(stack overflow: no guard pages yet)"),
+    }
+    unreachable!("provoked {fault:?} did not fault")
 }
