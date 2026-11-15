@@ -2,7 +2,7 @@ fn main() {
     // Only the bare-metal kernel binary uses the linker script; host unit-test
     // builds of the library link normally.
     let target = std::env::var("TARGET");
-    if target.as_deref() == Ok("aarch64-unknown-none") {
+    if target.as_deref() == Ok("aarch64-unknown-none-softfloat") {
         let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         println!("cargo:rustc-link-arg-bins=-T{dir}/linker-aarch64.ld");
     }

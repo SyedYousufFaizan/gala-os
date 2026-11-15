@@ -90,7 +90,7 @@ Everything that depends on the processor architecture is in
 `kernel/src/arch`, behind one interface each architecture implements in
 its own module, selected by `target_arch` (x86_64; aarch64, a stub).
 The kernel's aarch64 check (CI's Clippy step: `cargo clippy -p kernel
---target aarch64-unknown-none`) builds everything else against the stub,
+--target aarch64-unknown-none-softfloat`) builds everything else against the stub,
 so code outside `arch` that names an x86-64 type, register, instruction,
 `asm!` or `core::arch::x86_64` fails to build. What an architecture
 provides (the module names neutral code uses):
@@ -173,22 +173,40 @@ ROADMAP AR, under way on QEMU's `virt` machine (GICv3, a PL011, virtio
 over PCIe), booted by UEFI (QEMU's own edk2 build, or AAVMF) and
 Limine's `BOOTAA64.EFI` from the same kind of ISO as x86-64's (Limine's
 EFI image carries both loaders; the ISO holds the aarch64 kernel). The
-kernel boots to its own page tables: scenarios `arm_boot` (to
-`stop_after=paging`), `arm_fault_ud` and `arm_fault_pagefault` (the
-vectors' report); the timer (`arch::timer::calibrate`) is the next
-unported step.
+kernel boots through its tick: scenarios `arm_boot` (to
+`stop_after=timer`, the tick seen running), `arm_fault_ud` and
+`arm_fault_pagefault` (the vectors' report); the scheduler (the per-CPU
+block, the context switch) is the next unported step.
 
+- **Soft-float**: the kernel is built for
+  `aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE: it
+  never touches the FP/SIMD registers, so interrupts save only the
+  general registers and the FP/SIMD state is user mode's alone.
 - **Entry** (`arch/aarch64/entry.rs`): Limine (base revision 6) enters
   at EL1, or at EL2 with VHE (the `_EL1` register names then reach EL2's),
-  with the MMU on, IRQs masked and FP/SIMD trapped (`CPACR_EL1` = 0). Rust
-  code may touch the SIMD registers at any instruction, so the entry
-  turns FP/SIMD on first. It also moves the boot stack to SP_EL1: Limine
+  with the MMU on, IRQs masked and FP/SIMD trapped (`CPACR_EL1` = 0); the
+  entry turns FP/SIMD on (for EL0). It also moves the boot stack to SP_EL1: Limine
   left the kernel on SP_EL0, and an exception at EL1 runs on SP_EL1, so
   the first exception ran on a stale stack and faulted again inside the
   handler (what `arm_fault_*` caught).
 - **Vectors**: `VBAR_EL1` is undefined at entry; `init_boot_cpu` installs
-  the kernel's. Every exception is reported for now (the vector's kind
-  and origin, ESR's class named, ELR, FAR, SPSR) and ends the kernel.
+  the kernel's. An IRQ (each origin's second vector) saves a `TrapFrame`
+  on the stack (x0-x30, the interrupted SP, ELR, SPSR: `UserRegs`'
+  layout, then ESR and FAR; 288 bytes), runs `gic::dispatch` and returns
+  with `eret`. Every other exception is reported for now (the vector's
+  kind and origin, ESR's class named, ELR, FAR, SPSR) and ends the kernel.
+- **Interrupts** (`gic.rs`): a GICv3 (QEMU `virt`'s distributor at
+  0x0800_0000, redistributors from 0x080a_0000: the board's layout),
+  brought up with its first source: the distributor (affinity routing,
+  group 1), this CPU's redistributor (found by GICR_TYPER's affinity,
+  woken), the CPU interface by its system registers (ICC_SRE, PMR,
+  IGRPEN1). An IRQ is acknowledged (ICC_IAR1), handled and ended
+  (ICC_EOIR1); private interrupts (SGIs, PPIs) have handlers.
+- **Time** (`timer.rs`): the generic timer's virtual channel (PPI 27).
+  Its counter's rate is CNTFRQ_EL0's, architected: nothing is calibrated
+  (`timer: generic timer ... counter at <n> kHz`). The tick is periodic by
+  compare value (CNTV_CVAL moved on one period per tick, not drifting
+  with the handler's latency).
 - **Devices before the kernel's page tables** (`early_map`): the
   bootloader's higher half maps the kernel and the HHDM of memory, no
   device. A device page is added to its TTBR1 tables, in the 2 MiB below
@@ -211,9 +229,10 @@ unported step.
   QEMU with `-semihosting-config enable=on`), with x86-64's statuses (33
   success, 35 failure). There is no ISA bus: no debug console (no event
   stream yet) and no phase port (`bootphase` marks are no-ops).
-- **Limits**: the UART's address is the board's, not read from the
-  firmware (SPCR or the device tree: the port); one CPU (the others stay
-  in Limine's wait loop); no timer, interrupts, scheduler, user mode; the
+- **Limits**: the UART's and the GIC's addresses are the board's, not read
+  from the firmware (SPCR, MADT or the device tree: the port); one CPU (the others stay
+  in Limine's wait loop); no scheduler or user mode; no RTC read (the
+  PL031); entered at EL2 with VHE the timer would be EL2's (PPI 28); the
   image is not sealed for BOOTAA64.EFI (R8's enrollment is BOOTX64.EFI's).
 
 ## Boot
@@ -311,7 +330,7 @@ Whitespace-separated `flag` and `key=value` words (`kernel/src/cmdline.rs`).
 | `nomigrate` | a thread that runs user code stays on the CPU it first ran on (tells migration bugs from others) |
 | `framecheck` | user mappings of each frame are counted; freeing a frame a user space still maps panics |
 | `eagercommit` | committed private pages get their frames at once instead of at the first touch (no demand-zero faults in user code) |
-| `stop_after=<phase>` | end the boot after that boot phase (`memory_map`, `frames`, `paging`, `timer`, `sched`, `smp_start`, `smp_done`, `drivers`, `manifest`): logged (`boot: stopping after boot phase <phase> (stop_after)`), then QEMU exits with success under `qemu_exit` (else the CPU halts). The aarch64 port's scenarios use it while the phases after are unported |
+| `stop_after=<phase>` | end the boot after that boot phase (`memory_map`, `frames`, `paging`, `timer`, `sched`, `smp_start`, `smp_done`, `drivers`, `manifest`): logged (`boot: stopping after boot phase <phase> (stop_after)`; once interrupts are on, with whether the tick runs: three ticks waited for, at most 2 s), then QEMU exits with success under `qemu_exit` (else the CPU halts). The aarch64 port's scenarios use it while the phases after are unported |
 | `early_fault=<ud\|pagefault\|stackoverflow>` | provoke that fault right after the exception vectors are installed, before anything else is up (`fault=` is the same later, on a scheduler thread); scenarios `arm_fault_ud`, `arm_fault_pagefault` |
 | `calwrong`, `calstall` | clock-calibration tests: the first TSC calibration 20x low (the RTC check must catch it), or the boot CPU stalled inside the calibration (scenarios `clockcal_*`; "Interrupts and time") |
 | `failpoint=<point>:<mode>:<n>[,...]` | fault injection while the `start=`/`run=` programs run (debug builds; "Fault injection"). Points `heap`, `frame`, `disk_io`, `net_tx`, `pageout`; modes `every:<n>` (the n-th, 2n-th, ... occurrence fails), `nth:<n>` (only the n-th), `random:<per-mille>` (from `failseed=`). Example: `failpoint=heap:every:97,net_tx:random:50` |

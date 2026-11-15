@@ -622,7 +622,26 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
 fn phase(cmdline: &Cmdline, name: &str) {
     arch::bootphase::mark(name);
     if cmdline.value("stop_after") == Some(name) {
-        info!("boot: stopping after boot phase {name} (stop_after)");
+        // With interrupts on, the line says whether the tick runs: three
+        // ticks waited for (2 s of the counter at most).
+        if arch::cpu::interrupts_enabled() {
+            let until = time::raw_monotonic_ns() + 2_000_000_000;
+            while time::ticks() < 3 && time::raw_monotonic_ns() < until {
+                core::hint::spin_loop();
+            }
+            let ticks = time::ticks();
+            if ticks >= 3 {
+                info!(
+                    "boot: stopping after boot phase {name} (stop_after), the tick running ({ticks} ticks)"
+                );
+            } else {
+                warn!(
+                    "boot: stopping after boot phase {name} (stop_after), {ticks} ticks in 2 s: the tick does not run"
+                );
+            }
+        } else {
+            info!("boot: stopping after boot phase {name} (stop_after)");
+        }
         if QEMU_EXIT.load(Ordering::Relaxed) {
             qemu::exit(QemuExitCode::Success);
         }

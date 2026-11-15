@@ -6856,7 +6856,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
 
 const KERNEL_TARGET: &str = "x86_64-unknown-none";
 /// The aarch64 kernel's target (ROADMAP AR: `AARCH64_SCENARIOS`).
-const KERNEL_TARGET_AARCH64: &str = "aarch64-unknown-none";
+const KERNEL_TARGET_AARCH64: &str = "aarch64-unknown-none-softfloat";
 /// Freestanding Windows test programs in `user/`, shipped as boot modules.
 const USER_TARGET: &str = "x86_64-pc-windows-msvc";
 /// 32-bit (x86) test programs, run through WOW64 (ARCHITECTURE "Plan:
@@ -12066,7 +12066,7 @@ const SINGLE_THREAD_TCG: &[&str] = &[
 
 /// The scenarios of the aarch64 kernel (ROADMAP AR), booted on QEMU's
 /// `virt` machine (`Boot::UefiAarch64`): its kernel is built for
-/// `aarch64-unknown-none` and put in their image instead of x86-64's.
+/// `aarch64-unknown-none-softfloat` and put in their image instead of x86-64's.
 const AARCH64_SCENARIOS: &[&str] = &["arm_boot", "arm_fault_ud", "arm_fault_pagefault"];
 
 /// Whether the image `name` (`test-<scenario>`) is an aarch64 scenario's.
@@ -12265,11 +12265,12 @@ const SCENARIOS: &[Scenario] = &[
         // The aarch64 kernel (ROADMAP AR) on QEMU's `virt` machine,
         // booted by UEFI and Limine's BOOTAA64.EFI (`AARCH64_SCENARIOS`):
         // its PL011 console, the bootloader's handoff, the memory map, the
-        // frame allocator and its own page tables (the console still
-        // writing after the switch), then the boot ends where the port has
+        // frame allocator, its own page tables (the console still writing
+        // after the switch), the GIC and the generic timer's tick (IRQs
+        // taken and returned from), then the boot ends where the port has
         // got to (`stop_after`) and the kernel exits through semihosting.
         name: "arm_boot",
-        cmdline: "qemu_exit stop_after=paging",
+        cmdline: "qemu_exit stop_after=timer",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             "gala-os kernel",
@@ -12277,7 +12278,10 @@ const SCENARIOS: &[Scenario] = &[
             "memory map (",
             "frames: ",
             "paging: own tables at ",
-            "boot: stopping after boot phase paging (stop_after)",
+            "timer: generic timer (virtual channel, PPI 27), counter at ",
+            "gic: GICv3",
+            "interrupts enabled, tick ",
+            "boot: stopping after boot phase timer (stop_after), the tick running",
         ],
     },
     Scenario {

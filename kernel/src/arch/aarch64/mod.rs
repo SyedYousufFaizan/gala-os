@@ -3,11 +3,12 @@
 //! (`entry`), the PL011 console through a device page mapped into the
 //! bootloader's tables (`serial`, `early_map`), interrupt masking and the
 //! counter (`cpu`), the exit through semihosting (`qemu`), the kernel's
-//! own page tables (`paging`). The kernel boots that far (the `arm_boot`
-//! scenario; ARCHITECTURE "The aarch64 port").
+//! own page tables (`paging`), the GICv3 (`gic`) and the generic timer's
+//! tick (`timer`). The kernel boots that far (the `arm_boot` scenario;
+//! ARCHITECTURE "The aarch64 port").
 //!
 //! The rest is still the stub the kernel's aarch64 check (`cargo clippy -p
-//! kernel --target aarch64-unknown-none`, in CI) builds against: what has
+//! kernel --target aarch64-unknown-none-softfloat`, in CI) builds against: what has
 //! an architecture-neutral meaning is filled in (the register frames'
 //! accessors over AArch64's registers); everything that would touch the
 //! machine ends in `unported`, which never returns.
@@ -20,6 +21,7 @@ pub mod debugcon;
 pub mod early_map;
 pub mod entry;
 pub mod fwcfg;
+pub mod gic;
 pub mod handover;
 pub mod hotpatch;
 pub mod interrupts;
