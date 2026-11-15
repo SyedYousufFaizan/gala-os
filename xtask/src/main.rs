@@ -19584,11 +19584,12 @@ fn run_vm_once(
             && fs::read(&log)
                 .is_ok_and(|b| b.windows(check.marker.len()).any(|w| w == check.marker.as_bytes()))
         {
-            let failed = check_screen(&socket, iso, check).err();
-            screen_verdict = Some(match &failed {
-                None => "xtask: screen ok\n".into(),
-                Some(e) => format!("xtask: screen: {e}\n"),
+            let checked = check_screen(&socket, iso, check);
+            screen_verdict = Some(match &checked {
+                Ok(note) => format!("xtask: screen ok{note}\n"),
+                Err(e) => format!("xtask: screen: {e}\n"),
             });
+            let failed = checked.err();
             // A failed screen check ends the run (it cannot pass any more):
             // the guest's state dump first, as at a timeout.
             if let Some(e) = failed {
@@ -22097,8 +22098,9 @@ fn screen_check(name: &str) -> Option<&'static ScreenCheck> {
 }
 
 /// Takes a screendump through the monitor at `socket` (kept as
-/// `<iso>.screen.png`) and checks `check`'s pixels.
-fn check_screen(socket: &Path, iso: &Path, check: &ScreenCheck) -> Result {
+/// `<iso>.screen.png`) and checks `check`'s pixels. A note for the verdict
+/// line ("" or how the check ended early).
+fn check_screen(socket: &Path, iso: &Path, check: &ScreenCheck) -> Result<String> {
     use std::io::Write;
     let mut monitor = None;
     for _ in 0..100 {
@@ -22128,7 +22130,22 @@ fn check_screen(socket: &Path, iso: &Path, check: &ScreenCheck) -> Result {
             ps2.sent(command).map_err(|e| format!("step {n}: {e}"))?;
         }
         if !step.input.is_empty() {
-            ps2.wait_taken(&mut monitor, &log).map_err(|e| format!("step {n}: {e}"))?;
+            let taken = ps2.wait_taken(&mut monitor, &log);
+            // The last step's input often ends the program (Esc, Ctrl+Q),
+            // and with qemu_exit QEMU too, which may close the monitor
+            // before the guest's read counters are asked for. Then there
+            // is nothing left to check here: the run's exit status and
+            // expected lines say whether the input did its work.
+            let last = n + 1 == check.steps.len() && step.pixels.is_empty();
+            if let Err(e) = taken {
+                if last && monitor_closed(&monitor) {
+                    return Ok(format!(
+                        " (step {n}: QEMU's monitor closed after the last input, which ended \
+                         the program: {e})"
+                    ));
+                }
+                return Err(format!("step {n}: {e}"));
+            }
         }
         check_screen_step(&mut monitor, iso, n, step).map_err(|e| format!("step {n}: {e}"))?;
         // A host-side wait this step's check ends (HELD_DOWNLOADS).
@@ -22137,7 +22154,27 @@ fn check_screen(socket: &Path, iso: &Path, check: &ScreenCheck) -> Result {
             fs::write(&release, b"").map_err(|e| format!("step {n}: writing {release:?}: {e}"))?;
         }
     }
-    Ok(())
+    Ok(String::new())
+}
+
+/// Whether QEMU has closed its end of the monitor socket (it exited): a
+/// peek reads end-of-file, or the connection is reset.
+fn monitor_closed(monitor: &std::os::unix::net::UnixStream) -> bool {
+    if monitor.set_nonblocking(true).is_err() {
+        return false;
+    }
+    let mut byte = [0u8; 1];
+    // Pending replies may still be queued before the end: drain them.
+    let closed = loop {
+        match std::io::Read::read(&mut &*monitor, &mut byte) {
+            Ok(0) => break true,
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break false,
+            Err(_) => break true,
+        }
+    };
+    let _ = monitor.set_nonblocking(false);
+    closed
 }
 
 /// A screen check's PS/2 input, paced on what the guest has read. QEMU's

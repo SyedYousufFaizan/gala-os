@@ -3565,6 +3565,13 @@ UEFI (BIOS boots have no framebuffer), unless their desktop is headless
   `events=window` mask, each button change the desktop takes is an
   event `pointer` (where, and what got it: `Start`, `LinuxEntry(0)`,
   `capture <window>`), and the exit's `input:` line counts the presses.
+- **The last step's input may end the run.** A key that ends the
+  program (Esc, Ctrl+Q) under `qemu_exit` can close QEMU, and its
+  monitor, before xtask has read the guest's counters. On the last step
+  with no pixels to check, a monitor that closed then is not a failure:
+  the verdict says so (`xtask: screen ok (step N: QEMU's monitor closed
+  after the last input ...)`) and the run's exit status and expected
+  lines decide. Anywhere else a closed monitor fails the step.
 - The guest's pointer starts in the middle of the screen and is clamped
   to it: `mouse_move -255 -255` three times puts it at (0, 0) whatever
   the earlier steps did. Keep each `mouse_move` within 255 per axis (3

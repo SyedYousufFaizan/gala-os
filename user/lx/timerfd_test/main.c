@@ -98,11 +98,13 @@ int main(void)
 	rd(nb, &r);
 	say_ret("read(unarmed, non-blocking)", r);
 	t = arm(30, 0);
+	/* The 30 ms count from the arming: printing the line below may take
+	 * a while, so the poll alone can be shorter. */
+	start = ms(CLOCK_MONOTONIC);
 	sys4(SYS_timerfd_settime, nb, 0, &t, 0);
 	rd(nb, &r);
 	say_ret("read before it expires", r);
 	struct pfd p = { (int)nb, POLLIN, 0 };
-	start = ms(CLOCK_MONOTONIC);
 	say("poll(10 s)", sys3(SYS_poll, &p, 1, 10000));
 	say("  revents", p.revents);
 	say_bool("  not before 30 ms", ms(CLOCK_MONOTONIC) - start >= 30);

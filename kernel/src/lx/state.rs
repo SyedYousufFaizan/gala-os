@@ -601,16 +601,12 @@ impl fmt::Display for Ending {
 }
 
 /// Linux process `pid` has ended with `status`: what is left of its
-/// output lines is logged, then how it ended; its state goes, its fds
-/// close, and then its parent is told (`child_ended`).
+/// output lines is logged, then how it ended; its fds close, then it
+/// leaves the table and becomes its parent's zombie in one step
+/// (`become_zombie`), and then its parent is told (`child_ended`).
 pub fn ended(pid: u64, status: NtStatus) {
     super::procfs::ended(pid);
-    let state = {
-        let mut table = TABLE.lock();
-        let i = table.iter().position(|p| p.pid == pid);
-        i.map(|i| table.remove(i))
-    };
-    let Some(state) = state else { return };
+    let Some(state) = get(pid) else { return };
     // A session leader's end leaves its terminal without a session.
     if state.sid.load(Ordering::Relaxed) == pid {
         super::pty::session_ended(pid);
@@ -630,6 +626,7 @@ pub fn ended(pid: u64, status: NtStatus) {
     // parent hears of it.
     let fds = core::mem::take(&mut *state.fds.lock());
     drop(fds);
+    let (parent, reaped) = become_zombie(&state, status);
     // Its pidfds are readable from now on, before its parent hears.
     state.life.end();
     // Its own children are nobody's now (no reaper yet: they are not
@@ -645,36 +642,51 @@ pub fn ended(pid: u64, status: NtStatus) {
             super::sigcalls::send_from_kernel(child, sig);
         }
     }
-    if state.parent != 0
-        && let Some(parent) = get(state.parent)
-    {
-        child_ended(&parent, &state, status);
+    if let Some(parent) = parent {
+        child_ended(&parent, &state, status, reaped);
     }
 }
 
-/// Child `child` of `parent` ended with `status`: it becomes a zombie
-/// for wait4 (unless the parent ignores SIGCHLD or set SA_NOCLDWAIT:
-/// then it is reaped at once, wait(2)), the parent gets its exit signal
-/// (SIGCHLD: discarded at its default action), and threads waiting in
-/// wait4 wake.
-fn child_ended(parent: &LxProcess, child: &LxProcess, status: NtStatus) {
+/// Process `child` (ended with `status`) leaves the table and, in the
+/// same step (under the table's lock), moves from its parent's running
+/// children to its zombies for wait4 (unless the parent ignores SIGCHLD
+/// or set SA_NOCLDWAIT: then it is reaped at once, wait(2)). So a kill
+/// or pidfd_send_signal always finds it, running or a zombie, until it
+/// is reaped (0, as Linux's), and ESRCH after. The parent (if it is
+/// still there) and whether the child was reaped at once.
+fn become_zombie(child: &LxProcess, status: NtStatus) -> (Option<KArc<LxProcess>>, bool) {
+    let mut table = TABLE.lock();
+    table.retain(|p| p.pid != child.pid);
+    let parent = match child.parent {
+        0 => None,
+        ppid => table.iter().find(|p| p.pid == ppid).cloned(),
+    };
+    let Some(parent) = parent else { return (None, true) };
     let reap_now = {
         let sigs = parent.signals.lock();
         let chld = sigs.action(SIGCHLD);
         chld.handler == SIG_IGN || chld.flags & SA_NOCLDWAIT != 0
     };
-    let waiters = {
-        let mut c = parent.children.lock();
-        c.running.retain(|&p| p != child.pid);
-        if !reap_now && c.ended.try_push((child.pid, status)).is_err() {
-            crate::warn!(
-                "lx: pid {}: no memory to keep child {}'s status: wait4 will not see it",
-                parent.pid,
-                child.pid
-            );
-        }
-        core::mem::take(&mut c.waiters)
-    };
+    let mut c = parent.children.lock();
+    c.running.retain(|&p| p != child.pid);
+    if !reap_now && c.ended.try_push((child.pid, status)).is_err() {
+        crate::warn!(
+            "lx: pid {}: no memory to keep child {}'s status: wait4 will not see it",
+            parent.pid,
+            child.pid
+        );
+    }
+    drop(c);
+    drop(table);
+    (Some(parent), reap_now)
+}
+
+/// Child `child` of `parent` ended with `status` and is its zombie (or
+/// was reaped at once: `reap_now`, `become_zombie`): the parent gets its
+/// exit signal (SIGCHLD: discarded at its default action), and threads
+/// waiting in wait4 wake.
+fn child_ended(parent: &LxProcess, child: &LxProcess, status: NtStatus, reap_now: bool) {
+    let waiters = core::mem::take(&mut parent.children.lock().waiters);
     let (code, value) = signal::child_code(status);
     let info = if child.exit_signal == SIGCHLD {
         let uid = crate::nt::process::by_id(child.pid)

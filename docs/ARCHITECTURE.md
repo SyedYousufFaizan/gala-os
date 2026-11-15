@@ -11584,9 +11584,12 @@ The running parts (milestone 1; `lxrun=`):
   shared copy-on-write are its parent's alone again, and a section's
   frames are freed only once no page table maps them, though the
   address space itself may outlive the process, held by a reap or by
-  `run`; `framecheck` caught the order), the fds close next, then the parent is told
-  (a zombie, SIGCHLD, its wait4 waiters woken), so a parent woken by a
-  child's end reads EOF from a pipe only the child held.
+  `run`; `framecheck` caught the order), the fds close next, then the
+  process leaves the table and becomes its parent's zombie in one step
+  under the table's lock (`become_zombie`: never neither, so a kill or
+  a pidfd always finds it until it is reaped), then the parent is told
+  (SIGCHLD, its wait4 waiters woken), so a parent woken by a child's end
+  reads EOF from a pipe only the child held.
 - **Memory** (`lx::mm`; mmap_test, dyn_test): mmap (the hint if free,
   else top-down below `MMAP_TOP`; MAP_FIXED replaces, MAP_FIXED_NOREPLACE
   gives EEXIST; MAP_DENYWRITE, MAP_STACK and the other hints ignored, as
