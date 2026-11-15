@@ -7514,6 +7514,7 @@ fn host_package(program: &str) -> Option<&'static str> {
         "Xvfb" => "xvfb",
         "xorriso" => "xorriso",
         "update-mime-database" => "shared-mime-info",
+        "glib-compile-schemas" => "libglib2.0-bin",
         _ => return None,
     })
 }

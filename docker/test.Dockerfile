@@ -23,7 +23,7 @@ ARG http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY
 # unzip for the prebuilt programs that come as archives (Mesa, FileZilla,
 # the Vulkan runtime, git's curl), msitools for the installer ones,
 # musl-gcc, weston and Xvfb for the Linux-binary ones, shared-mime-info
-# for the desktop ones. They are what CI's runner installs
+# and libglib2.0-bin (glib-compile-schemas) for the desktop ones. They are what CI's runner installs
 # (`.github/workflows/ci.yml`); without one the scenario that needs it
 # fails -- after a full boot where it is a client.
 RUN apt-get update \
@@ -33,7 +33,7 @@ RUN apt-get update \
         libglib2.0-dev libpixman-1-dev libslirp-dev libfdt-dev zlib1g-dev \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y \
         p7zip-full unzip openssh-client postgresql-client msitools musl-tools \
-        weston xvfb libgtk-3-0t64 shared-mime-info \
+        weston xvfb libgtk-3-0t64 shared-mime-info libglib2.0-bin \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
