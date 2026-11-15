@@ -42,10 +42,18 @@ pub struct Core {
     pub name: &'static str,
     /// The Win32 path of the executable (`C:\\gala\\x.exe`).
     pub path: &'static str,
-    pub space: SharedUserSpace,
-    /// Lock order: `vad` before `space`.
+    /// The address space, while the process has one: `release_space`
+    /// gives it up at the exit, as Windows tears a process's virtual
+    /// address space down there and keeps only the object, so a handle
+    /// held past the exit reaches no memory (process_test measures
+    /// VirtualQueryEx and ReadProcessMemory through one). Every caller
+    /// goes through `space_now` or `live_space`; this lock is a leaf,
+    /// held only while the reference is cloned out of it.
+    pub space: IrqMutex<Option<SharedUserSpace>>,
+    /// Lock order: `vad` before the space's own lock.
     pub vad: IrqMutex<Vad>,
-    /// Mapped section views (lock order: `views`, then `vad`, then `space`).
+    /// Mapped section views (lock order: `views`, then `vad`, then the
+    /// space's own lock).
     pub views: IrqMutex<Vec<super::section::View>>,
     /// Thread objects of the live threads.
     threads: IrqMutex<Vec<ObjectRef>>,
@@ -250,15 +258,45 @@ impl Process {
         }
     }
 
-    /// Runs a user-memory copy, resolving demand-zero faults on the way
-    /// (each retry backs at least one more page).
+    /// Its address space, while it has one (`space`): None once it has
+    /// exited.
+    pub fn space_now(&self) -> Option<SharedUserSpace> {
+        self.space.lock().clone()
+    }
+
+    /// Its address space, or STATUS_PROCESS_IS_TERMINATING once the exit
+    /// has released it (ERROR_ACCESS_DENIED in Win32, what Windows'
+    /// VirtualQueryEx reports through a handle to an exited process).
+    /// The refusal is an event, since a program that depends on reaching
+    /// an exited process's memory fails here and nowhere else.
+    pub fn live_space(&self) -> Result<SharedUserSpace, NtStatus> {
+        match self.space_now() {
+            Some(space) => Ok(space),
+            None => {
+                crate::events::emit(
+                    crate::events::Category::Process,
+                    "address space gone",
+                    format_args!(r#""pid":{}"#, self.id),
+                );
+                Err(NtStatus::PROCESS_IS_TERMINATING)
+            }
+        }
+    }
+
+    /// Runs a user-memory copy at `at`, resolving demand-zero faults on
+    /// the way (each retry backs at least one more page). A process whose
+    /// exit has released its address space faults at once: there is
+    /// nothing left to copy (NtReadVirtualMemory then reports
+    /// STATUS_PARTIAL_COPY, as Windows' does).
     fn with_faults(
         &self,
+        at: u64,
         kind: AccessKind,
         mut op: impl FnMut(&mut UserSpace) -> Result<(), UserFault>,
     ) -> Result<(), UserFault> {
+        let space = self.space_now().ok_or(UserFault { address: at })?;
         loop {
-            let result = op(&mut self.space.lock());
+            let result = op(&mut space.lock());
             match result {
                 Err(fault)
                     if vm::resolve_fault(self, fault.address, kind) == vm::Fault::Resolved =>
@@ -272,7 +310,7 @@ impl Process {
 
     /// Copies `buf.len()` bytes from user address `addr`.
     pub fn read(&self, addr: u64, buf: &mut [u8]) -> Result<(), UserFault> {
-        self.with_faults(AccessKind::Read, |s| s.read(addr, buf))
+        self.with_faults(addr, AccessKind::Read, |s| s.read(addr, buf))
     }
 
     pub fn read_u64(&self, addr: u64) -> Result<u64, UserFault> {
@@ -282,7 +320,7 @@ impl Process {
     }
 
     pub fn write(&self, addr: u64, data: &[u8]) -> Result<(), UserFault> {
-        self.with_faults(AccessKind::Write, |s| s.write(addr, data))
+        self.with_faults(addr, AccessKind::Write, |s| s.write(addr, data))
     }
 
     pub fn write_u64(&self, addr: u64, value: u64) -> Result<(), UserFault> {
@@ -329,7 +367,8 @@ pub fn with_each(mut f: impl FnMut(&Process)) {
 }
 
 /// Drops exited processes that only PROCESSES refers to (outside the lock:
-/// dropping one frees its address space).
+/// dropping one frees what the record still holds -- its address space
+/// went at the exit, `release_space`).
 pub fn prune() {
     loop {
         let victim = {
@@ -353,7 +392,11 @@ pub fn prune() {
 /// put in after it).
 pub fn describe_holders(space: &SharedUserSpace) -> impl core::fmt::Display {
     // One lock at a time (the list's, then each process's own).
-    let found = PROCESSES.lock().iter().find(|p| KArc::ptr_eq(&p.space, space)).cloned();
+    let found = PROCESSES
+        .lock()
+        .iter()
+        .find(|p| p.space.lock().as_ref().is_some_and(|s| KArc::ptr_eq(s, space)))
+        .cloned();
     let Some(p) = found else { return DescribeHolders(None, Vec::new()) };
     // Besides the list's and `found`'s own.
     let refs = KArc::strong_count(&p) - 2;
@@ -1049,7 +1092,7 @@ fn spawn_inner(spec: Spawn<'_>) -> Result<(KArc<Process>, ObjectRef), LoadError>
             parent_id,
             name,
             path,
-            space,
+            space: IrqMutex::named("process.space", Some(space)),
             vad: IrqMutex::new(vad),
             views: IrqMutex::new(Vec::new()),
             threads: IrqMutex::new(Vec::new()),
@@ -1299,7 +1342,7 @@ pub fn create_bare(bare: Bare) -> Result<KArc<Process>, LoadError> {
             parent_id: bare.parent_id,
             name: bare.name,
             path: bare.path,
-            space,
+            space: IrqMutex::named("process.space", Some(space)),
             vad: IrqMutex::new(bare.vad),
             views: IrqMutex::new(Vec::new()),
             threads: IrqMutex::new(Vec::new()),
@@ -1464,6 +1507,9 @@ pub fn finish(process: &KArc<Process>, last_status: NtStatus) {
     // the process's own objects) and forget the process.
     let entries = process.handles.lock().close_all();
     drop(entries);
+    // The address space goes before the object is signaled, so that a
+    // waiter that wakes finds the process without one (as on Windows).
+    release_space(process);
     // Signaled last, as on Windows: a waiter that wakes finds the
     // process's handles closed (its named objects gone, its files and pipe
     // ends closed). Signaled first, a parent on another CPU could open a
@@ -1472,6 +1518,45 @@ pub fn finish(process: &KArc<Process>, last_status: NtStatus) {
     crate::flight::record(crate::flight::Kind::ProcessExit, process.id, u64::from(status.0));
     // Stays in PROCESSES while referenced (OpenProcess by id); `prune`
     // forgets it after that.
+}
+
+/// Gives up an exited process's address space: its section views, the
+/// VAD's reservations (whose peaks are read one last time first, so
+/// VM_COUNTERS still answers PeakVirtualSize and PeakWorkingSetSize for
+/// the process that was) and the reference to the space itself. Windows
+/// tears the virtual address space down at the exit and keeps only the
+/// object, so a handle held past it reaches no memory; gala kept the
+/// whole space instead, and a handle to an exited process held its frames
+/// for as long as the holder lived (Chromium's crashpad handler holds one
+/// to every process it watches: 290 MiB of a browser that had exited).
+///
+/// The frames go when the last reference to the space goes, which is not
+/// here: the exiting thread's scheduler record still holds one, and the
+/// CPU is running on this space's page tables. `sched::reap` drops it
+/// after the switch away, as it always has.
+fn release_space(process: &KArc<Process>) {
+    // Out of the locks first, freed after they are released.
+    let views = core::mem::take(&mut *process.views.lock());
+    let ((reserved, committed), _) = {
+        let mut vad = process.vad.lock();
+        let sizes = vad.sizes();
+        vad.clear();
+        sizes
+    };
+    let space = process.space.lock().take();
+    crate::events::emit(
+        crate::events::Category::Process,
+        "address space released",
+        format_args!(
+            r#""pid":{},"reserved":{},"committed":{},"views":{}"#,
+            process.id,
+            reserved,
+            committed,
+            views.len()
+        ),
+    );
+    drop(views);
+    drop(space);
 }
 
 /// User-mode CPU exceptions: resolved (demand paging, guard pages, COW),
@@ -1621,7 +1706,7 @@ pub fn adopt(a: Adopted) -> Result<KArc<Process>, NtStatus> {
             parent_id: a.parent_id,
             name: a.name,
             path: a.path,
-            space,
+            space: IrqMutex::named("process.space", Some(space)),
             vad: IrqMutex::new(a.vad),
             views: IrqMutex::new(a.views),
             threads: IrqMutex::new(Vec::new()),
