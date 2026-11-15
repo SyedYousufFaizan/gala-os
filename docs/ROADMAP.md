@@ -3680,17 +3680,14 @@ the next breakthroughs).
    start); its welcome dialog stays white (not drawn yet). The Linux roots moved to Ubuntu
    26.04 LTS with it (WORKFLOW "Linux roots from Ubuntu 26.04"): glibc
    2.43, libffi, libwayland-client, weston and the "gtk3", "x11" and
-   "gimp" roots are resolute's (traced on 26.04), and every `lx_`
-   scenario but one passes on them, `lx_gtk` among them (GTK 3's images
-   through glycin: bubblewrap fails as on an unprivileged Linux without
-   user namespaces and glycin runs its loaders unsandboxed, its warning
-   in the scenarios' own transcripts, recorded on 26.04). `lx_xdesktop`
-   times out: the screen check passes, but the `exit` typed into its
-   xterm never reaches the xterm's shell (the keys reach Xwayland, and
-   twm and xterm each read an X event per key, but xterm writes nothing
-   to its pty; pointing at the xterm first does not change it);
-   `linux_menu` waits for its session's end the same way. What 26.04
-   needed that gala lacked, each test first: the ioctls every descriptor
+   "gimp" roots are resolute's (traced on 26.04), and the scenarios on
+   them pass, `lx_gtk` among them (GTK 3's images through glycin:
+   bubblewrap fails as on an unprivileged Linux without user namespaces
+   and glycin runs its loaders unsandboxed, its warning in the
+   scenarios' own transcripts, recorded on 26.04), `lx_xdesktop` and
+   `linux_menu` (termios2; and on 26.04 twm gives the keys to the xterm
+   only with the pointer on it, so their screen checks point first). What
+   26.04 needed that gala lacked, each test first: the ioctls every descriptor
    answers (`lx_fdioctl`), capget and capset (`lx_caps`), timerfd
    (`lx_timerfd`), descriptor arguments' upper halves ignored
    (`lx_fdbits`: glycin's int fds), PR_SET_NO_NEW_PRIVS, PR_GET_AUXV and
@@ -3699,8 +3696,9 @@ the next breakthroughs).
    refuses it at max_user_namespaces 0 (`lx_procfs`), sigaltstack
    (`lx_altstack`: Rust's runtime), and an epoll_wait seeing what another
    thread ADDs or MODs meanwhile (`lx_epoll`: glycin's loader connection,
-   armed from one thread while another waits). Next: `lx_xdesktop`'s
-   keys; GIMP's window; seccomp's probes (GET_ACTION_AVAIL,
+   armed from one thread while another waits), termios2 (`lx_pty`:
+   glibc 2.43's isatty asks with TCGETS2). Next: GIMP's filter and
+   export; seccomp's probes (GET_ACTION_AVAIL,
    GET_NOTIF_SIZES; a filter mode's flags checked: EFAULT for a NULL
    program); xterm's setfsuid and setfsgid (ENOSYS now); pidfd_open
    (ENOSYS: GLib watches children with SIGCHLD then). Linux system calls
