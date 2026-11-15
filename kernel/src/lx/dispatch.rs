@@ -367,6 +367,15 @@ fn handle(call: &Call<'_>, number: u64) -> Result {
         // The one user: setting the ids it has is allowed, anything else
         // is EPERM (an unprivileged process).
         nr::SETUID => same_id(a(0), super::identity::of_process(&call.process).uid),
+        // setfsuid/setfsgid(id): the filesystem id is the process's own
+        // (fsid_test): returned, and kept (another id is not taken
+        // without the capability; uid 0's would be: ledgered).
+        nr::SETFSUID => {
+            Ok(u64::from(fs_id("setfsuid", a(0), super::identity::of_process(&call.process).uid)))
+        }
+        nr::SETFSGID => {
+            Ok(u64::from(fs_id("setfsgid", a(0), super::identity::of_process(&call.process).gid)))
+        }
         nr::SETGID => same_id(a(0), super::identity::of_process(&call.process).gid),
         // setresuid/setresgid(r, e, s): each -1 (unchanged) or the
         // process's own id (it has no other: no saved set-user-id yet).
@@ -605,6 +614,16 @@ fn fcntl(call: &Call<'_>, fd: u64, cmd: u64, arg: u64) -> Result {
             Err(EINVAL)
         }
     }
+}
+
+/// setfsuid/setfsgid: the previous filesystem id (`own`, the only one);
+/// a change to another id, which uid 0 would make, is ledgered.
+fn fs_id(name: &'static str, id: u64, own: u32) -> u32 {
+    let id = id as u32;
+    if own == 0 && id != u32::MAX && id != own {
+        ledger::record(name, "linux option missing", u64::from(id));
+    }
+    own
 }
 
 fn same_id(id: u64, own: u32) -> Result {

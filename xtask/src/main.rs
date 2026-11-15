@@ -4897,6 +4897,8 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("lx_pidfd_pie", "user/lx/bin/pidfd_test-pie", "lx"),
     ("lx_inotify", "user/lx/bin/inotify_test", "lx"),
     ("lx_inotify_pie", "user/lx/bin/inotify_test-pie", "lx"),
+    ("lx_fsid", "user/lx/bin/fsid_test", "lx"),
+    ("lx_fsid_pie", "user/lx/bin/fsid_test-pie", "lx"),
     ("lx_fdbits", "user/lx/bin/fdbits_test", "lx"),
     ("lx_fdbits_pie", "user/lx/bin/fdbits_test-pie", "lx"),
     ("lx_timerfd", "user/lx/bin/timerfd_test", "lx"),
@@ -14003,6 +14005,21 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit lxrun=/lx/inotify_test-pie lxargs=./inotify_test",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["personality linux", "run: end /lx/inotify_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/fsid_test (LD: Ubuntu 26.04's xterm): setfsuid and
+        // setfsgid; its transcript must be its expected.txt (real Linux's).
+        name: "lx_fsid",
+        cmdline: "qemu_exit lxrun=/lx/fsid_test lxargs=./fsid_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/fsid_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/fsid_test as a static-pie.
+        name: "lx_fsid_pie",
+        cmdline: "qemu_exit lxrun=/lx/fsid_test-pie lxargs=./fsid_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/fsid_test-pie", BOOT_OK_MARKER],
     },
     Scenario {
         // user/lx/fdbits_test (LD: Ubuntu 26.04's glycin): a descriptor
