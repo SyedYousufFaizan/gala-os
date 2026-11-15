@@ -617,11 +617,17 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
 /// blocking" forever: the flight recorder's watchdog reported it every
 /// 20 s and its reports pushed every real event out of the ring.)
 /// `schedtest`: the scheduler's own check, early (the aarch64 port's
-/// `arm_sched`, before anything else starts threads): two kernel threads
-/// yield to each other 100 rounds each, then sleep 10 ms (woken by the
-/// tick) and are joined. Logged `schedtest: ok` only if they took turns
-/// (each round's runner differed from the last's almost every time), each
-/// slept at least its 10 ms in ticks (one clock: the tick's) and both
+/// `arm_sched`, before anything else starts threads, on the boot CPU
+/// alone): two kernel threads yield to each other 100 rounds each; then
+/// each spins without yielding until the other has arrived, then again
+/// until the other has left: on one CPU only the tick's preemption moves
+/// them on, and the second spin needs a tick on the thread a tick switched
+/// to (an interrupt not yet ended at a switch from inside its handler
+/// would hold every further tick back); then each sleeps 10 ms (woken by
+/// the tick) and both are joined. Logged `schedtest: ok` only if they took
+/// turns (each round's runner differed from the last's almost every
+/// time), both got through both spins (within 2 s of the counter each),
+/// each slept at least its 10 ms in ticks (one clock: the tick's) and both
 /// ended; else what was seen, as an error.
 fn sched_selftest() {
     use core::sync::atomic::AtomicUsize;
@@ -632,12 +638,32 @@ fn sched_selftest() {
     /// The shortest sleep seen, in ticks.
     static SLEPT: AtomicUsize = AtomicUsize::new(usize::MAX);
     const SLEEP_TICKS: usize = (10 * time::TICK_HZ / 1000) as usize;
+    /// Each thread's arrival at the spins and leaving them; how many
+    /// threads got through both.
+    static ARRIVED: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
+    static LEFT: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
+    static PREEMPTED: AtomicUsize = AtomicUsize::new(0);
+    /// Spins until `flag` is set, at most 2 s of the counter: whether it
+    /// was set.
+    fn spin_until(flag: &AtomicUsize) -> bool {
+        let until = time::raw_monotonic_ns() + 2_000_000_000;
+        while flag.load(Ordering::Acquire) == 0 && time::raw_monotonic_ns() < until {
+            core::hint::spin_loop();
+        }
+        flag.load(Ordering::Acquire) != 0
+    }
     fn worker(me: usize) {
         for _ in 0..ROUNDS {
             if LAST.swap(me, Ordering::Relaxed) != me {
                 TURNS.fetch_add(1, Ordering::Relaxed);
             }
             sched::yield_now();
+        }
+        ARRIVED[me].store(1, Ordering::Release);
+        let arrived = spin_until(&ARRIVED[1 - me]);
+        LEFT[me].store(1, Ordering::Release);
+        if arrived && spin_until(&LEFT[1 - me]) {
+            PREEMPTED.fetch_add(1, Ordering::Relaxed);
         }
         let before = time::raw_ticks();
         sched::sleep_ms(10);
@@ -652,15 +678,22 @@ fn sched_selftest() {
     let ms = (time::raw_monotonic_ns() - start) / 1_000_000;
     let (turns, done) = (TURNS.load(Ordering::Relaxed), DONE.load(Ordering::Relaxed));
     let slept = SLEPT.load(Ordering::Relaxed);
-    if spawned.iter().all(Result::is_ok) && done == 2 && turns >= ROUNDS && slept >= SLEEP_TICKS {
+    let preempted = PREEMPTED.load(Ordering::Relaxed);
+    if spawned.iter().all(Result::is_ok)
+        && done == 2
+        && turns >= ROUNDS
+        && preempted == 2
+        && slept >= SLEEP_TICKS
+    {
         info!(
-            "schedtest: ok: 2 threads took {turns} turns in {ROUNDS} rounds each, slept {slept} \
-             ticks (asked {SLEEP_TICKS}), joined ({ms} ms)"
+            "schedtest: ok: 2 threads took {turns} turns in {ROUNDS} rounds each, both through spins \
+             only preemption ends, slept {slept} ticks (asked {SLEEP_TICKS}), joined ({ms} ms)"
         );
     } else {
         error!(
             "schedtest: failed: spawned {:?}, {done} of 2 ended, {turns} turns in {ROUNDS} rounds \
-             each, shortest sleep {slept} ticks of {SLEEP_TICKS} asked, {ms} ms",
+             each, {preempted} of 2 through the spins, shortest sleep {slept} ticks of {SLEEP_TICKS} \
+             asked, {ms} ms",
             spawned.map(|r| r.is_ok())
         );
     }

@@ -203,8 +203,12 @@ the next phase.
   brought up with its first source: the distributor (affinity routing,
   group 1), this CPU's redistributor (found by GICR_TYPER's affinity,
   woken), the CPU interface by its system registers (ICC_SRE, PMR,
-  IGRPEN1). An IRQ is acknowledged (ICC_IAR1), handled and ended
-  (ICC_EOIR1); private interrupts (SGIs, PPIs) have handlers.
+  IGRPEN1). An IRQ is acknowledged (ICC_IAR1) and ended (ICC_EOIR1)
+  before its handler runs. Invariant: the end comes first because a
+  handler may switch threads (the tick's preemption), and until the EOI
+  the CPU's running priority holds back every interrupt of that priority:
+  the thread switched to would run without ticks (`schedtest`'s second
+  spin caught it). Private interrupts (SGIs, PPIs) have handlers.
 - **Time** (`timer.rs`): the generic timer's virtual channel (PPI 27).
   Its counter's rate is CNTFRQ_EL0's, architected: nothing is calibrated
   (`timer: generic timer ... counter at <n> kHz`). The tick is periodic by
@@ -364,7 +368,7 @@ Whitespace-separated `flag` and `key=value` words (`kernel/src/cmdline.rs`).
 | `framecheck` | user mappings of each frame are counted; freeing a frame a user space still maps panics |
 | `eagercommit` | committed private pages get their frames at once instead of at the first touch (no demand-zero faults in user code) |
 | `stop_after=<phase>` | end the boot after that boot phase (`memory_map`, `frames`, `paging`, `timer`, `sched`, `smp_start`, `smp_done`, `drivers`, `manifest`): logged (`boot: stopping after boot phase <phase> (stop_after)`; once interrupts are on, with whether the tick runs: three ticks waited for, at most 2 s), then QEMU exits with success under `qemu_exit` (else the CPU halts). The aarch64 port's scenarios use it while the phases after are unported |
-| `schedtest` | the scheduler's check, just after it starts: two kernel threads yield to each other 100 rounds each, sleep 10 ms and are joined; `schedtest: ok: ...` if they took turns and ended, else `schedtest: failed: ...` (scenarios `arm_sched`, `sched_selftest`) |
+| `schedtest` | the scheduler's check, just after it starts: two kernel threads yield to each other 100 rounds each, spin until each other arrives and leaves (only the tick's preemption moves them on, also on the thread a tick switched to), sleep 10 ms and are joined; `schedtest: ok: ...` if they took turns and ended, else `schedtest: failed: ...` (scenarios `arm_sched`, `sched_selftest`) |
 | `early_fault=<ud\|pagefault\|stackoverflow>` | provoke that fault right after the exception vectors are installed, before anything else is up (`fault=` is the same later, on a scheduler thread); scenarios `arm_fault_ud`, `arm_fault_pagefault` |
 | `calwrong`, `calstall` | clock-calibration tests: the first TSC calibration 20x low (the RTC check must catch it), or the boot CPU stalled inside the calibration (scenarios `clockcal_*`; "Interrupts and time") |
 | `failpoint=<point>:<mode>:<n>[,...]` | fault injection while the `start=`/`run=` programs run (debug builds; "Fault injection"). Points `heap`, `frame`, `disk_io`, `net_tx`, `pageout`; modes `every:<n>` (the n-th, 2n-th, ... occurrence fails), `nth:<n>` (only the n-th), `random:<per-mille>` (from `failseed=`). Example: `failpoint=heap:every:97,net_tx:random:50` |

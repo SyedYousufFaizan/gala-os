@@ -12,8 +12,8 @@
 //! redistributor (awake; its private interrupts, SGIs and PPIs, enabled
 //! one by one) and its CPU interface through the system registers
 //! (`ICC_*`: enabled, every priority let through). `dispatch`
-//! acknowledges an IRQ (ICC_IAR1_EL1), runs its handler and ends it
-//! (ICC_EOIR1_EL1). SGIs are the CPUs' IPIs (`send_sgi`, ICC_SGI1R_EL1).
+//! acknowledges an IRQ (ICC_IAR1_EL1), ends it (ICC_EOIR1_EL1), then runs
+//! its handler (which may switch threads). SGIs are the CPUs' IPIs (`send_sgi`, ICC_SGI1R_EL1).
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -232,8 +232,8 @@ pub fn enable_private(intid: u32, handler: Handler) {
     enable_here(rd, intid);
 }
 
-/// Handles one IRQ (the IRQ vector's): acknowledged, its handler run with
-/// the interrupted state, then ended. An interrupt without a handler is
+/// Handles one IRQ (the IRQ vector's): acknowledged, ended, then its
+/// handler run with the interrupted state. An interrupt without a handler is
 /// logged once per INTID.
 pub fn dispatch(frame: &mut TrapFrame) {
     let iar: u64;
@@ -245,6 +245,17 @@ pub fn dispatch(frame: &mut TrapFrame) {
     if intid >= SPURIOUS {
         return;
     }
+    // Ended before its handler runs: a handler may switch threads (the
+    // tick's preemption), and until the EOI the CPU's running priority
+    // keeps every interrupt of this priority back, so the thread switched
+    // to would run without ticks. IRQs stay masked until the vector's
+    // return, and the handler first clears what raised a level-sensitive
+    // interrupt (the timer moves its compare value), so it is not taken
+    // again.
+    // SAFETY: ICC_EOIR1_EL1: ends the interrupt acknowledged above.
+    unsafe {
+        core::arch::asm!("msr S3_0_C12_C12_1, {}", in(reg) iar, options(nomem, nostack, preserves_flags))
+    };
     let handler = HANDLERS.lock().get(intid as usize).copied().flatten();
     match handler {
         Some(h) => h(frame),
@@ -255,8 +266,4 @@ pub fn dispatch(frame: &mut TrapFrame) {
             }
         }
     }
-    // SAFETY: ICC_EOIR1_EL1: ends the interrupt acknowledged above.
-    unsafe {
-        core::arch::asm!("msr S3_0_C12_C12_1, {}", in(reg) iar, options(nomem, nostack, preserves_flags))
-    };
 }
