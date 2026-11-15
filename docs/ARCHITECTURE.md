@@ -12309,7 +12309,14 @@ fields at the `repr(C)` offsets, host-tested), since `lx` has no
   of a new pty start with: iflag ICRNL|IXON, oflag OPOST|ONLCR, cflag
   B38400|CS8|CREAD, lflag ISIG|ICANON|ECHO|ECHOE|ECHOK|ECHOCTL|ECHOKE|
   IEXTEN; INTR ^C, QUIT ^\, ERASE DEL, KILL ^U, EOF ^D, VMIN 1, VTIME
-  0); `make_raw` (cfmakeraw); `Winsize`; the tty ioctl numbers.
+  0); `make_raw` (cfmakeraw); `Winsize`; the tty ioctl numbers. termios2
+  (TCGETS2, TCSETS2, TCSETSW2, TCSETSF2: the termios then c_ispeed and
+  c_ospeed, 44 bytes; `speeds`, `encode_speeds`): glibc 2.43 (Ubuntu
+  26.04) asks with it in isatty and tcgetattr, so a terminal without it
+  is no terminal to dash or xterm. A BOTHER speed with a baud code is
+  stored as that code, as Linux's tty_termios_encode_baud_rate does;
+  one without is B38400's (ledgered). A terminal request ('T') on what
+  is not a terminal is ENOTTY, not ledgered.
 - **`lx_abi::layout`**: `Stat` (144), `Statx` (256), `Dirent64Head` (19,
   packed, the name at 19; `dirent64_reclen` = align8(19 + len + 1)),
   `EpollEvent` (packed, 12: data at 4), `Timespec`, `Timeval`, `Pollfd`

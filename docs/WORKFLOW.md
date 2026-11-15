@@ -2278,6 +2278,12 @@ A root is what its workload opened on real 26.04, traced:
   <root> rows.rs` puts them in xtask. The glibc prebuilt's files (ld.so,
   libc, libm), libffi's and libwayland-client's are excluded from the
   roots, the rest of libc6 (libresolv) is not.
+- A scenario's input is checked against 26.04 in the chroot first when
+  it misbehaves: weston on Xvfb as the compositor, `xdotool` typing into
+  weston's window (rootful Xwayland there needs `-ac` in the chroot). So
+  it was found that twm gives the keys to the xterm only with the
+  pointer on it (`lx_xdesktop`, `linux_menu` point first), and the rest
+  was gala's (termios2).
 - Pitfalls met: Xwayland caches compiled keymaps in `/var/lib/xkb`
   (clear `*.xkm` before tracing, or the keymap's files are never
   opened); Xwayland loads Mesa's `swrast_dri.so` (gallium and LLVM:
@@ -2289,7 +2295,9 @@ A root is what its workload opened on real 26.04, traced:
   `/usr/bin/sleep` (uutils) is a link into another package and
   `icons/default/index.theme` an update-alternatives link (both
   `<installed>=<packaged>`); a root's links to one file (an icon theme's
-  cursors) are copies at assembly.
+  cursors) are copies at assembly; a file the menu or a desktop reads
+  but the program never opens (xterm's `debian-xterm.desktop`) is not
+  in a trace: add it to the row by hand, with a comment.
 - Transcripts recorded on 24.04 that 26.04 answers otherwise get their
   own `<scenario>.txt`, recorded in the chroot (lx-expect's
   expected.txt stays the CI host's).
