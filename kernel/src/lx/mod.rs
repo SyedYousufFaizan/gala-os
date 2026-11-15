@@ -67,6 +67,7 @@ pub mod file;
 pub mod fork;
 pub mod futex;
 pub mod identity;
+pub mod inotify;
 pub mod machine;
 pub mod memfd;
 pub mod mm;

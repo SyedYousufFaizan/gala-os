@@ -4895,6 +4895,8 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("lx_altstack_pie", "user/lx/bin/altstack_test-pie", "lx"),
     ("lx_pidfd", "user/lx/bin/pidfd_test", "lx"),
     ("lx_pidfd_pie", "user/lx/bin/pidfd_test-pie", "lx"),
+    ("lx_inotify", "user/lx/bin/inotify_test", "lx"),
+    ("lx_inotify_pie", "user/lx/bin/inotify_test-pie", "lx"),
     ("lx_fdbits", "user/lx/bin/fdbits_test", "lx"),
     ("lx_fdbits_pie", "user/lx/bin/fdbits_test-pie", "lx"),
     ("lx_timerfd", "user/lx/bin/timerfd_test", "lx"),
@@ -13985,6 +13987,22 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit lxrun=/lx/pidfd_test-pie lxargs=./pidfd_test",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["personality linux", "run: end /lx/pidfd_test-pie", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/inotify_test (LD: GIO's file monitors): inotify's watches
+        // on a directory and a file; its transcript must be its
+        // expected.txt (real Linux's).
+        name: "lx_inotify",
+        cmdline: "qemu_exit lxrun=/lx/inotify_test lxargs=./inotify_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/inotify_test", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // user/lx/inotify_test as a static-pie.
+        name: "lx_inotify_pie",
+        cmdline: "qemu_exit lxrun=/lx/inotify_test-pie lxargs=./inotify_test",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["personality linux", "run: end /lx/inotify_test-pie", BOOT_OK_MARKER],
     },
     Scenario {
         // user/lx/fdbits_test (LD: Ubuntu 26.04's glycin): a descriptor

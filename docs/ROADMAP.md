@@ -3753,7 +3753,8 @@ the next breakthroughs).
    GET_NOTIF_SIZES; a filter mode's flags checked: EFAULT for a NULL
    program); xterm's setfsuid and setfsgid (ENOSYS now). Done since:
    pidfds and waitid (`lx_pidfd`: GLib 2.88 watches each child with a
-   pidfd and reaps it with waitid(P_PIDFD)). Linux system calls
+   pidfd and reaps it with waitid(P_PIDFD)), /proc/mounts (`lx_procfs`:
+   GIO's mount monitor), inotify (`lx_inotify`: GIO's file monitors). Linux system calls
    are traced with `events=syscall` (`lx syscall`). Open: a Linux process
    keeps its name across execve (the log says `sh (pid N)` for
    gimp-console), and rseq is ENOSYS

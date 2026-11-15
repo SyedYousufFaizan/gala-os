@@ -153,6 +153,8 @@ pub enum Object {
     TimerFd(KArc<super::timerfd::TimerFd>),
     /// A process's pidfd (`lx::pidfd`).
     PidFd(KArc<super::pidfd::PidFd>),
+    /// An inotify instance (`lx::inotify`).
+    Inotify(KArc<super::inotify::Inotify>),
     /// A Windows-side object: a standard handle of the NT program that
     /// started the process (`lx::ntio`, `lx::distro`).
     Nt(KArc<super::ntio::NtFile>),
@@ -169,6 +171,8 @@ impl Drop for Fd {
             e.forget(self.id());
         }
         match &self.object {
+            // Its watches see no more changes.
+            Object::Inotify(n) => super::inotify::closed(n),
             Object::PipeRead(p) => {
                 let mut st = p.state.lock();
                 st.readers -= 1;
@@ -226,6 +230,7 @@ impl Fd {
             | Object::EventFd(_)
             | Object::TimerFd(_)
             | Object::PidFd(_)
+            | Object::Inotify(_)
             | Object::Pty(_)
             | Object::Nt(_) => {}
         }

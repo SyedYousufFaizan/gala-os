@@ -11922,6 +11922,24 @@ The running parts (milestone 1; `lxrun=`):
   told (ledgered), P_PGID waits for any child (ledgered), siginfo given
   to pidfd_send_signal is unused (ledgered), no PIDFD_THREAD pidfds, no
   pidfd_getfd.
+- **inotify** (`lx::inotify`; inotify_test, `lx_inotify`): instances
+  (`Object::Inotify`; inotify_init, inotify_init1 with IN_NONBLOCK and
+  IN_CLOEXEC) hold watches on nodes (add_watch resolves the path as stat
+  does: the same wd again for a node watched, its mask replaced or added
+  to with IN_MASK_ADD; IN_ONLYDIR, IN_MASK_CREATE; rm_watch queues
+  IN_IGNORED). Events come from the file system's change journal, NT's
+  directory notifications' (`nt::notify::collect` gives each batch to
+  `inotify::collect` with the file system held, and the instances are
+  woken once it is released): a watched directory's entries made,
+  removed, written or truncated and renamed (IN_CREATE, IN_DELETE,
+  IN_MODIFY, IN_MOVED_FROM and IN_MOVED_TO with one cookie; IN_ISDIR), a
+  watched file written (IN_MODIFY). Queued as `struct inotify_event`, the
+  name NUL-padded to a multiple of 16; an event like the last unread one
+  is not queued again; read gives whole events (EINVAL if the first does
+  not fit), FIONREAD the bytes queued, poll and epoll POLLIN while some
+  are. Limits: no IN_ACCESS, IN_OPEN, IN_CLOSE_*, IN_ATTRIB, IN_*_SELF
+  (the journal has no such changes; asked for: ledgered), no
+  IN_Q_OVERFLOW (the queue stops at a bound, ledgered).
 - **sysinfo and sched_getaffinity** (`lx::sysinfo`; sysinfo_test,
   `lx_sysinfo`): sysinfo counts in bytes (`mem_unit` 1): RAM is the frame
   allocator's managed frames and free ones (NT's NumberOfPhysicalPages),
