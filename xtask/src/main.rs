@@ -8841,8 +8841,8 @@ const MANUAL: &[&str] = &[
     // OF: Office's installer: a ~5.4 GB download from Microsoft's CDN
     // onto a disk-backed C: (OFFICE_INSTALL_TIMEOUT).
     "office_install",
-    // OF: the same install with its windows on the console's desktop, to
-    // watch (screenshots: XTASK_SHOTS).
+    // OF: the same install from the host's cache, with its windows on
+    // the console's desktop, to watch (screenshots: XTASK_SHOTS).
     "office_install_gui",
     // OF: office_install from the host's cache of the CDN's files
     // (`cargo xtask office-source`), put on the disk (development's fast
@@ -9853,7 +9853,7 @@ const SCENARIOS: &[Scenario] = &[
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             "unimplemented_test.exe finished with status 0xc0000002",
-            r#"ledger: {"service":"xolehlp.dll!DtcGetTransactionManagerExW","what":"not implemented""#,
+            r#"ledger: {"service":"xolehlp.dll!DtcGetTransactionManagerExW","what":"stub""#,
         ],
     },
     Scenario {
@@ -13209,6 +13209,10 @@ const SCENARIOS: &[Scenario] = &[
             "exited with status 0x00000000",
             r#"ledger: {"service":"?","what":"unknown service","detail":4095,"hits":1}"#,
             r#"ledger: {"service":"NtQueryInformationProcess","what":"info class","detail":32512,"hits":2}"#,
+            // The table filled up; how many records it then dropped
+            // depends on what the boot itself recorded, but their kind
+            // does not.
+            r#"ledger: {"service":"?full","what":"other","detail":0,"hits":"#,
         ],
     },
     Scenario {
@@ -13453,13 +13457,18 @@ const SCENARIOS: &[Scenario] = &[
         // OF (pending): the Office Deployment Tool's setup.exe (x86,
         // PREBUILT odt) installs Word, Excel and PowerPoint as
         // user/office_install/config.xml asks, from Microsoft's CDN (a
-        // net scenario: QEMU's NAT to the host's network). Its log goes to
-        // C:\gala\odtlog; the ledger ranks what it lacks (ROADMAP OF). As
-        // SYSTEM: ODT needs an administrator (its "runas" is declined for
-        // the boot user, a standard user; docs/SECURITY.md "Elevation").
+        // net scenario: QEMU's NAT to the host's network). As SYSTEM: ODT
+        // needs an administrator (its "runas" is declined for the boot
+        // user, a standard user; docs/SECURITY.md "Elevation"). The
+        // `dump=` directories are where the install accounts for itself:
+        // C:\gala\odtlog (ODT's own log), C:\Users\Public (the
+        // Click-to-Run client's and the service's) and C:\Windows\Temp
+        // (the integrator's GALA-*.log, UTF-16LE, which names the
+        // integration task that failed); the ledger ranks what gala
+        // lacks (ROADMAP OF).
         name: "office_install",
         cmdline: "qemu_exit persist as=system run=setup.exe \
-                  args=/configure%20C:\\gala\\config.xml dump=C:/gala/odtlog,C:/Users/Public",
+                  args=/configure%20C:\\gala\\config.xml dump=C:/gala/odtlog,C:/Users/Public,C:/Windows/Temp",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["setup.exe (pid 4) exited with status 0x00000000"],
     },
@@ -13474,13 +13483,15 @@ const SCENARIOS: &[Scenario] = &[
         name: "office_install_local",
         cmdline: "qemu_exit persist as=system run=setup.exe \
                   args=/configure%20C:\\gala\\config_local.xml \
-                  dump=C:/gala/odtlog,C:/Users/Public",
+                  dump=C:/gala/odtlog,C:/Users/Public,C:/Windows/Temp",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["setup.exe (pid 4) exited with status 0x00000000"],
     },
     Scenario {
-        // OF (manual): office_install with its windows shown
-        // (config_full.xml: Display Level Full), to watch the install
+        // OF (manual): office_install_local with its windows shown
+        // (config_full.xml: Display Level Full, and C:\OfficeSource as
+        // SourcePath so the progress to be watched starts at once), to
+        // watch the install
         // (`XTASK_SHOTS=120,300,... cargo xtask boot-test
         // office_install_gui`: screendumps in target/screenshots/). Still
         // as SYSTEM, an administrator, but on the console's desktop:
@@ -13493,7 +13504,7 @@ const SCENARIOS: &[Scenario] = &[
         name: "office_install_gui",
         cmdline: "qemu_exit persist as=system wait=all run=consolerun.exe \
                   args=C:\\gala\\setup.exe%20/configure%20C:\\gala\\config_full.xml \
-                  dump=C:/gala/odtlog,C:/Users/Public",
+                  dump=C:/gala/odtlog,C:/Users/Public,C:/Windows/Temp",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["consolerun.exe (pid 4) exited with status 0x00000000"],
     },
@@ -19993,10 +20004,13 @@ const DISK_SCENARIOS: &[DiskScenario] = &[
         earlier_fail: false,
     },
     DiskScenario {
-        // office_install's disk, for the same install shown on the screen.
+        // office_install's disk, for the same install shown on the screen,
+        // with the cached download on it as office_install_local's has
+        // (config_full.xml names it as SourcePath), so it takes what
+        // office_install_local's does on the host.
         name: "office_install_gui",
         size: 16 << 30,
-        host_mib: Some(6 << 10),
+        host_mib: Some(8 << 10),
         setup: |_| {},
         check: |_| Ok(()),
         earlier_boots: &[],
@@ -20161,7 +20175,7 @@ fn new_disk(name: &str, iso: &Path) -> Result<Option<PathBuf>> {
         (&f).write_all(&image)
     });
     made.map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    if name == "office_install_local" {
+    if name == "office_install_local" || name == "office_install_gui" {
         let source = office_source()?;
         let t = Instant::now();
         let (files, bytes) = diskimage::inject(&path, &source, "\\OfficeSource")?;

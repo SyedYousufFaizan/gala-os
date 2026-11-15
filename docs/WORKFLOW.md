@@ -815,6 +815,11 @@ XTASK_HOTSWAP_WHY=1 cargo xtask hotswap-diff ...   # why each function counts as
   only be patched: take the snapshot before the program that loads the
   DLL starts (an Office fix in a DLL integrator.exe loads: before
   `process integrator.exe (pid`), or keep the change one a patch takes.
+  Some DLLs no Office snapshot can take: setup.exe maps msi.dll as it
+  starts, so every later snapshot has it mapped, and an export the
+  change adds would not be visible to a resolver even if the patch took
+  it ("What they cannot cover"), which is what a delay load by ordinal
+  resolves through -- an msi.dll export goes from boot.
   With a list, a changed DLL not in it is replaced whole (not patched):
   the flag alone patches every changed DLL. A 4-byte function cannot take the jump
   (refused: make the old build's function longer, or swap its callers).
@@ -1479,7 +1484,14 @@ kernel32 through `raw-dylib`), run under gala and under Windows
   runs as a non-admin user in session 1, with many CPUs, a battery, its
   own UI language): files and directories go in `%TEMP%` (GetTempPathW),
   not C:\ (a user may not create files there) or C:\gala, and an
-  earlier run's leftovers are removed first; values that depend on the
+  earlier run's leftovers are removed first; a path a test only *names*
+  comes from a directory it knows is there too (its own image's, from
+  GetModuleFileNameW, or `%TEMP%`) whenever the answer turns on that
+  directory existing -- MsiInstallProductW answers ERROR_FILE_NOT_FOUND
+  for a missing package in a directory that is there and
+  ERROR_PATH_NOT_FOUND for one in a directory that is not, so
+  `C:\gala\no-such.msi` passed on gala and on a machine this project
+  had run on and failed on CI's stock runner (`msi_test`); values that depend on the
   machine (the processor count, devices, the system locale, the build,
   the volume's number) are read from another API, not typed in; per-user
   state another process may hold (the clipboard) is skipped, naming the
@@ -1667,8 +1679,9 @@ kernel32 through `raw-dylib`), run under gala and under Windows
   DLL's `src/unimplemented.rs` (`gala_stubs::unimplemented_exports!`)
   to get the program running. The stub logs at once (`[warn ]
   <program>: <dll>!<function> not implemented, ending the process
-  (detail <the number the record carried>)`),
-  records `dll!function` in the ledger and ends the process with
+  (detail <the number the record carried>)`; a gap that is reported and
+  lived with logs the same line without the "ending the process"),
+  records `dll!function` in the ledger ("stub") and ends the process with
   STATUS_NOT_IMPLEMENTED when called. Implementing one means removing it
   from that list.
 - GetProcAddress returns NULL for stubs, so a test that checks a
@@ -3312,7 +3325,12 @@ about a minute under TCG. Read, in order:
   has the `amd64-unicode` stubs, so `Target amd64-unicode` gives an x64
   installer, which gala can run: there is no WOW64 for 32-bit ones; it
   has no amd64 plug-ins, so the script uses none). The build is
-  reproducible; without makensis the checked-in installers are written
+  reproducible for one makensis and not across versions, so a host whose
+  nsis is not CI's image's (Ubuntu 26.04's 3.10-2 against 24.04's) makes
+  other bytes and `export-tests` rewrites the installers and the SHA-256s
+  in their manifests: that belongs to no change, so restore
+  `user/pk_install_test/source` (or export in the image: `cargo xtask
+  docker-test`) rather than committing it. Without makensis the checked-in installers are written
   back from the working tree unchanged, so `export-tests` leaves the same
   bytes either way (make_source.py removes and remakes `source/installers`
   on every run, so keeping them means writing them back, not skipping
