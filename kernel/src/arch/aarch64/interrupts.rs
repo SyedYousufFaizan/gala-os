@@ -131,8 +131,18 @@ pub type Handler = fn(&mut TrapFrame);
 pub type NmiHandler = fn(&TrapFrame);
 pub type UserExceptionHandler = fn(&mut TrapFrame, Option<u64>);
 
-pub fn set_nmi_handler(_handler: NmiHandler) {
-    unported("interrupts::set_nmi_handler")
+/// The state dump's handler, for the NMI that asks for one (xtask's, at a
+/// timeout). AArch64 has no NMI as x86-64's: the GICv3's pseudo-NMI (an
+/// interrupt above the masking priority) comes with the port, so nothing
+/// calls it yet, which the log says once.
+static NMI_HANDLER: crate::sync::IrqMutex<Option<NmiHandler>> = crate::sync::IrqMutex::new(None);
+
+pub fn set_nmi_handler(handler: NmiHandler) {
+    *NMI_HANDLER.lock() = Some(handler);
+    crate::warn!(
+        "interrupts: no NMI on aarch64 yet: a state dump at a timeout is not taken (the GIC's \
+         pseudo-NMI comes with the port)"
+    );
 }
 
 pub fn set_user_exception_handler(_handler: UserExceptionHandler) {

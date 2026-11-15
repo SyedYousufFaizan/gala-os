@@ -202,7 +202,7 @@ has a section under "Open items".
 | LX | Linux personality | in progress | seams 2, 3, 6 and milestone 1 done, seam 4's Linux side (links, case-sensitive directories, modes kept); static busybox runs (milestone 2), TCP sockets, threads, futex, epoll; file mappings, glibc's dynamic programs (LD step 1); seam 5's first core object, AF_UNIX sockets, and memfd (LD step 2) |
 | CT | Linux containers: Docker Desktop and Podman over a WSL facade | planned | spec recordings first; needs LX beyond milestone 5 |
 | LD | Desktop Linux applications | in progress | step 1: dynamically linked glibc programs run through ld.so (`lx_dyn`); step 2: memfd and AF_UNIX sockets with SCM_RIGHTS (`lx_memfd`, `lx_unix`), the Wayland wire format (`wl_abi`) and the first in-kernel Wayland server (wl_compositor, wl_shm, xdg_wm_base, wl_output; toplevels as desktop windows: `lx_wl`), wl_seat input and window control (`lx_wl_input`), weston-simple-shm (`lx_simple_shm`), popups (`lx_wl_popup`); step 3: the first GTK program, its window drawn and clicked (`lx_gtk`, GTK 3 on a Linux root of Ubuntu's packages); step 5: X11 programs through rootless Xwayland, gala its window manager, xterm on a pty (`lx_xterm`), GTK under X11 (`lx_gtk_x11`); step 6's first part: a distribution's desktop in one window (`lx_xdesktop`); step 7: Linux distributions in the start menu (`linux_menu`); step 9: GIMP 3.2 in batch mode, its saved file Ubuntu 26.04's byte for byte (`lx_gimp_batch`; System V shared memory: `lx_shm`; sysinfo: `lx_sysinfo`), and on the desktop: its window, in.png opened, Colors > Invert and File > Export, the exported file Ubuntu 26.04's byte for byte (`lx_gimp`); next: all of GIMP's plug-ins |
-| AR | ARM64 port | in progress | the aarch64 kernel boots on QEMU `virt` through its own page tables, GIC and tick (`arm_boot`), its exceptions reported (`arm_fault_*`); next the scheduler and the other CPUs, then ARM64 Windows and Linux user mode |
+| AR | ARM64 port | in progress | the aarch64 kernel boots on QEMU `virt` through its own page tables, GIC, tick and scheduler (`arm_boot`, `arm_sched`), its exceptions reported (`arm_fault_*`); next the other CPUs, then ARM64 Windows and Linux user mode |
 | XT | 64-bit Windows programs on ARM64 | planned | dynamic binary translation of x64 code, then 32-bit x86 (WOW64 on ARM; Office's x86 installer); after AR |
 | AN | Android applications | planned | binder, ART, SwiftShader graphics; x86_64 images first |
 
@@ -3957,12 +3957,16 @@ on the seams item PT prepared: native ARM64 Windows programs
   `TrapFrame`, the GICv3 (distributor, this CPU's redistributor, the
   system-register CPU interface), the generic timer's virtual channel
   at CNTFRQ_EL0's architected rate, periodic by compare value.
+- Threads (`arm_boot` to `stop_after=sched`; `arm_sched`, and x86-64's
+  `sched_selftest`, with `schedtest`: two threads switched on yields,
+  woken by the tick, joined): kernel stacks, the context switch (with
+  the FP/SIMD state user mode will have), the per-CPU block (TPIDR_EL1).
 
 **Next**:
 1. The kernel's `arch` for aarch64, in boot order, each phase's
-   `stop_after` moving `arm_boot` on: the per-CPU block (TPIDR_EL1) and
-   the context switch (the scheduler), PSCI for the other CPUs (their
-   redistributors and ticks); the UART's and the GIC's addresses from
+   `stop_after` moving `arm_boot` on: PSCI for the other CPUs (their
+   per-CPU blocks, redistributors and ticks; IPIs as SGIs; the GIC's
+   pseudo-NMI for state dumps); the UART's and the GIC's addresses from
    the firmware (SPCR, MADT or the device tree); the RTC (PL031). Then
    `hello` reaching its kernel line, which needs step 2's ntdll and the
    ABI.

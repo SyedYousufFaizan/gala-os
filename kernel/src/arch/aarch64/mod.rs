@@ -3,9 +3,10 @@
 //! (`entry`), the PL011 console through a device page mapped into the
 //! bootloader's tables (`serial`, `early_map`), interrupt masking and the
 //! counter (`cpu`), the exit through semihosting (`qemu`), the kernel's
-//! own page tables (`paging`), the GICv3 (`gic`) and the generic timer's
-//! tick (`timer`). The kernel boots that far (the `arm_boot` scenario;
-//! ARCHITECTURE "The aarch64 port").
+//! own page tables (`paging`), the GICv3 (`gic`), the generic timer's
+//! tick (`timer`), kernel stacks and the context switch (`context`), the
+//! per-CPU block (`percpu`). The kernel boots through its scheduler (the
+//! `arm_boot` and `arm_sched` scenarios; ARCHITECTURE "The aarch64 port").
 //!
 //! The rest is still the stub the kernel's aarch64 check (`cargo clippy -p
 //! kernel --target aarch64-unknown-none-softfloat`, in CI) builds against: what has
@@ -46,9 +47,10 @@ fn unported(what: &str) -> ! {
 /// The architecture's name in logs ("firmware: UEFI aarch64").
 pub const NAME: &str = "aarch64";
 
-/// The boot CPU's own state: its exception vectors (every exception is
-/// reported for now, `entry`). The per-CPU block comes with the port.
+/// The boot CPU's own state: its per-CPU block (TPIDR_EL1) and its
+/// exception vectors (`entry`).
 pub fn init_boot_cpu() {
+    percpu::init_bsp();
     entry::install_vectors();
 }
 

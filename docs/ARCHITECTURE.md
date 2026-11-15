@@ -173,10 +173,11 @@ ROADMAP AR, under way on QEMU's `virt` machine (GICv3, a PL011, virtio
 over PCIe), booted by UEFI (QEMU's own edk2 build, or AAVMF) and
 Limine's `BOOTAA64.EFI` from the same kind of ISO as x86-64's (Limine's
 EFI image carries both loaders; the ISO holds the aarch64 kernel). The
-kernel boots through its tick: scenarios `arm_boot` (to
-`stop_after=timer`, the tick seen running), `arm_fault_ud` and
-`arm_fault_pagefault` (the vectors' report); the scheduler (the per-CPU
-block, the context switch) is the next unported step.
+kernel boots through its scheduler: scenarios `arm_boot` (to
+`stop_after=sched`, the tick seen running), `arm_sched` (`schedtest`:
+kernel threads switched, woken, joined), `arm_fault_ud` and
+`arm_fault_pagefault` (the vectors' report); the other CPUs
+(`arch::smp`) are the next unported step.
 
 - **Soft-float**: the kernel is built for
   `aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE: it
@@ -229,6 +230,16 @@ block, the context switch) is the next unported step.
   QEMU with `-semihosting-config enable=on`), with x86-64's statuses (33
   success, 35 failure). There is no ISA bus: no debug console (no event
   stream yet) and no phase port (`bootphase` marks are no-ops).
+- **Threads** (`context.rs`, `percpu.rs`): kernel stacks in a window of
+  guard-paged slots, as x86-64's. The switch saves x19-x30 on the
+  outgoing stack and its SP in the context, and the FP/SIMD registers
+  (V0-V31, FPCR, FPSR: user mode's, the kernel being soft-float) in the
+  context's save area; a new thread starts at a trampoline calling its
+  entry (x19). TPIDR_EL1 points at this CPU's block (index, the running
+  thread's kernel stack, client, personality, the user thread-pointer
+  bases). There is no NMI yet: the state dump's handler is kept and the
+  log says a dump at a timeout is not taken (the GIC's pseudo-NMI comes
+  with the port).
 - **Limits**: the UART's and the GIC's addresses are the board's, not read
   from the firmware (SPCR, MADT or the device tree: the port); one CPU (the others stay
   in Limine's wait loop); no scheduler or user mode; no RTC read (the
@@ -331,6 +342,7 @@ Whitespace-separated `flag` and `key=value` words (`kernel/src/cmdline.rs`).
 | `framecheck` | user mappings of each frame are counted; freeing a frame a user space still maps panics |
 | `eagercommit` | committed private pages get their frames at once instead of at the first touch (no demand-zero faults in user code) |
 | `stop_after=<phase>` | end the boot after that boot phase (`memory_map`, `frames`, `paging`, `timer`, `sched`, `smp_start`, `smp_done`, `drivers`, `manifest`): logged (`boot: stopping after boot phase <phase> (stop_after)`; once interrupts are on, with whether the tick runs: three ticks waited for, at most 2 s), then QEMU exits with success under `qemu_exit` (else the CPU halts). The aarch64 port's scenarios use it while the phases after are unported |
+| `schedtest` | the scheduler's check, just after it starts: two kernel threads yield to each other 100 rounds each, sleep 10 ms and are joined; `schedtest: ok: ...` if they took turns and ended, else `schedtest: failed: ...` (scenarios `arm_sched`, `sched_selftest`) |
 | `early_fault=<ud\|pagefault\|stackoverflow>` | provoke that fault right after the exception vectors are installed, before anything else is up (`fault=` is the same later, on a scheduler thread); scenarios `arm_fault_ud`, `arm_fault_pagefault` |
 | `calwrong`, `calstall` | clock-calibration tests: the first TSC calibration 20x low (the RTC check must catch it), or the boot CPU stalled inside the calibration (scenarios `clockcal_*`; "Interrupts and time") |
 | `failpoint=<point>:<mode>:<n>[,...]` | fault injection while the `start=`/`run=` programs run (debug builds; "Fault injection"). Points `heap`, `frame`, `disk_io`, `net_tx`, `pageout`; modes `every:<n>` (the n-th, 2n-th, ... occurrence fails), `nth:<n>` (only the n-th), `random:<per-mille>` (from `failseed=`). Example: `failpoint=heap:every:97,net_tx:random:50` |

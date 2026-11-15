@@ -163,10 +163,13 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     if let Err(e) = sched::init() {
         panic!("scheduler: {e:?}");
     }
-    phase(&cmdline, "sched");
     // The frames' owner counts (a fork's copy-on-write pages), from the heap.
     mm::init_sharing();
     info!("sched: boot thread {} running, idle thread started", sched::current());
+    if cmdline.flag("schedtest") {
+        sched_selftest();
+    }
+    phase(&cmdline, "sched");
     arch::smp::init_bsp();
     phase(&cmdline, "smp_start");
     start_cpus(&info, &cmdline);
@@ -613,6 +616,47 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
 /// thread that halted in a loop instead stayed "in the kernel without
 /// blocking" forever: the flight recorder's watchdog reported it every
 /// 20 s and its reports pushed every real event out of the ring.)
+/// `schedtest`: the scheduler's own check, early (the aarch64 port's
+/// `arm_sched`, before anything else starts threads): two kernel threads
+/// yield to each other 100 rounds each, then sleep 10 ms (woken by the
+/// tick) and are joined. Logged `schedtest: ok` only if they took turns
+/// (each round's runner differed from the last's almost every time) and
+/// both ended; else what was seen, as an error.
+fn sched_selftest() {
+    use core::sync::atomic::AtomicUsize;
+    const ROUNDS: usize = 100;
+    static LAST: AtomicUsize = AtomicUsize::new(usize::MAX);
+    static TURNS: AtomicUsize = AtomicUsize::new(0);
+    static DONE: AtomicUsize = AtomicUsize::new(0);
+    fn worker(me: usize) {
+        for _ in 0..ROUNDS {
+            if LAST.swap(me, Ordering::Relaxed) != me {
+                TURNS.fetch_add(1, Ordering::Relaxed);
+            }
+            sched::yield_now();
+        }
+        sched::sleep_ms(10);
+        DONE.fetch_add(1, Ordering::Relaxed);
+    }
+    let start = time::raw_monotonic_ns();
+    let spawned = [sched::spawn("schedtest0", worker, 0), sched::spawn("schedtest1", worker, 1)];
+    for id in spawned.iter().flatten() {
+        let _ = sched::join(*id);
+    }
+    let ms = (time::raw_monotonic_ns() - start) / 1_000_000;
+    let (turns, done) = (TURNS.load(Ordering::Relaxed), DONE.load(Ordering::Relaxed));
+    if spawned.iter().all(Result::is_ok) && done == 2 && turns >= ROUNDS && ms >= 10 {
+        info!(
+            "schedtest: ok: 2 threads took {turns} turns in {ROUNDS} rounds each, slept, joined ({ms} ms)"
+        );
+    } else {
+        error!(
+            "schedtest: failed: spawned {:?}, {done} of 2 ended, {turns} turns in {ROUNDS} rounds each, {ms} ms",
+            spawned.map(|r| r.is_ok())
+        );
+    }
+}
+
 /// Marks boot phase `name` (`arch::bootphase`). With `stop_after=<name>`
 /// on the command line the boot ends there: logged, then QEMU exits with
 /// success under `qemu_exit` (else the CPU halts). For scenarios that
