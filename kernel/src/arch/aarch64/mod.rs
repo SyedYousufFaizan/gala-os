@@ -51,6 +51,7 @@ pub const NAME: &str = "aarch64";
 /// The boot CPU's own state: its per-CPU block (TPIDR_EL1) and its
 /// exception vectors (`entry`).
 pub fn init_boot_cpu() {
+    serial::report();
     percpu::init_bsp();
     entry::install_vectors();
 }

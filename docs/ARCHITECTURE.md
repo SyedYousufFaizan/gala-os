@@ -202,9 +202,10 @@ vectors' report). User mode is the next step: no program runs yet.
   layout, then ESR and FAR; 288 bytes), runs `gic::dispatch` and returns
   with `eret`. Every other exception is reported for now (the vector's
   kind and origin, ESR's class named, ELR, FAR, SPSR) and ends the kernel.
-- **Interrupts** (`gic.rs`): a GICv3 (QEMU `virt`'s distributor at
-  0x0800_0000, redistributors from 0x080a_0000: the board's layout),
-  brought up with its first source: the distributor (affinity routing,
+- **Interrupts** (`gic.rs`): a GICv3, where the firmware's MADT says
+  (its GICD entry, the distributor, and GICR entry, the redistributors'
+  range: `gic: GICv3 distributor at ... (the firmware's MADT)`; without
+  them QEMU `virt`'s layout, logged as such), brought up with its first source: the distributor (affinity routing,
   group 1), this CPU's redistributor (found by GICR_TYPER's affinity,
   woken), the CPU interface by its system registers (ICC_SRE, PMR,
   IGRPEN1). An IRQ is acknowledged (ICC_IAR1) and ended (ICC_EOIR1)
@@ -223,8 +224,11 @@ vectors' report). User mode is the next step: no program runs yet.
   device. A device page is added to its TTBR1 tables, in the 2 MiB below
   the kernel image, with MAIR_EL1's slot 2 set to Device-nGnRE (slots
   2-7 are guaranteed unused); missing tables come from a pool in .bss.
-  The console's PL011 (QEMU `virt`'s at 0x0900_0000, the board's fixed
-  layout) is mapped this way by `serial::init`.
+  The console's PL011 is mapped this way by `serial::init`, at the
+  address the firmware's SPCR names (`boot::early_rsdp`: the tables are
+  in the HHDM before `BootInfo`; a PL011 or an SBSA generic UART, same
+  registers; without an SPCR QEMU `virt`'s 0x0900_0000, logged as such:
+  `serial: PL011 at ... (the firmware's SPCR)`).
 - **Page tables** (`arch/aarch64/paging.rs`): the kernel's higher half
   (TTBR1_EL1) is `mm::paging::Mapper` with the `Vmsa` encoding, built as
   x86-64's (the HHDM of the regions Limine maps, the image per segment,
@@ -267,12 +271,13 @@ vectors' report). User mode is the next step: no program runs yet.
   `personality::Dispatchers`), the user-return hook and the user
   exception handler are kept for user mode's paths; KUSER_SHARED_DATA is
   a kernel frame written through the HHDM (`paging::SharedPage`).
-- **Limits**: the UART's and the GIC's addresses are the board's, not read
-  from the firmware (SPCR, the MADT's GICD/GICR entries or the device
-  tree: the port); CPUs the bootloader did not start are not started
+- **Limits**: boots by ACPI only (a device-tree boot falls back to QEMU
+  `virt`'s addresses); the PL031 RTC's address is QEMU `virt`'s (no ACPI
+  table names an RTC: ACPI machines give the time through UEFI's runtime
+  services); CPUs the bootloader did not start are not started
   (PSCI CPU_ON); SGIs reach an Aff0 below 16 only; no NMI (the GIC's
   pseudo-NMI: no state dump at a timeout, no `stop_others`); no user
-  mode; the PL031 RTC's address is the board's too; entered at EL2 with VHE the timer would
+  mode; entered at EL2 with VHE the timer would
   be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
   enrollment is BOOTX64.EFI's).
 

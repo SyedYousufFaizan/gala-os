@@ -40,6 +40,13 @@ pub struct KernelAddress {
 /// straight from Limine's responses: for what must run before
 /// [`collect`] (aarch64's console maps its UART into the bootloader's
 /// page tables with them). None after a kernel handover, or without them.
+/// The RSDP's virtual (HHDM) address from the bootloader, 0 without one:
+/// for what reads the firmware's tables before `BootInfo` (aarch64's
+/// console and GIC).
+pub fn early_rsdp() -> u64 {
+    REQUESTS.rsdp.response().map_or(0, |r| r.address)
+}
+
 pub fn early_addresses() -> Option<(u64, KernelAddress)> {
     let hhdm = REQUESTS.hhdm.response()?.offset;
     let kernel = REQUESTS.executable_address.response()?;

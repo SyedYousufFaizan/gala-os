@@ -1,10 +1,10 @@
 //! The interrupt controller: a GICv3 (Arm's GIC Architecture
-//! Specification, v3 and v4). QEMU `virt`'s (with `gic-version=3`): the
-//! distributor at 0x0800_0000 and the redistributors from 0x080a_0000, the
-//! board's fixed layout like the UART's (the firmware's MADT names them
-//! on other machines: the port reads it). One security state (QEMU's
-//! `virt` without `secure=on`): GICD_CTLR's DS is set, group 1 is the
-//! kernel's.
+//! Specification, v3 and v4), where the firmware's MADT says: its GICD
+//! entry (the distributor) and GICR entry (the redistributors' range).
+//! Without them, QEMU `virt`'s layout (with `gic-version=3`: the
+//! distributor at 0x0800_0000, the redistributors from 0x080a_0000), which
+//! the log says. One security state (QEMU's `virt` without `secure=on`):
+//! GICD_CTLR's DS is set, group 1 is the kernel's.
 //!
 //! Brought up with its first interrupt source (`timer::start_periodic`):
 //! the distributor once (affinity routing, group 1 on), then on each CPU
@@ -20,11 +20,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use super::interrupts::{Handler, TrapFrame};
 use crate::sync::IrqMutex;
 
-const GICD_PHYS: u64 = 0x0800_0000;
-const GICR_PHYS: u64 = 0x080a_0000;
-/// How much of the redistributor region is searched for this CPU's (one
-/// redistributor is 128 KiB: its RD_base frame, then its SGI_base frame).
-const GICR_SPAN: u64 = 0x00f6_0000;
+/// QEMU `virt`'s layout, without the MADT's entries.
+const VIRT_GICD: u64 = 0x0800_0000;
+const VIRT_GICR: u64 = 0x080a_0000;
+const VIRT_GICR_SPAN: u64 = 0x00f6_0000;
+/// One redistributor: its RD_base frame, then its SGI_base frame.
 const GICR_STRIDE: u64 = 0x2_0000;
 
 const GICD_CTLR: u64 = 0x0000;
@@ -48,8 +48,12 @@ const SPURIOUS: u64 = 1020;
 /// The private interrupts (SGIs 0-15, PPIs 16-31) handled here.
 const PRIVATE: usize = 32;
 
-/// The redistributors' region, mapped (0: the distributor is not up).
+/// The redistributors' region, mapped (0: the distributor is not up),
+/// its physical base and its length (searched for each CPU's).
 static GICR: AtomicU64 = AtomicU64::new(0);
+static GICR_PHYS: AtomicU64 = AtomicU64::new(0);
+static GICR_SPAN: AtomicU64 = AtomicU64::new(0);
+static GICD_PHYS: AtomicU64 = AtomicU64::new(0);
 /// Each CPU's redistributor's RD_base, virtual (0: not up), by CPU index.
 static RD_BASE: [AtomicU64; super::smp::MAX_CPUS] =
     [const { AtomicU64::new(0) }; super::smp::MAX_CPUS];
@@ -102,7 +106,29 @@ fn packed(affinity: u64) -> u64 {
 /// Brings the GIC up: the distributor (once), then this CPU's part.
 pub fn init() -> Result<(), GicError> {
     if GICR.load(Ordering::Acquire) == 0 {
-        let gicd = super::paging::map_mmio(GICD_PHYS, 0x1_0000).map_err(GicError::Map)?;
+        let madt = crate::boot::early_addresses()
+            .and_then(|(hhdm, _)| crate::boot::acpi::read_gic(hhdm, crate::boot::early_rsdp()))
+            .unwrap_or_default();
+        let (gicd_phys, (gicr_phys, span)) = match (madt.distributor, madt.redistributors) {
+            (Some(d), Some((r, len))) => {
+                crate::info!(
+                    "gic: GICv3 distributor at {d:#x}, redistributors from {r:#x} ({len:#x} bytes) \
+                     (the firmware's MADT)"
+                );
+                (d, (r, u64::from(len)))
+            }
+            _ => {
+                crate::warn!(
+                    "gic: GICv3 distributor at {VIRT_GICD:#x}, redistributors from {VIRT_GICR:#x} \
+                     (QEMU virt's: the firmware's MADT names no GICD and GICR)"
+                );
+                (VIRT_GICD, (VIRT_GICR, VIRT_GICR_SPAN))
+            }
+        };
+        GICD_PHYS.store(gicd_phys, Ordering::Relaxed);
+        GICR_PHYS.store(gicr_phys, Ordering::Relaxed);
+        GICR_SPAN.store(span, Ordering::Relaxed);
+        let gicd = super::paging::map_mmio(gicd_phys, 0x1_0000).map_err(GicError::Map)?;
         write32(gicd + GICD_CTLR, GICD_CTLR_ENABLE);
         for _ in 0..1_000_000 {
             if read32(gicd + GICD_CTLR) & GICD_CTLR_RWP == 0 {
@@ -110,7 +136,7 @@ pub fn init() -> Result<(), GicError> {
             }
             core::hint::spin_loop();
         }
-        let gicr = super::paging::map_mmio(GICR_PHYS, GICR_SPAN).map_err(GicError::Map)?;
+        let gicr = super::paging::map_mmio(gicr_phys, span).map_err(GicError::Map)?;
         GICR.store(gicr, Ordering::Release);
     }
     init_cpu()
@@ -124,10 +150,11 @@ pub fn init_cpu() -> Result<(), GicError> {
         return Ok(());
     }
     let gicr = GICR.load(Ordering::Acquire);
+    let span = GICR_SPAN.load(Ordering::Relaxed);
     let me = packed(affinity());
     let mut rd = None;
     let mut at = gicr;
-    while gicr != 0 && at < gicr + GICR_SPAN {
+    while gicr != 0 && at + GICR_STRIDE <= gicr + span {
         let typer = read64(at + GICR_TYPER);
         if typer >> 32 == me {
             rd = Some(at);
@@ -181,8 +208,9 @@ pub fn init_cpu() -> Result<(), GicError> {
         }
     }
     crate::info!(
-        "gic: CPU {cpu}: GICv3 redistributor (affinity {me:#x}) at {:#x}, distributor at {GICD_PHYS:#x}",
-        GICR_PHYS + (rd - gicr)
+        "gic: CPU {cpu}: GICv3 redistributor (affinity {me:#x}) at {:#x}, distributor at {:#x}",
+        GICR_PHYS.load(Ordering::Relaxed) + (rd - gicr),
+        GICD_PHYS.load(Ordering::Relaxed)
     );
     Ok(())
 }

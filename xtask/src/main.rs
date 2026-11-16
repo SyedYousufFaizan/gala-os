@@ -12302,11 +12302,13 @@ const SCENARIOS: &[Scenario] = &[
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             "gala-os kernel",
+            "serial: PL011 at 0x9000000 (the firmware's SPCR)",
             "firmware: UEFI aarch64",
             "memory map (",
             "frames: ",
             "paging: own tables at ",
             "timer: generic timer (virtual channel, PPI 27), counter at ",
+            "gic: GICv3 distributor at 0x8000000, redistributors from 0x80a0000 (0xf60000 bytes) (the firmware's MADT)",
             "gic: CPU 0: GICv3",
             "interrupts enabled, tick ",
             "smp: bootloader: 2 CPU(s), BSP MPIDR 0: 0 1",
