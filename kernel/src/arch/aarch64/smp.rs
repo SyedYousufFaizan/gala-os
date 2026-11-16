@@ -319,9 +319,10 @@ pub fn moved_flushes() -> u64 {
     0
 }
 
-pub fn flush_user_space(_root: u64, _changed_on: Option<u32>) {
-    unported("smp::flush_user_space")
-}
+/// Nothing left at a space lock's release: every change was dropped from
+/// every CPU's TLB under the lock (`paging::invalidate_user_page`, a
+/// broadcast completed by its DSB).
+pub fn flush_user_space(_root: u64, _changed_on: Option<u32>) {}
 
 pub fn online_count() -> u32 {
     online_mask().count_ones()
