@@ -281,7 +281,10 @@ faults, its exit).
   is MSFT_OP_CONTEXT (`.seh_context`), so a walk continues into the
   faulting function; RtlUnwindEx resumes the target with x0 the return
   value, after a consolidation callback run in a frame described the same
-  way (`arm_seh`). NtGetContextThread and NtSetContextThread exchange
+  way (`arm_seh`). Function tables (an image's and those registered at
+  run time: RtlAddFunctionTable, the growable ones, callbacks) are one
+  registry for both architectures (`testntdll/src/ftable.rs`), each
+  `seh` module giving its entry format. NtGetContextThread and NtSetContextThread exchange
   the parts ContextFlags names with the caller's registers or a
   suspended thread's parked state (`context::fill`, `context::apply`;
   `arm_context`, `arm_threadinfo`).
@@ -381,9 +384,9 @@ faults, its exit).
   Aff0 below 16 only; xtask cannot ask for a state dump at a timeout
   (QEMU `virt` has no NMI for its monitor's `nmi`: "machine does not
   provide NMIs"); no `stop_others` (its one user, the hot swap, is
-  x86-64's); in user mode the unwinder does not read function tables
-  registered at run time, `.pdata` link records (jump islands), SVE
-  state or the trap-frame and x64-context codes (a frame that needs one
+  x86-64's); in user mode the unwinder does not read `.pdata` link
+  records (jump islands), SVE state or the trap-frame and x64-context
+  codes (a frame that needs one
   ends the walk, the ledger names the code); the page file's aging is not safe
   here (it relies on hardware-set accessed and dirty bits: FEAT_HAFDBS
   is not turned on); entered at EL2 with VHE the timer would

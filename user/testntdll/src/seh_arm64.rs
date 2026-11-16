@@ -9,8 +9,9 @@
 //! a function's body), as Wine's arm64 unwinder does
 //! (`dlls/ntdll/unwind.c`, read as a description of Windows' behaviour).
 //!
-//! - `RtlLookupFunctionEntry` finds the 8-byte RUNTIME_FUNCTION covering a
-//!   pc in its image's exception directory.
+//! - `RtlLookupFunctionEntry` (`ftable.rs`, shared with x64) finds the
+//!   8-byte RUNTIME_FUNCTION covering a pc in its image's exception
+//!   directory or in a table registered at run time.
 //! - `RtlVirtualUnwind` undoes one frame in a CONTEXT: packed unwind data
 //!   is expanded into the unwind codes of its canonical prologue and
 //!   epilogue; a pc inside a prologue undoes only the instructions that
@@ -31,8 +32,7 @@
 //! - `RtlCaptureContext`, `RtlRaiseException`, `RtlUnwindEx` and
 //!   `RtlUnwind` start from their caller's registers.
 //!
-//! Not yet: function tables registered at run time (RtlAddFunctionTable
-//! and the growable ones), `.pdata` link records (Flag 3: jump islands),
+//! Not yet: `.pdata` link records (Flag 3: jump islands),
 //! SVE state (alloc_z, save_zreg, save_preg), trap frames
 //! (MSFT_OP_TRAP_FRAME) and x64 contexts (MSFT_OP_EC_CONTEXT); a frame
 //! that needs one ends the walk, which the ledger records. Nested
@@ -40,7 +40,8 @@
 
 use core::arch::global_asm;
 
-use crate::{NtContinue, NtTerminateProcess, image_of, rd32};
+use crate::ftable::lookup;
+use crate::{NtContinue, NtTerminateProcess, rd32};
 
 /// The ARM64 CONTEXT (ARM64_NT_CONTEXT): ContextFlags, Cpsr, X0-X28, Fp,
 /// Lr, Sp, Pc, V0-V31, Fpcr, Fpsr, the debug registers.
@@ -155,9 +156,16 @@ fn function_length(base: usize, f: &RuntimeFunction) -> u32 {
     }
 }
 
-/// The entry of `table` (`count` entries, sorted) covering `rva`.
-fn search(
-    base: usize,
+// The tables themselves (an image's, and those registered at run time)
+// are `ftable.rs`'s, shared with x64; these are ARM64's entry format.
+
+/// sizeof(IMAGE_ARM64_RUNTIME_FUNCTION_ENTRY).
+pub(crate) const ENTRY_SIZE: usize = 8;
+
+/// The entry of `table` (`count` entries, sorted, relative to `base`)
+/// covering `rva`.
+pub(crate) fn search(
+    base: u64,
     table: *const RuntimeFunction,
     count: usize,
     rva: u32,
@@ -169,7 +177,7 @@ fn search(
         let f = unsafe { &*table.add(mid) };
         if rva < f.begin {
             hi = mid;
-        } else if rva >= f.begin + function_length(base, f) {
+        } else if rva >= f.begin + function_length(base as usize, f) {
             lo = mid + 1;
         } else {
             return f;
@@ -178,34 +186,9 @@ fn search(
     core::ptr::null()
 }
 
-/// The image base and the RUNTIME_FUNCTION covering `pc` (null: none, a
-/// leaf function or no image).
-fn lookup(pc: u64) -> (u64, *const RuntimeFunction) {
-    let Some(base) = image_of(pc as usize) else { return (0, core::ptr::null()) };
-    let (rva, size) = crate::directory(base, 3); // IMAGE_DIRECTORY_ENTRY_EXCEPTION
-    if rva == 0 {
-        return (base as u64, core::ptr::null());
-    }
-    let table = (base + rva) as *const RuntimeFunction;
-    (base as u64, search(base, table, size / 8, (pc as usize - base) as u32))
-}
-
-/// RtlLookupFunctionEntry(ControlPc, *ImageBase, HistoryTable): the
-/// RUNTIME_FUNCTION covering the pc (null if none) and its image base.
-///
-/// # Safety
-/// `base` must be writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn RtlLookupFunctionEntry(
-    pc: u64,
-    base: *mut u64,
-    _history: *mut u8,
-) -> *const RuntimeFunction {
-    let (image, f) = lookup(pc);
-    if !base.is_null() {
-        // SAFETY: the caller's output.
-        unsafe { *base = if f.is_null() { 0 } else { image } };
-    }
+/// The entry the lookup returns for `f`: itself (a link record, which
+/// would name its parent, is not followed yet).
+pub(crate) fn resolve(_base: u64, f: *const RuntimeFunction) -> *const RuntimeFunction {
     f
 }
 

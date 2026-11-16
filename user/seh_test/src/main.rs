@@ -43,8 +43,9 @@
 //!   reaches the target frame, and execution continues at the address it
 //!   returns with the return value in rax (x0).
 //!
-//! On ARM64 the function tables (the indirect and growable entries) are
-//! not tested yet: gala's ntdll reads only an image's .pdata there.
+//! The function tables' checks are each architecture's (x64's: an indirect
+//! entry and a growable table; ARM64's: a table and a growable one, in its
+//! 8-byte entries; ARM64 has no indirect entries).
 //!
 //! Prints `seh_test: ok` or exits with the number of the failing check.
 
