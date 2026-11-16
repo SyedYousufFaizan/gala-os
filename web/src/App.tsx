@@ -1,338 +1,383 @@
-import { useEffect, useState } from "react";
 import {
-  architecture,
+  componentGroups,
   decisions,
-  layers,
-  programs,
-  type Layer,
+  focus,
+  insideTools,
+  linuxPrograms,
+  planned,
+  repoTools,
+  shots,
+  statusLabel,
+  toolGroups,
+  windowsPrograms,
+  type Program,
   type Status,
 } from "./content";
+import { Flow, LayerStack, Progress, TestLoop, WindowPaths } from "./Diagrams";
 import { Section } from "./Section";
-import { Wall } from "./Wall";
 
 const REPO = "https://github.com/bjorn-ali-goransson/gala-os";
 const DOCS = `${REPO}/tree/main/docs`;
+const doc = (name: string) => `${REPO}/blob/main/docs/${name}`;
 
-const layerOrder: Layer[] = ["core", "nt", "shell", "linux", "project"];
-
-const statusLabel: Record<Status, string> = {
-  works: "Runs today",
-  building: "Being built",
-  planned: "Designed, not built",
-};
-
-/** Screenshots of gala running. Drop files in public/shots/ and add them here. */
-const shots: { src: string; caption: string }[] = [
-  {
-    src: "/shots/crash-screen-layout.png",
-    caption:
-      "A crashed program on shasha's desktop: the report gala leaves behind names the fault, the module and the stack.",
-  },
-  {
-    src: "/shots/crash-screen-art.png",
-    caption:
-      "The same screen in full. Nothing here is Windows' code — the window, the controls and the text are gala's own.",
-  },
+const nav = [
+  { id: "how", label: "How it works" },
+  { id: "components", label: "Components" },
+  { id: "now", label: "In progress" },
+  { id: "runs", label: "What runs" },
+  { id: "tooling", label: "Tooling" },
 ];
 
-const toc = [
-  { id: "overview", label: "What gala is" },
-  { id: "runs", label: "What runs on it" },
-  {
-    id: "architecture",
-    label: "Architecture",
-    children: layerOrder.map((l) => ({
-      id: `layer-${l}`,
-      label: layers[l].name,
-    })),
-  },
-  { id: "decisions", label: "Design decisions" },
-  { id: "screens", label: "Screenshots" },
-];
-
-function useActiveSection(ids: string[]) {
-  const [active, setActive] = useState(ids[0]);
-  useEffect(() => {
-    const seen = new Map<string, number>();
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          seen.set(e.target.id, e.intersectionRatio);
-        }
-        let best = "";
-        let bestRatio = 0;
-        for (const [id, ratio] of seen) {
-          if (ratio > bestRatio) {
-            best = id;
-            bestRatio = ratio;
-          }
-        }
-        if (best) setActive(best);
-      },
-      { rootMargin: "-10% 0px -60% 0px", threshold: [0, 0.25, 0.5, 1] },
-    );
-    for (const id of ids) {
-      const el = document.getElementById(id);
-      if (el) observer.observe(el);
-    }
-    return () => observer.disconnect();
-  }, [ids.join(",")]);
-  return active;
+function Logo() {
+  // The fortress of the boot screen, reduced to its outline.
+  return (
+    <svg className="logo" viewBox="0 0 40 28" aria-hidden="true">
+      <path d="M3 27 L6 8 h-1 l1-3 2 1.5 2-2 2 2 2-2 2 2 2-1.5 1 3 h-1 l0.4 4 L31 17 l0.2-2 h-0.6 l0.6-2 1.4 1 1.4-1.2 1.4 1.2 1.4-1 0.6 2 h-0.6 L38 27 Z" />
+    </svg>
+  );
 }
 
-function StatusMark({ status }: { status: Status }) {
+function StatusTag({ status }: { status: Status }) {
+  return <span className={`tag tag-${status}`}>{statusLabel[status]}</span>;
+}
+
+function ProgramList({ programs }: { programs: Program[] }) {
   return (
-    <span className={`mark mark-${status}`} title={statusLabel[status]}>
-      <span className="mark-glyph" aria-hidden="true" />
-      <span className="mark-text">{statusLabel[status]}</span>
-    </span>
+    <ul className="programs">
+      {programs.map((p) => (
+        <li key={p.name}>
+          <p className="program-name">
+            {p.name}
+            {p.version && <span> {p.version}</span>}
+          </p>
+          <p className="program-what">{p.what}</p>
+          <p className="program-sc">
+            {p.scenarios.map((s) => (
+              <code key={s}>{s}</code>
+            ))}
+          </p>
+        </li>
+      ))}
+    </ul>
   );
 }
 
 export function App() {
-  const ids = toc.flatMap((t) => [t.id, ...(t.children?.map((c) => c.id) ?? [])]);
-  const active = useActiveSection(ids);
-
   return (
     <>
-      <a className="skip" href="#overview">
+      <a className="skip" href="#main">
         Skip to content
       </a>
 
-      <header className="masthead">
-        <div className="shell masthead-in">
-          <a className="wordmark" href="/">
-            gala
-            <span className="wordmark-ar" lang="ar" aria-hidden="true">
+      <header className="top">
+        <div className="wrap top-in">
+          <a className="brand" href="/">
+            <Logo />
+            <span>gala</span>
+            <span className="brand-ar" lang="ar">
               قلعة
             </span>
           </a>
-          <nav className="masthead-nav" aria-label="Elsewhere">
-            <a href={DOCS}>Documentation</a>
-            <a href={REPO}>Source</a>
+          <nav className="top-nav" aria-label="Sections">
+            {nav.map((n) => (
+              <a key={n.id} href={`#${n.id}`}>
+                {n.label}
+              </a>
+            ))}
+            <a href={REPO} className="top-src">
+              Source
+            </a>
           </nav>
         </div>
       </header>
 
-      <main>
-        <div className="hero">
-          <div className="shell hero-in">
-            <h1 className="hero-title">
-              An operating system that runs Windows programs
-              <span className="hero-title-sub">
-                and owes Windows nothing underneath
-              </span>
-            </h1>
-            <p className="hero-lede">
-              gala is a from-scratch x86_64 kernel written in Rust. It
-              implements the Windows system call interface and ships its own
-              clean-room <code>ntdll.dll</code>, <code>kernel32.dll</code> and
-              about fifty other system libraries, so Windows executables run on
-              it exactly as their makers shipped them. Below that boundary,
-              every line is gala's own design.
-            </p>
-            <Wall />
-          </div>
+      <main id="main">
+        <div className="hero wrap">
+          <p className="eyebrow">A from-scratch operating system in Rust</p>
+          <h1>Runs Windows programs. Owes Windows nothing underneath.</h1>
+          <p className="lede">
+            gala is a new kernel that speaks the Windows system call
+            interface and ships its own clean-room <code>ntdll.dll</code>,{" "}
+            <code>kernel32.dll</code> and more than eighty other system
+            libraries. Windows programs run on it as their makers shipped
+            them. A second personality on the same kernel runs Linux
+            programs too, on the same desktop.
+          </p>
+          <p className="hero-links">
+            <a className="btn" href="#how">
+              How it works
+            </a>
+            <a className="btn btn-quiet" href={DOCS}>
+              Documentation
+            </a>
+          </p>
+          <figure className="hero-shot">
+            <img
+              src="/shots/start-menu.webp"
+              width={1280}
+              height={800}
+              alt="gala's desktop with the start menu open: pinned apps, and Ubuntu under Linux distributions."
+            />
+          </figure>
         </div>
 
-        <div className="shell layout">
-          <nav className="rail" aria-label="On this page">
-            <ul>
-              {toc.map((t) => (
-                <li key={t.id}>
-                  <a
-                    href={`#${t.id}`}
-                    className={active === t.id ? "is-active" : undefined}
-                  >
-                    {t.label}
+        <div className="wrap">
+          <Section
+            id="how"
+            title="How it works"
+            intro="An operating system is built in layers. A program asks the layer below for what it needs, and the request travels down until something can do the work. gala's trick is at one particular layer: the system call boundary."
+          >
+            <LayerStack />
+
+            <div className="explain">
+              <div>
+                <h3>Why the system call boundary?</h3>
+                <p>
+                  A Windows program never talks to the hardware. It calls
+                  functions in system DLLs such as <code>kernel32.dll</code>,
+                  and those end in <code>ntdll.dll</code>, which asks the
+                  kernel through a numbered <em>system call</em>. If gala
+                  provides the same DLLs and answers the same system calls
+                  the same way, the program cannot tell the difference.
+                </p>
+              </div>
+              <div>
+                <h3>Why not copy Windows&rsquo; internals?</h3>
+                <p>
+                  Because they aren&rsquo;t needed and aren&rsquo;t ours to
+                  copy. Below the boundary, gala&rsquo;s memory manager,
+                  scheduler, file system and drivers are its own design.
+                  That leaves them free to change, for example to be
+                  replaced while programs are still running.
+                </p>
+              </div>
+              <div>
+                <h3>Where does Linux fit?</h3>
+                <p>
+                  A personality is a translation layer from one
+                  system&rsquo;s calls to the core. gala has two. Linux
+                  programs bring their own libraries (glibc, GTK) and make
+                  Linux system calls, and the Linux layer answers them with
+                  the same core the Windows layer uses.
+                </p>
+              </div>
+            </div>
+
+            <h3 className="dia-title">One system call, step by step</h3>
+            <p className="dia-intro">
+              What happens when a program reads a file:
+            </p>
+            <Flow
+              label="The path of a ReadFile call through gala"
+              steps={[
+                { lane: "user", title: "ReadFile", detail: "the program calls kernel32.dll" },
+                { lane: "user", title: "NtReadFile", detail: "kernel32 calls into ntdll.dll" },
+                { lane: "user", title: "syscall", detail: "ntdll puts the call's number in a register and enters the kernel" },
+                { lane: "kernel", title: "Entry and dispatch", detail: "registers saved; the number picks the service" },
+                { lane: "kernel", title: "Handle and access", detail: "the handle names a file object; the caller's token is checked" },
+                { lane: "kernel", title: "File system", detail: "the data comes from C:, through the disk driver if needed" },
+                { lane: "user", title: "Back", detail: "a status code returns and the program carries on" },
+              ]}
+              caption="Every system call also feeds gala's own diagnostics. A function that gala lacks is listed in a ledger at the end of the run, so no gap stays hidden."
+            />
+
+            <h3 className="dia-title">From power-on to the first program</h3>
+            <Flow
+              label="The boot sequence"
+              steps={[
+                { title: "Firmware", detail: "UEFI or BIOS" },
+                { title: "Limine", detail: "loads the kernel and its files" },
+                { title: "Kernel start", detail: "memory, clock, every CPU" },
+                { title: "Drivers", detail: "disk, network, screen" },
+                { title: "C: assembled", detail: "DLLs, registry, user profiles" },
+                { title: "Programs", detail: "services, then the desktop" },
+              ]}
+            />
+
+            <h3 className="dia-title">Two systems, one desktop</h3>
+            <WindowPaths />
+          </Section>
+
+          <Section
+            id="components"
+            title="The components"
+            intro="Each component below is a subsystem described in docs/ARCHITECTURE.md. The path shows where its code lives in the repository."
+          >
+            {componentGroups.map((g) => (
+              <div className="group" key={g.id} id={`c-${g.id}`}>
+                <div className="group-head">
+                  <h3>{g.title}</h3>
+                  <p>{g.intro}</p>
+                </div>
+                <ul className="cards">
+                  {g.items.map((c) => (
+                    <li key={c.name}>
+                      <div className="card-top">
+                        <h4>{c.name}</h4>
+                        <StatusTag status={c.status} />
+                      </div>
+                      <p>{c.what}</p>
+                      {c.path && <code className="card-path">{c.path}</code>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </Section>
+
+          <Section
+            id="now"
+            title="In progress now"
+            intro="The two large efforts under way. Filled dots are done, a ringed dot is being worked on, and hollow dots come later."
+          >
+            <div className="focus">
+              {focus.map((f) => (
+                <article key={f.id} id={`now-${f.id}`}>
+                  <h3>{f.title}</h3>
+                  <p>{f.lede}</p>
+                  <Progress steps={f.steps} />
+                </article>
+              ))}
+            </div>
+          </Section>
+
+          <Section
+            id="runs"
+            title="What runs today"
+            intro="Each program below is held to a boot scenario, named under it. The test harness boots gala in a virtual machine, runs the program and checks its output against what real Windows (or real Linux) gives."
+          >
+            <h3 className="sub">Windows programs, unmodified</h3>
+            <ProgramList programs={windowsPrograms} />
+            <h3 className="sub">Linux programs</h3>
+            <ProgramList programs={linuxPrograms} />
+
+            <h3 className="sub" id="screens">
+              On the screen
+            </h3>
+            <div className="shots">
+              {shots.map((s) => (
+                <figure key={s.src}>
+                  <a href={s.src}>
+                    <img src={s.src} width={1280} height={800} alt={`${s.title}: ${s.caption}`} loading="lazy" />
                   </a>
-                  {t.children && (
-                    <ul className="rail-sub">
-                      {t.children.map((c) => (
-                        <li key={c.id}>
-                          <a
-                            href={`#${c.id}`}
-                            className={
-                              active === c.id ? "is-active" : undefined
-                            }
-                          >
-                            {c.label}
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                  <figcaption>
+                    <b>{s.title}.</b> {s.caption}
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+
+            <h3 className="sub">Planned</h3>
+            <ul className="planned">
+              {planned.map((p) => (
+                <li key={p.name}>
+                  <b>{p.name}</b>
+                  <span>{p.what}</span>
                 </li>
               ))}
             </ul>
-          </nav>
+            <p className="aside">
+              The full plan, item by item, is in the{" "}
+              <a href={doc("ROADMAP.md")}>roadmap</a>.
+            </p>
+          </Section>
 
-          <div className="body">
-            <Section id="overview" title="What gala is">
-              <p>
-                A kernel, a set of system libraries and a graphical shell,
-                written from nothing over the last years in Rust. The goal is
-                plain: take a program built for Windows &mdash; by MSVC,
-                mingw-w64, Go or Rust, or downloaded from its vendor as a
-                release &mdash; and run it unchanged, on a kernel whose
-                internals belong to this project.
-              </p>
-              <p>
-                That is already true for a surprising amount of software. A Java
-                virtual machine compiles and runs a program. PostgreSQL makes a
-                cluster and serves queries over the network. OpenSSH accepts a
-                login over a pseudo console, with line editing and Ctrl+C.
-                TinyCC compiles itself on gala into a second compiler that
-                behaves the same. Chromium opens a window and answers
-                ChromeDriver.
-              </p>
-              <p>
-                The name comes from the Arabic <i lang="ar">qal&rsquo;a</i>,
-                fortress &mdash; and it is a play on Windows. It belongs to a
-                family of foundational software built and controlled in Saudi
-                Arabia rather than rented from elsewhere, which is also where
-                its values come from: collect nothing that is not needed, keep
-                the trusted core small, and say plainly what the system does.
-              </p>
-              <div className="pillars">
-                <div>
-                  <h3>One kernel, two personalities</h3>
-                  <p>
-                    Windows binaries go through the NT personality; Linux
-                    binaries go through their own system call layer. Both sit on
-                    the same memory manager, scheduler and drivers.
-                  </p>
-                </div>
-                <div>
-                  <h3>Updated without a reboot</h3>
-                  <p>
-                    The system image and the kernel itself are designed to be
-                    replaced underneath running programs. The handover already
-                    works with programs blocked in waits, in I/O and on open TCP
-                    connections.
-                  </p>
-                </div>
-                <div>
-                  <h3>Servers and desktops, undivided</h3>
-                  <p>
-                    A machine with no screen never starts a graphical interface.
-                    A desktop gets <b>shasha</b>, gala&rsquo;s shell &mdash; and
-                    everything shasha does can be done from a terminal instead.
-                  </p>
-                </div>
-              </div>
-            </Section>
+          <Section
+            id="tooling"
+            title="Tooling"
+            intro="Building an operating system is mostly a matter of finding out why something went wrong. Much of gala's code exists to make that fast: one command drives everything, and every failure leaves an explanation behind."
+          >
+            <h3 className="dia-title">The loop every change follows</h3>
+            <TestLoop />
 
-            <Section
-              id="runs"
-              title="What runs on it"
-              intro="Each program below is held to a boot scenario: the test harness starts gala in a virtual machine, runs the program, and compares what comes out against what real Windows gives for the same binary. The names in the margin are those scenarios."
-            >
-              <ul className="programs">
-                {programs.map((p) => (
-                  <li key={p.name}>
-                    <div className="program-head">
-                      <h3>
-                        {p.name}
-                        {p.version && (
-                          <span className="program-ver"> {p.version}</span>
-                        )}
-                      </h3>
-                      <p>{p.what}</p>
-                    </div>
-                    <ul className="scenarios" aria-label="Boot scenarios">
-                      {p.scenarios.map((s) => (
-                        <li key={s}>
-                          <code>{s}</code>
-                        </li>
-                      ))}
-                    </ul>
-                  </li>
-                ))}
-              </ul>
-              <p className="aside">
-                Underneath them sits the surface those programs actually use,
-                checked call by call: processes and threads, virtual memory and
-                sections, the synchronisation primitives, structured exception
-                handling and unwinding, a case-insensitive file system with
-                Windows share semantics, the registry, access tokens and
-                security descriptors, sessions, consoles and pseudo consoles,
-                Winsock, and windows on the screen.
-              </p>
-            </Section>
-
-            <Section
-              id="architecture"
-              title="Architecture"
-              intro="Every section of the design, by the layer it belongs to. The whole reference is in the repository; this is its map."
-            >
-              {layerOrder.map((l) => (
-                <div className="layer" id={`layer-${l}`} key={l}>
-                  <div className="layer-head">
-                    <h3>{layers[l].name}</h3>
-                    <p>{layers[l].blurb}</p>
-                  </div>
-                  <ul className="entries">
-                    {architecture
-                      .filter((e) => e.layer === l)
-                      .map((e) => (
-                        <li key={e.title}>
-                          <div className="entry-top">
-                            <h4>{e.title}</h4>
-                            <StatusMark status={e.status} />
-                          </div>
-                          <p>{e.summary}</p>
-                        </li>
-                      ))}
-                  </ul>
+            <div className="toolgroups">
+              {toolGroups.map((g) => (
+                <div key={g.title} className="toolgroup">
+                  <h3>{g.title}</h3>
+                  <p>{g.intro}</p>
+                  <dl>
+                    {g.tools.map((t) => (
+                      <div key={t.cmd}>
+                        <dt>
+                          <code>{t.cmd}</code>
+                        </dt>
+                        <dd>{t.what}</dd>
+                      </div>
+                    ))}
+                  </dl>
                 </div>
               ))}
-            </Section>
+            </div>
 
-            <Section
-              id="decisions"
-              title="Design decisions"
-              intro="The choices that shape everything else, and the reasons they were made."
-            >
-              <dl className="decisions">
-                {decisions.map((d) => (
-                  <div key={d.title}>
-                    <dt>{d.title}</dt>
-                    <dd>{d.body}</dd>
-                  </div>
-                ))}
-              </dl>
-            </Section>
-
-            <Section id="screens" title="Screenshots">
-              <div className="shots">
-                {shots.map((s) => (
-                  <figure key={s.src}>
-                    <img src={s.src} alt={s.caption} loading="lazy" />
-                    <figcaption>{s.caption}</figcaption>
-                  </figure>
-                ))}
+            <div className="twocol">
+              <div>
+                <h3>Beside the code</h3>
+                <dl className="plain">
+                  {repoTools.map((t) => (
+                    <div key={t.name}>
+                      <dt>{t.name}</dt>
+                      <dd>{t.what}</dd>
+                    </div>
+                  ))}
+                </dl>
               </div>
-            </Section>
-          </div>
+              <div>
+                <h3>Inside gala</h3>
+                <dl className="plain">
+                  {insideTools.map((t) => (
+                    <div key={t.name}>
+                      <dt>
+                        <code>{t.name}</code>
+                      </dt>
+                      <dd>{t.what}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            </div>
+            <p className="aside">
+              Every command, with its options and pitfalls, is in{" "}
+              <a href={doc("WORKFLOW.md")}>WORKFLOW.md</a>.
+            </p>
+          </Section>
+
+          <Section
+            id="principles"
+            title="Principles"
+            intro="The rules every contribution is held to."
+          >
+            <dl className="principles">
+              {decisions.map((d) => (
+                <div key={d.title}>
+                  <dt>{d.title}</dt>
+                  <dd>{d.body}</dd>
+                </div>
+              ))}
+            </dl>
+          </Section>
         </div>
       </main>
 
       <footer className="foot">
-        <div className="shell foot-in">
-          <p className="foot-name">
-            gala
-            <span lang="ar"> قلعة</span>
+        <div className="wrap foot-in">
+          <p className="brand">
+            <Logo />
+            <span>gala</span>
+            <span className="brand-ar" lang="ar">
+              قلعة
+            </span>
           </p>
           <nav aria-label="Links">
             <a href={REPO}>Source</a>
             <a href={DOCS}>Documentation</a>
-            <a href={`${REPO}/blob/main/docs/CLEAN_ROOM.md`}>Clean-room rules</a>
-            <a href={`${REPO}/blob/main/docs/ROADMAP.md`}>Roadmap</a>
+            <a href={doc("ARCHITECTURE.md")}>Architecture</a>
+            <a href={doc("ROADMAP.md")}>Roadmap</a>
+            <a href={doc("CLEAN_ROOM.md")}>Clean-room rules</a>
           </nav>
           <p className="foot-note">
-            The source is public so that it can be read. No licence is granted;
-            see the repository.
+            The name is the Arabic <i lang="ar-Latn">qal&rsquo;a</i>,
+            fortress. The source is public so that it can be read; no
+            licence is granted.
           </p>
         </div>
       </footer>

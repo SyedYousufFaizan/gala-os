@@ -10,6 +10,7 @@
     />
     <link rel="canonical" href="https://gala-os.com/" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta name="theme-color" content="#0b1530" />
     <meta property="og:title" content="gala — a Rust kernel that runs Windows programs" />
     <meta
       property="og:description"
@@ -19,10 +20,10 @@
     <meta property="og:url" content="https://gala-os.com/" />
     <meta property="og:site_name" content="gala" />
     <meta property="og:locale" content="en" />
-    <meta property="og:image" content="https://gala-os.com/shots/crash-screen-layout.png" />
+    <meta property="og:image" content="https://gala-os.com/shots/start-menu.jpg" />
     <meta
       property="og:image:alt"
-      content="A crashed Windows program on gala's own desktop, with the fault report gala leaves behind."
+      content="gala's desktop with the start menu open: pinned Windows apps, and Ubuntu under Linux distributions."
     />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="gala — a Rust kernel that runs Windows programs" />
@@ -30,7 +31,7 @@
       name="twitter:description"
       content="A from-scratch x86_64 kernel in Rust. Unmodified Windows programs, clean-room system DLLs, a Linux personality on the same core."
     />
-    <meta name="twitter:image" content="https://gala-os.com/shots/crash-screen-layout.png" />
+    <meta name="twitter:image" content="https://gala-os.com/shots/start-menu.jpg" />
     <!-- Structured data: what the project is, in the form search engines and
          assistants read directly rather than inferring from the prose. -->
     <script type="application/ld+json">
@@ -49,12 +50,6 @@
         "author": { "@type": "Person", "name": "Bjorn Ali Goransson" }
       }
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
     <!-- Page counts (Ali Web Services). `defer` so it never delays the
          render, and the page is prerendered anyway, so a blocked or failed
          script costs nothing but the count. `data-site` is the site's
