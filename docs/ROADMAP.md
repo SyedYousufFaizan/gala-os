@@ -4288,7 +4288,9 @@ on the seams item PT prepared: native ARM64 Windows programs
   build's stubs make `svc #N`; a process starts at LdrInitializeThunk
   with ARM64's CONTEXT (`nt::abi::arm64::context`, host-tested), which
   NtContinue resumes (floating-point part included); NtCreateThread
-  reads it; imports bind from ARM64 DLLs. ntrt's 64-bit runtime is one
+  reads it; imports bind from ARM64 DLLs. Threads, the synchronization
+  objects and waits run as on x64 (`arm_thread`, `arm_sync`,
+  `arm_wait`). ntrt's 64-bit runtime is one
   for x64 and ARM64 (`nt64.rs`), so the x64 test programs build for
   ARM64 as they are.
 - Devices where the firmware says: the console's PL011 from the SPCR,
@@ -4304,9 +4306,11 @@ on the seams item PT prepared: native ARM64 Windows programs
    exception frame in the kernel, KiUserExceptionDispatcher and .pdata
    unwinding in gala's ntdll: `exception_test`, `seh_test`), the APC
    frame (KiUserApcDispatcher, NtContinue's TestAlert: `apc_test`),
-   NtGetContextThread and NtSetContextThread (`context_test`), threads
-   (`thread_test` and the others that make them); more test programs in
-   USER_PROGRAMS_ARM64; Linux's aarch64 ABI (`lx::machine::aarch64`, its
+   NtGetContextThread and NtSetContextThread (`context_test`,
+   `threadinfo_test`); kernel32 needs ntdll's exception exports
+   (RtlRaiseException, RtlSetUnhandledExceptionFilter: `seh.rs` is x64's
+   only), so programs on kernel32 (`tls_test`) wait for those; more test
+   programs in USER_PROGRAMS_ARM64; Linux's aarch64 ABI (`lx::machine::aarch64`, its
    system call table).
 3. CI: the aarch64 boot scenarios on GitHub's ARM64 runners (free for
    public repositories) or under QEMU's emulation.
