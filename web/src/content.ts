@@ -233,7 +233,7 @@ export const componentGroups: ComponentGroup[] = [
         name: "File explorer",
         path: "user/explorer",
         status: "works",
-        what: "One tree for every file system: C:, each Linux distribution and the Linux root, with search, copy, paste, rename, delete, properties with Linux permissions, and folders that update live.",
+        what: "One tree for the Windows drives and each Linux distribution, with search, copy, paste, rename, delete, properties with Linux permissions, and folders that update live.",
       },
       {
         name: "Recycle Bin and file dialogs",
@@ -538,7 +538,7 @@ export const liveCapabilities: Capability[] = [
     status: "works",
     what: "A fix to a DLL or to the kernel is patched into a resumed snapshot, into every process that has it loaded, without starting over.",
     how: "The old and new builds are compared function by function. Every program thread is stopped, no changed function may be on any thread's stack, the new code is mapped beside the old and each old entry jumps to its new version. Anything unsafe is refused with the reason. It is a development tool: a hot-swapped run is never counted as a pass.",
-    proof: ["hotswap_machine", "hotswap_dll", "hotswap_wow64"],
+    proof: ["hotswap_machine", "hotswap_stack", "hotswap_wow64"],
   },
   {
     id: "live-update",
