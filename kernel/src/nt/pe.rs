@@ -27,6 +27,7 @@ const IMAGE_REL_BASED_DIR64: u16 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeError {
+    Empty,
     Truncated,
     BadDosSignature,
     BadPeSignature,
@@ -137,6 +138,13 @@ impl<'a> PeImage<'a> {
     /// is then not in `data` (`section_data`, `lay_out` are for whole
     /// files).
     pub fn parse_headers(data: &'a [u8], file_len: usize) -> Result<Self, PeError> {
+        // An empty file is no image, and its answer is not the one for a
+        // file that merely does not start with "MZ": Windows refuses it
+        // with STATUS_INVALID_FILE_FOR_SECTION (measured, `loader_test`;
+        // LoadLibraryW reports it as ERROR_BAD_EXE_FORMAT).
+        if file_len == 0 {
+            return Err(PeError::Empty);
+        }
         if data.get(0..2) != Some(b"MZ") {
             return Err(PeError::BadDosSignature);
         }
@@ -713,7 +721,8 @@ mod tests {
 
     #[test]
     fn rejects_garbage() {
-        assert_eq!(PeImage::parse(b"").unwrap_err(), PeError::BadDosSignature);
+        assert_eq!(PeImage::parse(b"").unwrap_err(), PeError::Empty);
+        assert_eq!(PeImage::parse(b"not an image").unwrap_err(), PeError::BadDosSignature);
         assert_eq!(PeImage::parse(b"MZ").unwrap_err(), PeError::Truncated);
         let mut d = build(&[(".text", 0x1000, 1, &[0xc3], TEXT)], 0x1000);
         d[0x44] = 0x4c; // i386

@@ -9990,6 +9990,11 @@ const LINUX_MENU_MEMORY_MIB: u64 = 1536;
 /// download, after about 360 s of setup before it (run time, measured);
 /// twice that for a slower host.
 const OFFICE_INSTALL_TIMEOUT: Duration = Duration::from_secs(3600);
+/// `office_word`, `office_excel` (MANUAL): the app's start reads about a
+/// hundred of Office's images (114 at start, 85 more through delay
+/// imports: ROADMAP OF) from the disk. A bound to replace with the
+/// measured time once an app draws.
+const OFFICE_APP_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// Scenarios run under an artificial host load (clockcheck::HostLoad:
 /// a busy thread on every host CPU) whose guest clock must agree with the
@@ -10010,6 +10015,8 @@ fn scenario_timeout(name: &str) -> Duration {
         WPT_TIMEOUT
     } else if name.starts_with("office_install") {
         OFFICE_INSTALL_TIMEOUT
+    } else if name == "office_word" || name == "office_excel" {
+        OFFICE_APP_TIMEOUT
     } else if name == "linux_menu" {
         LINUX_MENU_TIMEOUT
     } else if name == "elasticsearch"
@@ -11802,6 +11809,10 @@ const MANUAL: &[&str] = &[
     // (`cargo xtask office-source`), put on the disk (development's fast
     // path).
     "office_install_local",
+    // OF: Word and Excel on the install office_install_local made (a
+    // copy of its disk: new_disk).
+    "office_word",
+    "office_excel",
 ];
 
 /// Whether scenario `name` runs only when named exactly (PENDING, MANUAL).
@@ -11814,6 +11825,9 @@ const UEFI_SCENARIOS: &[&str] = &[
     "presenter_test",
     // A framebuffer to show the installer's windows (XTASK_SHOTS).
     "office_install_gui",
+    // A framebuffer for Word's and Excel's windows (XTASK_SHOTS).
+    "office_word",
+    "office_excel",
     "chromium_window",
     "boot_config_edited",
     "handover_uefi",
@@ -11935,6 +11949,8 @@ const NET_SCENARIOS: &[(&str, &str, NetClient)] = &[
     ("office_install", "run: begin setup.exe", NetClient::Outbound),
     ("office_install_local", "run: begin setup.exe", NetClient::Outbound),
     ("office_install_gui", "run: begin consolerun.exe", NetClient::Outbound),
+    ("office_word", "run: begin consolerun.exe", NetClient::Outbound),
+    ("office_excel", "run: begin consolerun.exe", NetClient::Outbound),
     // A card for GetAdaptersInfo to list (nothing connects).
     ("office_api_test", "run: begin office_api_test.exe", NetClient::Outbound),
     ("wow64_office_api_test", "run: begin wow64_office_api_test.exe", NetClient::Outbound),
@@ -12412,8 +12428,11 @@ const SCENARIOS: &[Scenario] = &[
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             // testdll's ordinal 2 has no export (RVA 0): asked for, and
-            // imported by testdll_gap.dll, it is a missing export.
+            // imported by testdll_gap.dll, it is a missing export. The
+            // DLL that could not load for it is named too, with the
+            // status (STATUS_ORDINAL_NOT_FOUND, 0xc0000138).
             r#"ledger: {"service":"testdll.dll!#2","what":"missing export""#,
+            r#"ledger: {"service":"testdll_gap.dll","what":"load failed","detail":3221225784"#,
             "loader_test: ok",
             "exited with status 0x00000000",
         ],
@@ -16536,6 +16555,47 @@ const SCENARIOS: &[Scenario] = &[
         expect: &["consolerun.exe (pid 4) exited with status 0x00000000"],
     },
     Scenario {
+        // OF (manual): Word on the install office_install_local made, on
+        // the console's desktop (consolerun, as office_install_gui), told
+        // to make a document from a template that install itself put
+        // there (Word's `/t`; the owner: no files from elsewhere). Its
+        // disk is a copy of the install's (DISK_SCENARIOS), so a run
+        // cannot spoil the install. No `wait=all`: the run ends when
+        // consolerun does (with Word), and the Click-to-Run service Word
+        // starts never ends. What Windows does, and so what this asks
+        // for: the document window appears, OFFICE_WORD_SCREEN checks it
+        // and closes it with Alt+F4, and consolerun ends with Word's own
+        // status, 0. ROADMAP OF has where gala's run stops instead.
+        name: "office_word",
+        cmdline: "qemu_exit persist as=system run=consolerun.exe \
+                  args=%22C:\\Program%20Files\\Microsoft%20Office\\root\\Office16\\\
+                  WINWORD.EXE%22%20/t%22C:\\Program%20Files\\Microsoft%20Office\\root\\\
+                  Office16\\1033\\QuickStyles\\Default.dotx%22 \
+                  dump=C:/Users/Public,C:/Windows/Temp",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "consolerun: started pid ",
+            "consolerun.exe (pid 4) exited with status 0x00000000",
+        ],
+    },
+    Scenario {
+        // OF (manual): Excel on the same install, opening the blank
+        // workbook the install put in its shell-new folder (what
+        // Explorer's "New > Microsoft Excel Worksheet" copies), with
+        // OFFICE_EXCEL_SCREEN for its window, as office_word.
+        name: "office_excel",
+        cmdline: "qemu_exit persist as=system run=consolerun.exe \
+                  args=%22C:\\Program%20Files\\Microsoft%20Office\\root\\Office16\\\
+                  EXCEL.EXE%22%20%22C:\\Program%20Files\\Microsoft%20Office\\root\\vfs\\\
+                  Windows\\SHELLNEW\\EXCEL12.XLSX%22 \
+                  dump=C:/Users/Public,C:/Windows/Temp",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "consolerun: started pid ",
+            "consolerun.exe (pid 4) exited with status 0x00000000",
+        ],
+    },
+    Scenario {
         // WOW64 stage 3: a 32-bit C program on the 32-bit msvcrt
         // (user/wow64_crt_test: mingw's i686 startup code, checked-in
         // binary): printf/scanf's 4-byte va_list slots, setjmp/longjmp's
@@ -17829,6 +17889,8 @@ const MODULE_SETS: &[(&str, &str)] = &[
     ("office_install_gui", "office_install_gui"),
     ("office_install_local", "office_install"),
     ("office_install_local", "office_install_local"),
+    ("office_word", "office_install"),
+    ("office_excel", "office_install"),
     ("office_install_gui", "office_install_gui"),
     ("events_process", "process_test"),
     ("events_ipc", "pipe_test"),
@@ -18026,8 +18088,13 @@ const MODULE_SETS: &[(&str, &str)] = &[
 /// (`system_modules`): installers whose product's own programs import
 /// what they will (office_install: ODT starts the 64-bit
 /// OfficeClickToRun.exe, whose imports are only seen in the run).
-const FULL_SYSTEM_SCENARIOS: &[&str] =
-    &["office_install", "office_install_gui", "office_install_local"];
+const FULL_SYSTEM_SCENARIOS: &[&str] = &[
+    "office_install",
+    "office_install_gui",
+    "office_install_local",
+    "office_word",
+    "office_excel",
+];
 
 /// A scenario's kernel command line as its image has it.
 fn scenario_cmdline(s: &Scenario) -> String {
@@ -20358,6 +20425,11 @@ enum PixelCheck {
     /// The rectangle (x, y, w, h) holds at least this many distinct
     /// colours (a program's drawing, whatever its frame shows).
     Varied(u32, u32, u32, u32, usize),
+    /// At least this percentage of the rectangle (x, y, w, h) is exactly
+    /// this colour: a window's flat fill (a document's page, a
+    /// worksheet's cells) wherever the program puts its window, which is
+    /// the program's to choose and not the desktop's.
+    Most(u32, u32, u32, u32, u32, u32),
 }
 
 /// user/lx/wl_input_test's windows on a headless desktop (1280 x 800,
@@ -21817,6 +21889,53 @@ const GUI_TEST_SCREEN: ScreenCheck = ScreenCheck {
 };
 
 /// Scenarios with screen checks.
+/// OF: Word's window on the install `office_install_local` made. Word
+/// titles a document made from a template "Document1 - Word" (measured
+/// on the pinned Windows 11 24H2 with the same Office install), and may
+/// add a suffix to it (an unactivated install says so there), so the
+/// marker ends with the name. The checks are of the window Word draws,
+/// not of where it draws it, which is Word's to choose: its page is flat
+/// white, of which the bare desktop has 77 pixels of its 1 024 000
+/// (0.008%: the wallpaper's brightest, measured on the screendumps of a
+/// run where Word drew nothing), and the taskbar's band holds the active
+/// window's pill, which the bare desktop has nothing near. Then Alt+F4
+/// closes Word (its document is untouched, so nothing is asked) and
+/// consolerun ends with it.
+const OFFICE_WORD_SCREEN: ScreenCheck = ScreenCheck {
+    marker: "desktop: shown window 'Document1 - Word",
+    steps: &[
+        ScreenStep {
+            after: "",
+            input: &[],
+            pixels: &[
+                PixelCheck::Most(0, 0, 1280, 800, 0xffffff, 10), // the page
+                PixelCheck::AnyIn(320, 784, 640, 12, 0x005fb8),  // its taskbar pill
+            ],
+        },
+        ScreenStep { after: "", input: &["sendkey alt-f4"], pixels: &[] },
+    ],
+};
+
+/// OF: Excel's window on the same install, as OFFICE_WORD_SCREEN. Excel
+/// titles the window after the file it opened, "EXCEL12.XLSX  -
+/// Read-Only - Excel" where the file cannot be written (measured on
+/// Windows), so the marker ends with the name; the worksheet's cells are
+/// the flat white.
+const OFFICE_EXCEL_SCREEN: ScreenCheck = ScreenCheck {
+    marker: "desktop: shown window 'EXCEL12.XLSX",
+    steps: &[
+        ScreenStep {
+            after: "",
+            input: &[],
+            pixels: &[
+                PixelCheck::Most(0, 0, 1280, 800, 0xffffff, 10), // the cells
+                PixelCheck::AnyIn(320, 784, 640, 12, 0x005fb8),  // its taskbar pill
+            ],
+        },
+        ScreenStep { after: "", input: &["sendkey alt-f4"], pixels: &[] },
+    ],
+};
+
 const SCREEN_SCENARIOS: &[(&str, ScreenCheck)] = &[
     (
         // Chromium's window at (0, 0), 800 x 600, its page (window.html)
@@ -21900,6 +22019,8 @@ const SCREEN_SCENARIOS: &[(&str, ScreenCheck)] = &[
         },
     ),
     ("gui_test", GUI_TEST_SCREEN),
+    ("office_word", OFFICE_WORD_SCREEN),
+    ("office_excel", OFFICE_EXCEL_SCREEN),
     ("start_menu", START_MENU_SCREEN),
     ("taskmgr", TASKMGR_SCREEN),
     ("explorer", EXPLORER_SCREEN),
@@ -22869,6 +22990,17 @@ fn dump_and_check(
                     return Err(format!("no pixel near {want:06x} in ({x}, {y}, {rw}, {rh})"));
                 }
             }
+            PixelCheck::Most(x, y, rw, rh, want, percent) => {
+                let n: usize = (y..y + rh)
+                    .map(|yy| (x..x + rw).filter(|&xx| at(xx, yy) == Some(want)).count())
+                    .sum();
+                let all = rw as usize * rh as usize;
+                if n * 100 < all * percent as usize {
+                    return Err(format!(
+                        "{n} of the {all} pixels in ({x}, {y}, {rw}, {rh}) are {want:06x}, not                          the {percent}% asked for"
+                    ));
+                }
+            }
             PixelCheck::Varied(x, y, rw, rh, want) => {
                 let mut seen = std::collections::HashSet::new();
                 for yy in y..y + rh {
@@ -23203,6 +23335,27 @@ const DISK_SCENARIOS: &[DiskScenario] = &[
         earlier_fail: false,
     },
     DiskScenario {
+        // office_word's disk: a copy of office_install_local's, the
+        // install Word starts on (`new_disk`, INSTALL_DISK).
+        name: "office_word",
+        size: 16 << 30,
+        host_mib: Some(8 << 10),
+        setup: |_| {},
+        check: |_| Ok(()),
+        earlier_boots: &[],
+        earlier_fail: false,
+    },
+    DiskScenario {
+        // office_excel's disk: the same copy, for Excel.
+        name: "office_excel",
+        size: 16 << 30,
+        host_mib: Some(8 << 10),
+        setup: |_| {},
+        check: |_| Ok(()),
+        earlier_boots: &[],
+        earlier_fail: false,
+    },
+    DiskScenario {
         // D4: C: on the disk; volume_test fills it (sparse until then).
         name: "volume_test",
         size: 1 << 30,
@@ -23318,6 +23471,12 @@ fn disk_test_check(image: &[u8]) -> Result {
     }
 }
 
+/// Scenarios that boot on a copy of another scenario's kept disk image:
+/// Word and Excel on the install office_install_local made (an hour's
+/// work no run of theirs may spoil, so each gets its own copy).
+const INSTALL_DISK: &[(&str, &str)] =
+    &[("office_word", "office_install_local"), ("office_excel", "office_install_local")];
+
 fn reuse_disk() -> bool {
     env::var_os("XTASK_REUSE_DISK").is_some_and(|v| v == "1")
 }
@@ -23350,6 +23509,27 @@ fn new_disk(name: &str, iso: &Path) -> Result<Option<PathBuf>> {
         check_disk_space(name, need + MIN_FREE_MIB).map_err(|e| {
             format!("{e}\nxtask: {name}'s disk image may take {need} MiB (XTASK_LOW_DISK=1 starts it anyway)")
         })?;
+    }
+    if let Some(from) = INSTALL_DISK.iter().find(|(s, _)| *s == name).map(|(_, f)| *f) {
+        let source = iso.with_file_name(format!("test-{from}.disk.img"));
+        if !source.exists() {
+            return Err(format!(
+                "{name} runs on the install {from} made, and {} is not there: run \
+                 `cargo xtask boot-test '{from}$'` first (it keeps its disk), or \
+                 XTASK_REUSE_DISK=1 to boot {name}'s own kept disk again",
+                source.display()
+            ));
+        }
+        let t = Instant::now();
+        let bytes = fs::copy(&source, &kept)
+            .map_err(|e| format!("cannot copy {} to {}: {e}", source.display(), kept.display()))?;
+        eprintln!(
+            "xtask: {name} boots on a copy of {}'s disk ({} MiB in {:.1}s)",
+            from,
+            bytes >> 20,
+            t.elapsed().as_secs_f64()
+        );
+        return Ok(Some(kept));
     }
     // What setup writes goes in the first MiB; the rest is a sparse file.
     let mut image = vec![0u8; d.size.min(1 << 20)];

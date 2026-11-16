@@ -1471,10 +1471,58 @@ need gala's.
 **Next**:
 1. The load list above, test first (a kernel32/ntdll test program for
    the functions, expected results from Windows), until the three
-   apps' processes start in gala with Office's files in place; a
-   scenario that boots them, with the files gala's own install put
-   there (the owner: no files from elsewhere; the native install below
-   comes first).
+   apps' processes start in gala with Office's files in place. The
+   scenarios that boot them are there: `office_word` and `office_excel`
+   (MANUAL, WORKFLOW "Word and Excel on gala's own install"), each on a
+   copy of the disk `office_install_local` installed on -- Word makes a
+   document from a template of that install, Excel opens the blank
+   workbook it put in its shell-new folder, so no file comes from
+   anywhere else (the owner). The screen checks they end in are
+   written (`OFFICE_WORD_SCREEN`, `OFFICE_EXCEL_SCREEN`): the window
+   Windows draws, checked where the program is free to put it -- at
+   least a tenth of the 1280 x 800 screen flat white (Word's page,
+   Excel's cells; the bare desktop has 0.008% of it, the wallpaper's
+   brightest) and the active window's pill on the taskbar, which the
+   bare desktop has nothing near -- then Alt+F4, and consolerun ends
+   with the app's own status, 0.
+   Both runs end the same way today: the process starts, asks the SCM
+   to start `ClickToRunSvc`, and dies 0xc0000142
+   (STATUS_DLL_INIT_FAILED) after 85 s without a window. The ledger's
+   25 missing `c2r64.dll!` exports are not the reason: they are the
+   AppV ISV shim's optional hooks (`EnsureFile`, `LoadRange`,
+   `StreamFault`, `HandleLoadIconW`, ...), and the real `C2R64.dll` the
+   ClickToRun directory holds exports none of the 25 either (101
+   exports, measured), so the same probes miss on Windows. A DLL that
+   is found and will not load is named in the ledger now (`what` "load
+   failed", its status the detail), so the next run names the DLL the
+   death is about. Two things, both next:
+   - Under the Office root Windows has 16 reparse points (`C2R32.dll`,
+     `C2R64.dll`, `AppvIsvSubsystems32.dll`, `AppvIsvSubsystems64.dll`,
+     each in `\Client`, `\Office16`,
+     `\vfs\ProgramFilesCommonX64\Microsoft Shared\Office16` and
+     `\vfs\ProgramFilesX86\Microsoft Office\Office16`) whose target is
+     the file of the same name in
+     `C:\Program Files\Common Files\Microsoft Shared\ClickToRun`.
+     Gala's install holds that directory's real DLLs, Windows' sizes to
+     the byte, but has the 16 as plain empty files: what makes them is
+     the integration step that fails (`ConfigureMSIs`, "Final
+     Extensions Publishing", 1603 and Integrator 0x643 below), which
+     waits on PK's MSI engine.
+   - 21 of the 247 user32 functions `mfc140u.dll` imports are not
+     among gala's user32 exports: CheckRadioButton, GetDlgItemInt,
+     GetMenuCheckMarkDimensions, GetMenuDefaultItem,
+     GetNextDlgGroupItem, GetTabbedTextExtentW, GrayStringW,
+     InvalidateRgn, IsCharLowerW, IsDlgButtonChecked, LoadMenuW,
+     LockWindowUpdate, RealChildWindowFromPoint, ReuseDDElParam,
+     SendDlgItemMessageA, SetDlgItemInt, SetMenuItemBitmaps,
+     SetWindowContextHelpId, TabbedTextOutW, UnpackDDElParam and
+     WinHelpW. They are static imports, so none of them binds and
+     Office's MFC DLL does not load at all;
+     `GetMenuCheckMarkDimensions` is the last gap the ledger records
+     before Word dies. Test first, with Windows' results (measured:
+     `GetMenuCheckMarkDimensions` answers 0x000f000f, the check mark's
+     15 x 15, where gala's `GetSystemMetrics` answers 0 for
+     SM_CXMENUCHECK and SM_CYMENUCHECK).
    - The UCRT (the owner's decision: gala's own; also the answer to
      PK's AIChat UCRT question): gala's own `ucrtbase.dll` (the `api-ms-win-crt-*` sets
      resolve to it), x64 and x86, msvcrt's source with the UCRT's own

@@ -2102,8 +2102,17 @@ share it (LX seam 4; the Linux side is `lx::file`, "The lx module"):
   path); FILE_LINK/RENAME_POSIX_SEMANTICS (replacing an open target;
   recorded, refused as without it); IGNORE_READONLY_ATTRIBUTE on a rename
   (recorded, ignored).
-- **Volume**: reports itself as an NTFS disk (FileFs* classes) with RAM
-  as its size.
+- **Volume**: reports itself as an NTFS disk (FileFs* classes), sized by
+  the disk's data area (by RAM without a disk). Its
+  FILE_FS_ATTRIBUTE_INFORMATION flags (`file::VOLUME_ATTRIBUTES`) are the
+  features it has: case-preserved Unicode names, persistent ACLs, reparse
+  points, POSIX unlink and rename, hard links. A feature that works but
+  is not reported is one programs do not use: a program asks the volume
+  what it can do before it uses it, and takes the answer
+  (`user/volume_test`). NTFS reports more (sparse files,
+  named streams, object IDs, open by file ID, a USN journal, quotas,
+  compression, encryption, transactions, case-sensitive search per open),
+  which gala has not; each bit goes in with its feature.
 - **Completion**: file objects are waitable: NtReadFile/NtWriteFile reset
   the caller's event (and the file object) when an I/O starts and signal
   both when it completes, which for ramfs is always before the system

@@ -414,6 +414,7 @@ impl ImageLayout {
             }
         }
         let image = PeImage::parse_headers(&head, file_len).map_err(|e| match e {
+            PeError::Empty => NtStatus::INVALID_FILE_FOR_SECTION,
             PeError::BadDosSignature => NtStatus::INVALID_IMAGE_NOT_MZ,
             _ => NtStatus::INVALID_IMAGE_FORMAT,
         })?;

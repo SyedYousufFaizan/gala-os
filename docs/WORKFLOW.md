@@ -152,6 +152,18 @@ cargo xtask export-tests    # refresh user/bin (CI compares)
   case unimplemented, call `nt::ledger::record(service, what, detail)`
   there (in DLLs: `unsupported(b"dll!Name(case)", detail)`), so real
   programs that need it show up in `target/report/ledger.md`.
+- **What gala has, it reports**: a program asks what the system can do
+  before it uses it, and takes the answer. A feature that works but is
+  not in the answer is a feature no program reaches: gala's volume kept
+  per-file security descriptors, hard links, reparse points and POSIX
+  unlink and rename while FILE_FS_ATTRIBUTE_INFORMATION left all four
+  out, so a program that asks -- Office's installer asks before it
+  stages a file -- could not use any of them (`file::VOLUME_ATTRIBUTES`,
+  `user/volume_test`). When you add a feature, add it to what reports
+  the system's features (the volume's flags, a device's
+  characteristics, GetVersionEx, IsProcessorFeaturePresent, an
+  interface's capability bits), and nowhere claim one that is not
+  there.
 - **Constants come from headers**: values typed in by hand go wrong
   silently (a wrong STATUS_OBJECT_NAME_EXISTS once matched a test that
   agreed with it). With mingw-w64 installed (`apt install
@@ -2075,6 +2087,44 @@ a cache on the host:
   (`office_install`'s first half hour: the transport, ranges, the
   service's staging of what it fetched) is not exercised, so run
   `office_install` now and then for the whole path.
+
+### Word and Excel on gala's own install (ROADMAP OF)
+
+`office_word` and `office_excel` (MANUAL) start the apps from the
+install `office_install_local` made, with no file from anywhere else:
+Word makes a document from a template of that install
+(`WINWORD.EXE /t...\QuickStyles\Default.dotx`), Excel opens the blank
+workbook it put in its shell-new folder (`EXCEL12.XLSX`, what
+Explorer's "New > Microsoft Excel Worksheet" copies). Both run through
+`consolerun.exe`, so their windows are on the console's desktop
+(`XTASK_SHOTS=60,120,...` for screendumps), and both boot through UEFI
+for the framebuffer.
+
+- **Their disk is a copy of the install's.** `new_disk` copies
+  `target/debug/test-office_install_local.disk.img` (`INSTALL_DISK`), so
+  an app's run cannot spoil an install that takes an hour; without that
+  image the run says so and stops. `XTASK_REUSE_DISK=1` boots the copy
+  the last run kept instead of making another (what to iterate with).
+- The copy is about 8 GB on the host, on top of the install's own. With
+  the install's image in `/dev/shm` ("Office's fast path"), link the
+  copy there too.
+- The apps' processes start on the whole 64-bit system
+  (`FULL_SYSTEM_SCENARIOS`) and the install's own files; what they still
+  lack is in the ledger (ROADMAP OF's load list ranks it).
+- **A screen check waits for the title Windows gives the window.** The
+  marker of `OFFICE_WORD_SCREEN` and `OFFICE_EXCEL_SCREEN` is the
+  kernel's `desktop: shown window '<title>'` line, with the title
+  measured on Windows (`Document1 - Word`, `EXCEL12.XLSX`); it stops at
+  the name, because Windows appends to it (an unactivated install says
+  so in the caption).
+- **Check the window, not where it is.** A program puts its own window
+  where it likes, so both checks ask only for what a drawn document
+  shows wherever it sits: at least a tenth of the screen exactly white
+  (`PixelCheck::Most`: Word's page, Excel's cells) and the active
+  window's pill on the taskbar. The bare desktop has 0.008% white and
+  nothing near the pill, so this tells a window from an empty desktop.
+  Each check ends with Alt+F4, which closes the app and with it
+  `consolerun`, whose status is the app's.
 
 ### Linux test programs (user/lx, ROADMAP LX)
 

@@ -18,8 +18,16 @@
 //!   GetDiskFreeSpaceExW's (Wine's test_GetDiskFreeSpaceA); its free
 //!   clusters are GetDiskFreeSpaceExW's free bytes (within 64 MiB: other
 //!   programs write meanwhile on Windows).
-//! - GetVolumeInformationW of `C:\`: NTFS, 255-character names, case
-//!   preserved and Unicode names on disk.
+//! - GetVolumeInformationW of `C:\`: NTFS, 255-character names, and the
+//!   flags of the features the volume has: case preserved, Unicode names
+//!   on disk, persistent ACLs, reparse points, POSIX unlink and rename,
+//!   hard links. A feature the volume does not report is one programs do
+//!   not use, however well it works: a program asks the volume what it
+//!   can do before it uses it (Office's installer asks here, before it
+//!   stages a file). NTFS reports these and more (sparse files, named
+//!   streams, object IDs, open by file ID, a USN journal, quotas,
+//!   compression, encryption, transactions), which gala does not have
+//!   yet, so the check is of these bits only.
 //! - A file of `<MiB>` (the first argument; 256 by default) written in
 //!   1 MiB pieces in the temporary directory: free space (of that
 //!   directory, given as a non-root path) drops by at least its size less
@@ -122,6 +130,10 @@ const ERROR_PATH_NOT_FOUND: u64 = 3;
 const ERROR_DISK_FULL: u64 = 112;
 const FILE_CASE_PRESERVED_NAMES: u32 = 2;
 const FILE_UNICODE_ON_DISK: u32 = 4;
+const FILE_PERSISTENT_ACLS: u32 = 8;
+const FILE_SUPPORTS_REPARSE_POINTS: u32 = 0x80;
+const FILE_SUPPORTS_POSIX_UNLINK_RENAME: u32 = 0x400;
+const FILE_SUPPORTS_HARD_LINKS: u32 = 0x40_0000;
 
 const MIB: u64 = 1 << 20;
 /// What other activity may change free space by between two queries.
@@ -267,7 +279,12 @@ fn api_forms(c: &mut Checks) -> Result<(), u32> {
     c.ok(ok != 0, last_error())?;
     c.ok(fs_name[..5] == wide::<5>("NTFS"), fs_name[0].into())?;
     c.eq(max_component.into(), 255)?;
-    let want = FILE_CASE_PRESERVED_NAMES | FILE_UNICODE_ON_DISK;
+    let want = FILE_CASE_PRESERVED_NAMES
+        | FILE_UNICODE_ON_DISK
+        | FILE_PERSISTENT_ACLS
+        | FILE_SUPPORTS_REPARSE_POINTS
+        | FILE_SUPPORTS_POSIX_UNLINK_RENAME
+        | FILE_SUPPORTS_HARD_LINKS;
     c.eq((flags & want).into(), want.into())
 }
 
