@@ -270,6 +270,18 @@ faults, its exit).
   NtContinues with TestAlert (`arm_exception`, `arm_apc`, `arm_tls`:
   kernel32 loads, the APC a TLS callback queues runs before the entry).
   Crash reports show x0-x30, sp, pc and pstate (`arm_crash*`).
+  Frame-based handlers on ARM64 (`testntdll/src/seh_arm64.rs`, from
+  Microsoft's "ARM64 exception handling"): an image's 8-byte .pdata
+  entries; packed unwind data expanded into its canonical prologue's and
+  epilogue's unwind codes; a pc in a prologue undoes only what ran, one in
+  an epilogue only what had not (its scope, or the one the header packs);
+  the pc is lr afterwards unless a machine-frame or CONTEXT code restored
+  it; the establisher frame is the sp the unwind ends with, and a handler
+  is reported from a body only. KiUserExceptionDispatcher's unwind data
+  is MSFT_OP_CONTEXT (`.seh_context`), so a walk continues into the
+  faulting function; RtlUnwindEx resumes the target with x0 the return
+  value, after a consolidation callback run in a frame described the same
+  way (`arm_seh`).
 - **Interrupt masking and the pseudo-NMI** (`cpu.rs`, `gic.rs`):
   interrupts are masked by priority (ICC_PMR_EL1), not PSTATE.I: "off"
   (`PMR_OFF`, 0xa0) lets only the NMI's priority (0x80) through, "on"
@@ -366,11 +378,11 @@ faults, its exit).
   Aff0 below 16 only; xtask cannot ask for a state dump at a timeout
   (QEMU `virt` has no NMI for its monitor's `nmi`: "machine does not
   provide NMIs"); no `stop_others` (its one user, the hot swap, is
-  x86-64's); in user mode frame-based exception handlers are not
-  searched (ARM64's .pdata and .xdata are not read: the ledger says so
-  when an exception goes unhandled for want of them), and
-  NtGetContextThread and NtSetContextThread answer
-  STATUS_NOT_IMPLEMENTED; the page file's aging is not safe
+  x86-64's); in user mode the unwinder does not read function tables
+  registered at run time, `.pdata` link records (jump islands), SVE
+  state or the trap-frame and x64-context codes (a frame that needs one
+  ends the walk, the ledger names the code), and NtGetContextThread and
+  NtSetContextThread answer STATUS_NOT_IMPLEMENTED; the page file's aging is not safe
   here (it relies on hardware-set accessed and dirty bits: FEAT_HAFDBS
   is not turned on); entered at EL2 with VHE the timer would
   be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
