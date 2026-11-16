@@ -847,19 +847,22 @@ time". What it leaves behind:
 - `tsc: ... from HPET ..., 5 samples (n paused, n outliers), spread x%`,
   the phase `tsc_mhz` and a `clock_cal` event: how the TSC was
   calibrated (bracketed samples against the HPET / PM timer, median).
-- A kernel thread checks the TSC against the CMOS RTC after boot and
+- A kernel thread checks the cycle counter (the TSC; aarch64's generic
+  counter) against the RTC (the CMOS RTC; the PL031) after boot and
   recalibrates when they disagree: `clock: RTC check: agrees` or `clock:
   WRONG`, and `clock_wrong` / `clock_recalibrated` events.
 - xtask (`xtask/src/clockcheck.rs`) times every `uptime_ms=` mark against
   the host, in a thread of its own that reads the serial log every 20 ms:
   `xtask: clock: <source>: guest N ms over host A..B ms` (the mark's poll
-  window) or `xtask: clock: WRONG: ...`. The triage reports both, and a
-  failure in a boot whose clock was wrong says so in its verdict.
+  window) or `xtask: clock: WRONG: ...`; a `clock: recalibrated:` line
+  starts the marks again (the guest's time until then was known wrong).
+  The triage reports both, and a failure in a boot whose clock was wrong
+  says so in its verdict.
 - Every boot ends with `xtask: vm time: <run> run of <wall> wall (<w>
   waiting for a host CPU)`: what its time limit counted
   (`xtask/src/vmtime.rs`); a timeout says which limit it hit.
-- Scenarios `clockcal_test` (host CPUs kept busy, `calstall`) and
-  `clockcal_recal` (`calwrong`).
+- Scenarios `clockcal_test` (host CPUs kept busy, `calstall`),
+  `clockcal_recal` and `arm_clock` (`calwrong`).
 
 ### Early boot
 

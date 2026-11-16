@@ -9,8 +9,15 @@
 //! keeps time (`start_periodic`), an AP's only preempts
 //! (`start_periodic_here`), both calling the same handler.
 //!
+//! The clock check's wall-clock reference is the PL031 RTC (`rtc_seconds`:
+//! its data register counts seconds), QEMU `virt`'s at 0x0901_0000, the
+//! board's fixed layout like the UART's and the GIC's (ROADMAP AR: from
+//! the firmware). CNTFRQ_EL0 is the firmware's statement of the rate, not
+//! a measurement (`reliable` is false): when the RTC measures otherwise,
+//! the RTC's rate wins (`time::recalibrate`).
+//!
 //! Limits: entered at EL2 with VHE the CNTV registers would be EL2's
-//! virtual timer (PPI 28), not handled; no RTC is read yet (the PL031).
+//! virtual timer (PPI 28), not handled.
 
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +25,16 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use super::interrupts;
 use crate::boot::BootInfo;
 use crate::sync::IrqMutex;
+
+/// The cycle counter's and the tick timer's names in the clock's log.
+pub const COUNTER_NAME: &str = "generic counter";
+pub const TIMER_NAME: &str = "generic timer";
+
+/// The PL031 RTC and its data register (seconds since it was set).
+const PL031_PHYS: u64 = 0x0901_0000;
+const RTCDR: u64 = 0x000;
+/// The RTC, mapped (0: not yet, or the mapping failed).
+static RTC: AtomicU64 = AtomicU64::new(0);
 
 /// The virtual timer's interrupt (a PPI).
 const VIRTUAL_TIMER_PPI: u32 = 27;
@@ -87,6 +104,7 @@ pub struct Calibration {
 /// both). Nothing is measured, so no stall applies; a kernel handover's
 /// carried rates are the same counter's.
 pub fn calibrate(_info: &BootInfo, _stall: bool, carried: Option<(u64, u64)>) -> Calibration {
+    map_rtc();
     let hz = counter_frequency();
     match carried {
         Some((counter_hz, timer_hz)) => Calibration { counter_hz, timer_hz },
@@ -94,8 +112,20 @@ pub fn calibrate(_info: &BootInfo, _stall: bool, carried: Option<(u64, u64)>) ->
     }
 }
 
+/// The architected rate again (what `calibrate` takes): the clock check
+/// found the rate in use wrong.
 pub fn recalibrate(_old: &Calibration) -> Option<Calibration> {
-    None
+    let hz = counter_frequency();
+    Some(Calibration { counter_hz: hz, timer_hz: hz })
+}
+
+fn map_rtc() {
+    match super::paging::map_mmio(PL031_PHYS, 0x1000) {
+        Ok(virt) => RTC.store(virt, Ordering::Release),
+        Err(e) => crate::warn!(
+            "timer: the PL031 RTC at {PL031_PHYS:#x} not mapped ({e:?}): the clock is not checked"
+        ),
+    }
 }
 
 /// Starts the boot CPU's tick at `hz`, calling `handler` at each (the GIC
@@ -113,18 +143,20 @@ pub fn start_periodic(c: &Calibration, hz: u64, handler: interrupts::Handler) {
     set_compare(first);
 }
 
-/// Starts this CPU's tick (an AP's, after `start_periodic` on the boot
-/// CPU: same period and handler; its PPI was enabled by the GIC's
-/// `init_cpu`).
-pub fn start_periodic_here(_c: &Calibration, _hz: u64) {
-    let period = PERIOD.load(Ordering::Relaxed);
-    if period == 0 {
+/// Starts (or, after a recalibration, reprograms) this CPU's tick at
+/// `hz` from `c`'s rate, with the handler `start_periodic` installed on
+/// the boot CPU (an AP's PPI was enabled by the GIC's `init_cpu`).
+pub fn start_periodic_here(c: &Calibration, hz: u64) {
+    if PERIOD.load(Ordering::Relaxed) == 0 {
         crate::warn!(
             "timer: CPU {}'s tick not started: none on the boot CPU",
             super::percpu::cpu_index()
         );
         return;
     }
+    // The same for every CPU: each stores what the others do.
+    let period = (c.timer_hz() / hz.max(1)).max(1);
+    PERIOD.store(period, Ordering::Relaxed);
     let first = super::cpu::cycles() + period;
     next_slot().store(first, Ordering::Relaxed);
     set_compare(first);
@@ -132,9 +164,17 @@ pub fn start_periodic_here(_c: &Calibration, _hz: u64) {
 
 pub fn eoi() {}
 
-/// The wall clock's seconds (a PL031 RTC).
+/// The wall clock's seconds within its minute (the PL031's count), None
+/// without the RTC: the clock check's reference.
 pub fn rtc_seconds() -> Option<u8> {
-    None
+    let rtc = RTC.load(Ordering::Acquire);
+    if rtc == 0 {
+        return None;
+    }
+    // SAFETY: the PL031's data register in the mapping `map_rtc` made
+    // (Device memory); reading it has no side effect.
+    let seconds = unsafe { ((rtc + RTCDR) as *const u32).read_volatile() };
+    Some((seconds % 60) as u8)
 }
 
 impl Calibration {
@@ -156,8 +196,9 @@ impl Calibration {
         self.counter_hz = counter_hz;
     }
 
+    /// CNTFRQ_EL0 is the firmware's statement, not a measurement.
     pub fn reliable(&self) -> bool {
-        true
+        false
     }
 
     pub fn source_name(&self) -> &'static str {
