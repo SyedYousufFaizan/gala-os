@@ -4,9 +4,9 @@
 //! NtCreateThread starts a thread from; the dispatcher frames gala's
 //! ntdll reads: an exception's (`deliver_to_user`: the CONTEXT and the
 //! EXCEPTION_RECORD) and a user APC's (`deliver_apc`: the CONTEXT and the
-//! routine with its arguments). Not yet (ROADMAP AR): NtGetContextThread
-//! and NtSetContextThread, the KUSER_SHARED_DATA processor features; their
-//! services answer STATUS_NOT_IMPLEMENTED.
+//! routine with its arguments); NtGetContextThread and NtSetContextThread
+//! (a suspended thread's parked state, or the caller's). Not yet (ROADMAP
+//! AR): the KUSER_SHARED_DATA processor features.
 
 use super::ArgSlot;
 use crate::nt::crashreport::Note;
@@ -15,7 +15,7 @@ use crate::nt::platform::{Gpr, SharedPage, SyscallFrame, TrapFrame, UserRegs};
 use crate::nt::process::Process;
 use crate::nt::registry::Processor;
 use crate::nt::status::NtStatus;
-use crate::nt::syscalls::Call;
+use crate::nt::syscalls::{Call, THREAD_SET_CONTEXT, caller_regs, thread_object};
 
 pub mod context;
 
@@ -250,12 +250,102 @@ pub fn processor() -> Processor {
     Processor { name: [0; 48], vendor: [0; 12], family: 0, model: 0, stepping: 0, mhz: 0 }
 }
 
-pub(in crate::nt) fn nt_get_context_thread(_call: &mut Call<'_>) -> NtStatus {
-    NtStatus::NOT_IMPLEMENTED
+/// NtGetContextThread's access right.
+const THREAD_GET_CONTEXT: u32 = 0x0008;
+
+/// Whether `object` is the calling thread.
+fn is_current_thread(object: &ObjectRef) -> bool {
+    crate::nt::thread::current().is_some_and(|me| crate::mm::heap::KArc::ptr_eq(&me, object))
 }
 
-pub(in crate::nt) fn nt_set_context_thread(_call: &mut Call<'_>) -> NtStatus {
-    NtStatus::NOT_IMPLEMENTED
+/// NtGetContextThread(ThreadHandle, *Context): the parts of the user
+/// registers ContextFlags names, of the caller (as it returns from the
+/// call) or of a suspended thread once it has stopped.
+pub(in crate::nt) fn nt_get_context_thread(call: &mut Call<'_>) -> NtStatus {
+    let handle = match call.arg(0) {
+        Ok(v) => v,
+        Err(status) => return status,
+    };
+    let ptr = match call.arg(1) {
+        Ok(v) => v,
+        Err(status) => return status,
+    };
+    let object = match thread_object(call, handle, THREAD_GET_CONTEXT) {
+        Ok(o) => o,
+        Err(status) => return status,
+    };
+    let mut ctx = [0u8; context::SIZE];
+    if call.process.read(ptr, &mut ctx).is_err() {
+        return NtStatus::ACCESS_VIOLATION;
+    }
+    let (regs, fx) = if is_current_thread(&object) {
+        (caller_regs(call), platform::xsave())
+    } else {
+        match crate::nt::thread::parked_state(&object) {
+            Ok(p) => (p.regs, p.fx),
+            Err(status) => return status,
+        }
+    };
+    let mut fp = [0u8; context::FP_STATE_BYTES];
+    fp.copy_from_slice(fx.bytes());
+    let flags = context::flags(&ctx);
+    context::fill(&mut ctx, flags, &context_regs(&regs), &fp);
+    if call.process.write(ptr, &ctx).is_err() {
+        return NtStatus::ACCESS_VIOLATION;
+    }
+    NtStatus::SUCCESS
+}
+
+/// NtSetContextThread(ThreadHandle, *Context): the parts ContextFlags
+/// names; for the caller they take effect on return (as NtContinue's), for
+/// a suspended thread when it resumes. x18 stays the TEB whatever the
+/// CONTEXT says (`syscall::for_user`).
+pub(in crate::nt) fn nt_set_context_thread(call: &mut Call<'_>) -> NtStatus {
+    let handle = match call.arg(0) {
+        Ok(v) => v,
+        Err(status) => return status,
+    };
+    let ptr = match call.arg(1) {
+        Ok(v) => v,
+        Err(status) => return status,
+    };
+    let object = match thread_object(call, handle, THREAD_SET_CONTEXT) {
+        Ok(o) => o,
+        Err(status) => return status,
+    };
+    let mut ctx = [0u8; context::SIZE];
+    if call.process.read(ptr, &mut ctx).is_err() {
+        return NtStatus::ACCESS_VIOLATION;
+    }
+    let flags = context::flags(&ctx);
+    let fp = context::float_state(&ctx);
+    if is_current_thread(&object) {
+        let mut regs = context_regs(&caller_regs(call));
+        context::apply(&mut regs, &ctx, flags);
+        let regs = user_regs(&regs);
+        if !regs.is_valid() {
+            return NtStatus::INVALID_PARAMETER;
+        }
+        if let Some(fp) = fp {
+            platform::xrstor(&xstate_of(&fp));
+        }
+        platform::continue_with(regs);
+        return NtStatus::SUCCESS;
+    }
+    let parked = match crate::nt::thread::parked_state(&object) {
+        Ok(p) => p,
+        Err(status) => return status,
+    };
+    let mut regs = context_regs(&parked.regs);
+    context::apply(&mut regs, &ctx, flags);
+    let regs = user_regs(&regs);
+    if !regs.is_valid() {
+        return NtStatus::INVALID_PARAMETER;
+    }
+    match crate::nt::thread::set_parked_state(&object, regs, fp.map(|fp| xstate_of(&fp))) {
+        Ok(()) => NtStatus::SUCCESS,
+        Err(e) => e,
+    }
 }
 
 /// NtContinue(Context, TestAlert): the thread resumes with the parts of

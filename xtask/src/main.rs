@@ -7212,6 +7212,7 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("arm_crash_dispatched", "ntdll.dll", "Windows/System32"),
     ("arm_crash_filtered", "ntdll.dll", "Windows/System32"),
     ("arm_seh", "ntdll.dll", "Windows/System32"),
+    ("arm_context", "ntdll.dll", "Windows/System32"),
     ("seh_test", "ntdll.dll", "Windows/System32"),
     ("guard_test", "ntdll.dll", "Windows/System32"),
     ("import_test", "ntdll.dll", "Windows/System32"),
@@ -9954,6 +9955,8 @@ const USER_PROGRAMS_ARM64: &[&str] = &[
     "apc_test",
     "crash",
     "seh_test",
+    "context_test",
+    "threadinfo_test",
 ];
 
 /// Where the build puts the ARM64 build of test program `program`.
@@ -12200,6 +12203,8 @@ const AARCH64_SCENARIOS: &[&str] = &[
     "arm_crash_dispatched",
     "arm_crash_filtered",
     "arm_seh",
+    "arm_context",
+    "arm_threadinfo",
     "arm_sched",
     "arm_fault_ud",
     "arm_fault_pagefault",
@@ -12580,6 +12585,22 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit run=seh_test.exe",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["seh_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // context_test's ARM64 build (as `context_test`): suspended threads'
+        // ARM64 CONTEXT through NtGetContextThread, a new one through
+        // NtSetContextThread, the caller's own.
+        name: "arm_context",
+        cmdline: "qemu_exit run=context_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["context_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // threadinfo_test's ARM64 build (as `threadinfo_test`).
+        name: "arm_threadinfo",
+        cmdline: "qemu_exit run=threadinfo_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["threadinfo_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
     },
     Scenario {
         // The hang watchdog on aarch64 (as `watchdog`): CPU 1 spins in its
