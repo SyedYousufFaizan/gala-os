@@ -12088,6 +12088,7 @@ const AARCH64_SCENARIOS: &[&str] = &[
     "arm_boot",
     "arm_net_echo",
     "arm_persist",
+    "arm_clock",
     "arm_sched",
     "arm_fault_ud",
     "arm_fault_pagefault",
@@ -12555,6 +12556,23 @@ const SCENARIOS: &[Scenario] = &[
             "exited with status 0x00000000",
             "xtask: clock: clockcal_test: guest",
             "xtask: clock: clock: guest",
+        ],
+    },
+    Scenario {
+        // The aarch64 clock checked against the wall clock (a PL031):
+        // `calwrong` makes the counter's rate 20x low, the check must say
+        // so and recalibrate (the boot waits for it under `calwrong`), the
+        // architected rate taken again.
+        name: "arm_clock",
+        cmdline: "qemu_exit calwrong",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "clockcal: calibration made 20x low",
+            "clock: checking the generic counter (",
+            "clock: WRONG: the generic counter was calibrated at",
+            "clock: recalibrated: generic counter ",
+            "from CNTFRQ_EL0",
+            "gala: boot ok",
         ],
     },
     Scenario {

@@ -179,7 +179,9 @@ NT layer's start, the tick seen running, PCI through the ECAM, the disk
 and network drivers set up on their devices, the manifest verified),
 `arm_net_echo` (the kernel's echo server: frames both ways through the
 card), `arm_persist` (C: kept on the disk: formatted by a first boot,
-read back by the second), `arm_sched` (`schedtest`: kernel threads
+read back by the second), `arm_clock` (the counter's rate made wrong by
+`calwrong`, caught by the RTC check against the PL031, taken again),
+`arm_sched` (`schedtest`: kernel threads
 switched, woken, joined), `arm_fault_ud` and `arm_fault_pagefault` (the
 vectors' report). User mode is the next step: no program runs yet.
 
@@ -270,7 +272,7 @@ vectors' report). User mode is the next step: no program runs yet.
   tree: the port); CPUs the bootloader did not start are not started
   (PSCI CPU_ON); SGIs reach an Aff0 below 16 only; no NMI (the GIC's
   pseudo-NMI: no state dump at a timeout, no `stop_others`); no user
-  mode; no RTC read (the PL031); entered at EL2 with VHE the timer would
+  mode; the PL031 RTC's address is the board's too; entered at EL2 with VHE the timer would
   be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
   enrollment is BOOTX64.EFI's).
 
@@ -372,7 +374,7 @@ Whitespace-separated `flag` and `key=value` words (`kernel/src/cmdline.rs`).
 | `stop_after=<phase>` | end the boot after that boot phase (`memory_map`, `frames`, `paging`, `timer`, `sched`, `smp_start`, `smp_done`, `drivers`, `manifest`): logged (`boot: stopping after boot phase <phase> (stop_after)`; once interrupts are on, with whether the tick runs: three ticks waited for, at most 2 s), then QEMU exits with success under `qemu_exit` (else the CPU halts). The aarch64 port's scenarios use it while the phases after are unported |
 | `schedtest` | the scheduler's check, just after it starts: two kernel threads yield to each other 100 rounds each, spin until each other arrives and leaves (only the tick's preemption moves them on, also on the thread a tick switched to), sleep 10 ms and are joined; `schedtest: ok: ...` if they took turns and ended, else `schedtest: failed: ...` (scenarios `arm_sched`, `sched_selftest`) |
 | `early_fault=<ud\|pagefault\|stackoverflow>` | provoke that fault right after the exception vectors are installed, before anything else is up (`fault=` is the same later, on a scheduler thread); scenarios `arm_fault_ud`, `arm_fault_pagefault` |
-| `calwrong`, `calstall` | clock-calibration tests: the first TSC calibration 20x low (the RTC check must catch it), or the boot CPU stalled inside the calibration (scenarios `clockcal_*`; "Interrupts and time") |
+| `calwrong`, `calstall` | clock-calibration tests: the first calibration of the cycle counter 20x low (the RTC check must catch it; also on aarch64, `arm_clock`), or the boot CPU stalled inside the calibration (x86-64; scenarios `clockcal_*`; "Interrupts and time") |
 | `failpoint=<point>:<mode>:<n>[,...]` | fault injection while the `start=`/`run=` programs run (debug builds; "Fault injection"). Points `heap`, `frame`, `disk_io`, `net_tx`, `pageout`; modes `every:<n>` (the n-th, 2n-th, ... occurrence fails), `nth:<n>` (only the n-th), `random:<per-mille>` (from `failseed=`). Example: `failpoint=heap:every:97,net_tx:random:50` |
 | `failpoint=disk_io:delay:<ms>` | added latency: each disk request waits that long first, nothing fails (debug builds; R7) |
 | `failseed=<n>` | seed of the `random` failpoints (default 0): the same seed fails the same occurrences |
@@ -562,8 +564,12 @@ channel 2 as a free-running counter.
 ### The RTC check
 
 `time::start_clock_check` starts a kernel thread "clockcheck" after boot
-that polls the CMOS RTC's seconds every millisecond and times its second
-edges with the TSC (each edge bracketed by the polls around it). The
+that polls the RTC's seconds (`arch::timer::rtc_seconds`: x86-64's CMOS
+RTC, aarch64's PL031) every millisecond and times its second edges with
+the cycle counter (each edge bracketed by the polls around it; the log
+names the counter and the timer, `timer::COUNTER_NAME` and
+`TIMER_NAME`: the TSC and the APIC timer, the generic counter and
+timer). The
 seconds between two edges are counted from the RTC's decoded value, not
 from the edges seen (a poll more than a second late misses an edge).
 After k seconds `clockcal::rtc_verdict` compares the calibrated rate with
@@ -575,16 +581,20 @@ what the RTC allows:
 - wrong (more than 3% outside, twice in a row): `clock: WRONG: ...`
   (error, and a `clock_wrong` event whatever the event mask). The
   calibration is then redone on the boot CPU with interrupts off (its
-  timer restarted; the RTC's coarse rate is used only if the new
-  measurement has too few good samples and still disagrees), the TSC's
+  timer restarted; the RTC's coarse rate is used only if the new rate
+  is not reliable and still disagrees: an x86-64 measurement with too
+  few good samples, or aarch64's CNTFRQ_EL0, the firmware's statement
+  rather than a measurement, read again), the counter's
   zero is moved so that `monotonic_ns` goes on without a jump (a seqlock
   over the rate and the zero), and the other CPUs reprogram their timer
   at their next tick (`CAL_GEN`).
 
 `calwrong` divides the first calibration by 20 to test this path
-(scenario `clockcal_recal`; the programs then wait for the check). The
-check's two log lines carry `uptime_ms=` marks, which xtask times against
-the host (`xtask/src/clockcheck.rs`).
+(scenarios `clockcal_recal` and `arm_clock`; the programs, or the boot's
+end, then wait for the check). The check's log lines carry `uptime_ms=`
+marks, which xtask times against the host (`xtask/src/clockcheck.rs`);
+a `clock: recalibrated:` line starts its marks again (the time before it
+was wrong, and the kernel said so).
 
 ### What a guest's clock follows
 

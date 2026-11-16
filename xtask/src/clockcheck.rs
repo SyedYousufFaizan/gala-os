@@ -10,7 +10,10 @@
 //! guest's interval between the first and the last mark with the host's
 //! possible interval and adds an `xtask: clock: <source>:` line to the
 //! log, `xtask: clock: WRONG: <source>:` when the guest's lies more than
-//! [`WRONG_PERCENT`] outside it.
+//! [`WRONG_PERCENT`] outside it. A recalibration (the kernel's `clock:
+//! recalibrated:` line, after its RTC check found the clock wrong) starts
+//! the marks again: the guest's time until then was wrong, and the kernel
+//! said so; what is judged is the clock it runs on from there.
 //!
 //! The reference is the host's monotonic clock: under QEMU's TCG (no
 //! `-icount`) the guest's TSC, HPET, PM timer, LAPIC timer and RTC all
@@ -33,6 +36,9 @@ use std::time::{Duration, Instant};
 
 /// The marker xtask looks for in the guest's lines.
 pub const MARK: &str = "uptime_ms=";
+/// The kernel's line when it recalibrated its clock (time.rs): the
+/// marks start again from it.
+pub const RECALIBRATED: &str = "clock: recalibrated:";
 /// The start of the line xtask adds when the clocks disagree.
 pub const WRONG: &str = "xtask: clock: WRONG";
 /// How far the guest's interval may lie outside the host's possible one
@@ -90,6 +96,12 @@ impl ClockMarks {
             let line: Vec<u8> = self.partial.drain(..=end).collect();
             let line = String::from_utf8_lossy(&line);
             if let Some(guest) = guest_ms(&line) {
+                // The kernel found its clock wrong and set it right: the
+                // guest's time until then is not compared with its time
+                // after (every source's: they all read that clock).
+                if line.contains(RECALIBRATED) {
+                    self.marks.clear();
+                }
                 let source = source(&line).to_string();
                 self.marks.push(Mark { source, host_lo: lo, host_hi: hi, guest });
             }
@@ -306,6 +318,27 @@ mod tests {
         assert_eq!(guest_ms("[info ] clock: RTC check (uptime_ms=99)"), Some(99));
         assert_eq!(guest_ms("nothing here"), None);
         assert_eq!(guest_ms("uptime_ms=x"), None);
+    }
+
+    /// arm_clock (`calwrong`): the guest's time ran 20x fast until the
+    /// kernel recalibrated, which it says; the marks before that are not
+    /// held against the marks after it.
+    #[test]
+    fn a_recalibration_starts_the_marks_again() {
+        let (dir, log) = temp_log("recal");
+        let text = "[info ] clock: checking (uptime_ms=20000)\n\
+                    p: mark uptime_ms=30000\n\
+                    [warn ] clock: recalibrated: generic counter 1000 MHz (uptime_ms=67000)\n";
+        std::fs::write(&log, text).unwrap();
+        let mut m = ClockMarks::default();
+        m.poll(&log, 900, || 1000);
+        let more = "[info ] clock: RTC check: agrees (uptime_ms=70000)\n";
+        std::fs::write(&log, format!("{text}{more}")).unwrap();
+        m.poll(&log, 3900, || 4000);
+        let v = m.verdict().unwrap();
+        assert!(v.starts_with("xtask: clock: clock: guest 3000 ms over host 0..4000 ms"), "{v}");
+        assert!(!v.contains("WRONG") && !v.contains("p:"), "{v}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

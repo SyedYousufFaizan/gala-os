@@ -4025,14 +4025,16 @@ on the seams item PT prepared: native ARM64 Windows programs
   client), the disk's requests both ways (`arm_persist`: C: formatted on
   the disk by a first boot, its area and rollback floor read back by the
   second).
+- The clock checked against the wall clock (`arm_clock`, with
+  `calwrong`): the PL031 RTC, the check's verdict and the recalibration
+  (CNTFRQ_EL0's rate read again; the RTC's measurement wins over it when
+  they disagree), the log naming the architecture's counter and timer.
 
 **Next**:
 1. The rest of the kernel's `arch` for aarch64: the GIC's pseudo-NMI
    (state dumps, `stop_others`), PSCI CPU_ON for CPUs the bootloader did
    not start; the UART's and the GIC's addresses from the firmware (SPCR,
-   MADT or the device tree); the RTC (PL031), which the clock's check
-   against the wall clock needs (it names x86-64's TSC throughout: the
-   counter becomes the architecture's). Then
+   MADT or the device tree, and the PL031's). Then
    `hello` reaching its kernel line, which needs step 2's ntdll and the
    ABI.
 2. User mode: Windows' ARM64 ABI (`nt::abi::arm64`: CONTEXT, the system
