@@ -566,6 +566,9 @@ pub enum LoadError {
     OutOfMemory,
     Paging(PagingError),
     Spawn(SpawnError),
+    /// The first thread could not be set up to start (its entry through
+    /// ntdll, or the thread itself), with the status that said why.
+    Start(NtStatus),
 }
 
 impl From<AllocError> for LoadError {
@@ -1202,9 +1205,9 @@ fn spawn_inner(spec: Spawn<'_>) -> Result<(KArc<Process>, ObjectRef), LoadError>
     });
     let (main, regs) = match started {
         Ok(t) => t,
-        Err(_) => {
+        Err(status) => {
             PROCESSES.lock().retain(|p| !KArc::ptr_eq(p, &process));
-            return Err(LoadError::OutOfMemory);
+            return Err(LoadError::Start(status));
         }
     };
     announce_start(&process, regs.ip(), command_line);

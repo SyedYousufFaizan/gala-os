@@ -176,13 +176,13 @@ pub(super) extern "C" fn lower_sync(frame: &mut TrapFrame) {
     super::cpu::irq_exit();
 }
 
-/// Runs the user-return hook on a frame from EL0 (its changes written
-/// back).
+/// Runs the user-return hook on a frame from EL0 and leaves it as user
+/// mode resumes with it (`syscall::for_user`: the handler before may have
+/// changed it too).
 fn user_return(frame: &mut TrapFrame) {
     let mut regs = frame.regs;
-    if super::syscall::run_user_return_hook(&mut regs) {
-        frame.regs = super::syscall::sanitized(regs);
-    }
+    super::syscall::run_user_return_hook(&mut regs);
+    frame.regs = super::syscall::for_user(regs);
 }
 
 pub type Handler = fn(&mut TrapFrame);

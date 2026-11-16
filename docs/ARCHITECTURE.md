@@ -235,8 +235,24 @@ faults, its exit).
   EL0 go to the user-exception handler (an abort's address from FAR),
   then the hook; an IRQ from EL0 runs the hook too. An NT thread's x18
   is its TEB (`percpu::user_gs_base`), a Linux thread's TPIDR_EL0 its
-  TLS base. A process's image must be the architecture's machine
-  (`arch::runs_machine`: ARM64 here; x64 and x86 wait for XT).
+  TLS base. Invariant: every return to EL0 goes through
+  `syscall::for_user` (EL0t, the condition flags only, and an NT
+  thread's x18 its TEB), whatever set the registers: NtContinue's
+  CONTEXT, an exception handler, the hook. A process's image must be
+  the architecture's machine (`arch::runs_machine`: ARM64 here; x64 and
+  x86 wait for XT).
+- **Windows' ARM64 ABI** (`nt/abi/arm64`): ARM64's CONTEXT
+  (`context.rs`, plain data the host's tests build on any machine:
+  ContextFlags, Cpsr, X0-X28, Fp, Lr, Sp, Pc, V0-V31, Fpcr, Fpsr, the
+  control, integer and floating-point parts). A process's first thread
+  starts at gala's ntdll's LdrInitializeThunk with x0 the program's
+  CONTEXT (CONTEXT_FULL, written at the top of its stack) and x1
+  ntdll's base (`ldr_thunk_regs`); NtContinue applies the parts its
+  flags name over the caller's registers and loads the floating-point
+  part straight into V0-V31 (`xstate::restore`: the kernel never uses
+  them); NtCreateThread starts a thread from a CONTEXT's registers.
+  gala's ntdll and ntrt make `svc #N` as Windows ARM64's ntdll does
+  (`arm_startup`, `arm_import`: a program bound to an ARM64 DLL).
 - **Interrupt masking and the pseudo-NMI** (`cpu.rs`, `gic.rs`):
   interrupts are masked by priority (ICC_PMR_EL1), not PSTATE.I: "off"
   (`PMR_OFF`, 0xa0) lets only the NMI's priority (0x80) through, "on"
@@ -333,9 +349,10 @@ faults, its exit).
   Aff0 below 16 only; xtask cannot ask for a state dump at a timeout
   (QEMU `virt` has no NMI for its monitor's `nmi`: "machine does not
   provide NMIs"); no `stop_others` (its one user, the hot swap, is
-  x86-64's); in user mode no NT DLL is loaded yet (the processes of
-  `arm_hello` start at the image's entry: no ntdll, no LdrInitializeThunk,
-  no CONTEXT services, no unwinding); the page file's aging is not safe
+  x86-64's); in user mode no exception reaches user mode (no ARM64
+  exception frame, no .pdata unwinding), NtContinue's TestAlert runs no
+  APC (no ARM64 APC frame), and NtGetContextThread and
+  NtSetContextThread answer STATUS_NOT_IMPLEMENTED; the page file's aging is not safe
   here (it relies on hardware-set accessed and dirty bits: FEAT_HAFDBS
   is not turned on); entered at EL2 with VHE the timer would
   be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
