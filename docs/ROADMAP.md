@@ -421,8 +421,7 @@ in WORKFLOW "Rules for every change"):
   (`UserRegs`, `SyscallFrame`, `TrapFrame`) keep their fields private to
   `arch` behind neutral accessors; the clock reads `cpu::cycles` and
   drives `arch::timer`; the boot steps, phase names, per-CPU snapshot and
-  NMIs are `arch`'s; PCI and virtio are shared over `pci_config` and
-  `port`. Windows' x64 ABI is `nt::abi::x64` (CONTEXT, argument
+  NMIs are `arch`'s; PCI and virtio are shared over `pci_config`. Windows' x64 ABI is `nt::abi::x64` (CONTEXT, argument
   registers, thread starts, exception and APC frames, the CONTEXT
   services, KUSER_SHARED_DATA's processor fields, CPUID's registry
   values, the crash report's registers); Linux's x86-64 ABI is
@@ -4016,14 +4015,17 @@ on the seams item PT prepared: native ARM64 Windows programs
   MPIDR's affinity everywhere.
 - The NT layer's start (`arm_boot` to `stop_after=drivers`): the system
   call dispatchers and the user-mode hooks kept, KUSER_SHARED_DATA.
+- PCI (`arm_boot`, with a disk and a card attached): configuration space
+  through segment 0's ECAM window from the MCFG (host-tested parser), the
+  virtio-blk and virtio-net drivers set up on their devices through
+  virtio's modern interface (on both architectures). Their first
+  requests (DMA) come with the phases after the manifest.
 
 **Next**:
 1. The kernel's `arch` for aarch64, in boot order, each phase's
-   `stop_after` moving `arm_boot` on: PCI (the ECAM from the MCFG, a
-   host-tested parser like the MADT's) and its devices, which the
-   drivers already reach through memory BARs only (virtio's modern
-   interface, on both architectures). Then the boot files and the
-   manifest, the GIC's pseudo-NMI
+   `stop_after` moving `arm_boot` on: the boot files and the manifest
+   (the disk's and the network's first requests after them), the GIC's
+   pseudo-NMI
    (state dumps, `stop_others`), PSCI CPU_ON for CPUs the bootloader did
    not start; the UART's and the GIC's addresses from the firmware (SPCR,
    MADT or the device tree); the RTC (PL031). Then

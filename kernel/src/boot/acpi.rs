@@ -10,6 +10,9 @@
 //! "Interrupts and time"): the HPET table's base address and the FADT's
 //! ACPI PM timer port.
 //!
+//! And PCI's configuration space: the MCFG's ECAM window ("PCI Firmware
+//! Specification", MCFG), how aarch64 reaches it.
+//!
 //! Parsing works on byte slices (host-tested); `read_madt` maps the tables
 //! through the HHDM, where Limine (base revision >= 4) guarantees them.
 
@@ -200,6 +203,36 @@ pub fn parse_fadt(t: &[u8]) -> Option<PmTimer> {
     Some(PmTimer { port: u16::try_from(port).ok()?, bits32 })
 }
 
+/// A PCI segment's ECAM window: function `bus:device.function`'s 4 KiB of
+/// configuration space at `base + ((bus - start_bus) << 20 | device << 15
+/// | function << 12)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ecam {
+    /// Physical address of `start_bus`'s configuration space.
+    pub base: u64,
+    pub segment: u16,
+    pub start_bus: u8,
+    pub end_bus: u8,
+}
+
+/// The MCFG's window for segment 0 (the only one `arch::pci` enumerates):
+/// its 16-byte allocations start at 44 (after 8 reserved bytes), each the
+/// base (u64), the segment (u16), the start and end bus, 4 reserved.
+pub fn parse_mcfg(t: &[u8]) -> Option<Ecam> {
+    if t.get(..4) != Some(b"MCFG") || !checksum_ok(t) {
+        return None;
+    }
+    t.get(SDT_HEADER_LEN + 8..)?.chunks_exact(16).find_map(|e| {
+        let ecam = Ecam {
+            base: u64_at(e, 0)?,
+            segment: u16::from_le_bytes([e[8], e[9]]),
+            start_bus: e[10],
+            end_bus: e[11],
+        };
+        (ecam.segment == 0 && ecam.base != 0 && ecam.start_bus <= ecam.end_bus).then_some(ecam)
+    })
+}
+
 /// Reads `len` bytes at physical `phys` (HHDM-mapped).
 ///
 /// # Safety
@@ -222,6 +255,12 @@ pub fn read_clock_tables(hhdm_offset: u64, rsdp_virt: u64) -> ClockTables {
         hpet: table(b"HPET").and_then(parse_hpet),
         pm_timer: table(b"FACP").and_then(parse_fadt),
     }
+}
+
+/// The MCFG's segment-0 ECAM window, from the RSDP at virtual `rsdp`
+/// (HHDM); none without the table (or without a readable one).
+pub fn read_mcfg(hhdm_offset: u64, rsdp_virt: u64) -> Option<Ecam> {
+    read_table(hhdm_offset, rsdp_virt, b"MCFG").ok().flatten().and_then(parse_mcfg)
 }
 
 /// The first table with signature `sig` the root table lists.
@@ -352,6 +391,34 @@ mod tests {
         assert_eq!(parse_fadt(&table(b"FACP", &long)), Some(PmTimer { port: 0x408, bits32: true }));
         // No timer.
         assert_eq!(parse_fadt(&table(b"FACP", &[0u8; 80])), None);
+    }
+
+    #[test]
+    fn mcfg_segment_zero() {
+        fn alloc(base: u64, segment: u16, start: u8, end: u8) -> Vec<u8> {
+            let mut e = base.to_le_bytes().to_vec();
+            e.extend_from_slice(&segment.to_le_bytes());
+            e.extend_from_slice(&[start, end, 0, 0, 0, 0]);
+            e
+        }
+        let mut body = vec![0u8; 8]; // reserved
+        body.extend(alloc(0x80_0000_0000, 1, 0, 15)); // another segment
+        body.extend(alloc(0x40_1000_0000, 0, 0, 255));
+        let mcfg = table(b"MCFG", &body);
+        let want = Ecam { base: 0x40_1000_0000, segment: 0, start_bus: 0, end_bus: 255 };
+        assert_eq!(parse_mcfg(&mcfg), Some(want));
+        // A truncated last entry is not read; a bad checksum, none.
+        let mut cut = body.clone();
+        cut.truncate(8 + 16 + 10);
+        assert_eq!(parse_mcfg(&table(b"MCFG", &cut)), None);
+        let mut bad = mcfg.clone();
+        bad[50] ^= 1;
+        assert_eq!(parse_mcfg(&bad), None);
+        // No allocations; an inverted bus range.
+        assert_eq!(parse_mcfg(&table(b"MCFG", &[0u8; 8])), None);
+        let mut inverted = vec![0u8; 8];
+        inverted.extend(alloc(0x3000_0000, 0, 5, 4));
+        assert_eq!(parse_mcfg(&table(b"MCFG", &inverted)), None);
     }
 
     #[test]

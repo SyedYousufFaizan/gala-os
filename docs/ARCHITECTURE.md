@@ -125,8 +125,8 @@ provides (the module names neutral code uses):
   (interrupt masking, halting, `hw_random`), the console and debug
   ports, `qemu::exit`, the kernel handover's machine part, PS/2.
 - **Devices**: `port` and `pci_config` (x86-64: I/O ports and the 0xcf8
-  mechanism); `arch::pci` and `arch::virtio` are shared by every
-  architecture on top of them.
+  mechanism; aarch64: no ports, the MCFG's ECAM window); `arch::pci` and
+  `arch::virtio` are shared by every architecture on top of them.
 
 The personalities' ABIs are per architecture too, outside `arch` (they
 are Windows' and Linux's, not the machine's): `nt::abi` (x64: the
@@ -175,11 +175,12 @@ Limine's `BOOTAA64.EFI` from the same kind of ISO as x86-64's (Limine's
 EFI image carries both loaders; the ISO holds the aarch64 kernel). The
 kernel boots through its drivers phase: scenarios `arm_boot` (to
 `stop_after=drivers`: both CPUs online, the NT layer's start, the tick
-seen running), `arm_sched` (`schedtest`: kernel threads switched, woken,
-joined), `arm_fault_ud` and `arm_fault_pagefault` (the vectors' report).
-PCI is not reached yet (no ECAM: `pci: no configuration space on aarch64
-yet`, so no disk, network or GPU); the manifest and the boot files are
-the next phase.
+seen running, PCI through the ECAM, the disk and network drivers set up
+on their devices), `arm_sched` (`schedtest`: kernel threads switched,
+woken, joined), `arm_fault_ud` and `arm_fault_pagefault` (the vectors'
+report). No request reaches the disk or the network yet (nothing before
+the manifest makes one); the manifest and the boot files are the next
+phase.
 
 - **Soft-float**: the kernel is built for
   `aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE: it
@@ -6213,10 +6214,17 @@ only. ROADMAP N1 (TCP/IP and sockets) and N2 (Nginx) are the items.
 
 ### Devices
 
-- `arch::pci`: configuration space through ports 0xcf8/0xcfc,
-  brute-force enumeration (bus 0-255, functions 1-7 only for
-  multifunction devices). The firmware (SeaBIOS or OVMF) has assigned
-  the BARs; the kernel only turns on memory decoding and bus mastering.
+- `arch::pci`: configuration space through the architecture's
+  `pci_config` (x86-64: ports 0xcf8/0xcfc; aarch64: segment 0's ECAM
+  window from the MCFG, mapped once before the drivers enumerate, every
+  read seeing no device without it), brute-force enumeration (bus 0-255,
+  functions 1-7 only for multifunction devices). x86-64 keeps the ports
+  although q35 has an MCFG: a handover boot gets no ACPI tables from the
+  previous kernel, and the ports need none (aarch64's handover, when
+  ported, carries the window). The boot log names the mechanism (`pci:
+  configuration space through ...`). The firmware (SeaBIOS, OVMF or
+  AAVMF) has assigned the BARs; the kernel only turns on memory decoding
+  and bus mastering.
 - `arch::virtio`: virtio's modern PCI interface only (`ModernDevice`:
   the common, notify and device-configuration structures in memory
   BARs, found through vendor capabilities), for every driver (disk,
