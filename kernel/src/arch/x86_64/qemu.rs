@@ -18,15 +18,17 @@ pub enum QemuExitCode {
 
 /// Terminates QEMU. Only called when the kernel command line opts in, since on
 /// other machines port 0xf4 may belong to an unrelated device. If the device is
-/// absent the write is ignored and the CPU halts.
+/// absent the write is ignored and the CPU halts (the harness's timeout).
 pub fn exit(code: QemuExitCode) -> ! {
     // SAFETY: the debug-exit device has no memory side effects; the kernel
     // command line told us it is present.
     let mut port = unsafe { Port::<u32>::new(DEBUG_EXIT_PORT) };
     port.write(code as u32);
-    // Only without the exit device: said, rather than a silent halt.
-    crate::console::emergency_line(format_args!(
-        "qemu: the run did not end: no isa-debug-exit device at port {DEBUG_EXIT_PORT:#x}; halting"
-    ));
+    // Nothing is said here: QEMU's device asks for the end (its runstate's
+    // shutdown request), so the CPU runs on until QEMU stops it, and a
+    // line would be cut off or claim a failure that is not one. The
+    // caller's "qemu: ending the run" line names where a run that then
+    // does not end stopped (aarch64's semihosting exit, by contrast, ends
+    // QEMU before it returns).
     cpu::halt_forever()
 }

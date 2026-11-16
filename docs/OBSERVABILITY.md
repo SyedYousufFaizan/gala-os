@@ -615,7 +615,10 @@ CPU#n: PC=... PSTATE=...`, read from the monitor before the NMI), and
 with `XTASK_QEMU_GDB=1` QEMU's own record of each vCPU and every QEMU
 thread's stack (WORKFLOW "Hunting a rare hang"). The run's end says
 itself: `qemu: ending the run (Success|Failure)` before the exit, and
-`qemu: the run did not end: ...` if the host did not end it:
+on aarch64 `qemu: the run did not end: ...` if the semihosting exit
+returned (x86-64's exit device asks QEMU for the end and the CPU runs on
+until it comes, so nothing follows there; xtask starts its own lines on
+a new line, since QEMU's end can cut the guest's last one off):
 
 1. From the NMI (only atomics and `try_lock`): each CPU's rip and kernel
    backtrace (`statedump: cpu N ...`, symbolized in the failed log;

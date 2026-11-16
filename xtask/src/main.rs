@@ -20265,6 +20265,13 @@ fn run_vm_once(
     let total = start.elapsed();
     let vm_time = vm_clock.sample();
     let mut serial = read_log(&log);
+    // xtask's own lines start on a line of their own: a guest whose last
+    // line QEMU's end cut off (its exit requests are asynchronous, so the
+    // guest runs on briefly) would otherwise take the first of them into
+    // that line, where nothing tells it from the guest's output.
+    if !serial.is_empty() && !serial.ends_with('\n') {
+        serial.push('\n');
+    }
     serial += &snap_note;
     if let Some(note) = dump_note {
         serial += &note;

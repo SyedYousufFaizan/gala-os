@@ -4187,8 +4187,8 @@ before blaming CI:
   With `XTASK_REPEAT`, catching a 1-in-100 hang takes a few hundred
   boots; `XTASK_QEMU_LOG=int` adds every exception taken (the last ones
   before the stop). The kernel says each step of its exit (`qemu: ending
-  the run (...)`, and `qemu: the run did not end: ...` if the host did
-  not end it), and `bootstack` on the command line adds how deep the
+  the run (...)`, and on aarch64 `qemu: the run did not end: ...` if
+  the semihosting exit returned), and `bootstack` on the command line adds how deep the
   boot stack was ever used.
 - **A program hangs without a ledger** (it never exits, so the ledger is
   not printed): add `events=syscall,thread` to its scenario's command
