@@ -4062,6 +4062,17 @@ on the seams item PT prepared: native ARM64 Windows programs
    aarch64 ABI (`lx::machine::aarch64`, its system call table).
 3. CI: the aarch64 boot scenarios on GitHub's ARM64 runners (free for
    public repositories) or under QEMU's emulation.
+4. The firmware's boot-menu countdown (EDK2's BdsWait, 5 s) stalled
+   about one aarch64 boot in 150 under multi-threaded TCG on a loaded
+   host, before the boot loader ran: CPU 0 kept taking its timer tick
+   with nothing held for it (gdb's record: `interrupt_request` 0, the
+   virtual timer re-armed), the countdown did not end, and xtask's
+   timeout handling later woke it. Stopgap: xtask skips the countdown
+   (`-boot menu=on,splash-time=0`; 0 stalls in 1000 boots, and each
+   boot is 5 s shorter). Not found: why the countdown's timer event
+   stops firing (EDK2's TimerDxe and DXE core timer list against QEMU's
+   virtual timer); a debug build of the firmware with its DEBUG_INFO
+   log is the way in.
 
 **Done when**: the boot scenarios of the native ARM64 test programs pass
 on aarch64 in CI.

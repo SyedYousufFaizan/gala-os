@@ -11601,6 +11601,13 @@ fn qemu_aarch64(iso: &Path) -> Result<Command> {
     }
     cmd.args(["-no-reboot", "-nic", "none"]);
     cmd.args(["-semihosting-config", "enable=on,target=native"]);
+    // No boot-menu countdown: the firmware's (ArmVirtQemu's `Timeout`,
+    // 5 s by default) is taken from QEMU's splash time when the menu is
+    // on (QemuBootOrderLib's GetFrontPageTimeoutFromQemu), and 0 skips
+    // BdsWait. Nothing presses a key in a test boot; the countdown only
+    // cost each boot 5 s, and it is where the rare pre-kernel stall
+    // (ROADMAP AR) sat.
+    cmd.args(["-boot", "menu=on,splash-time=0"]);
     let fw = find_aavmf()?;
     cmd.arg("-drive")
         .arg(format!("if=pflash,format=raw,unit=0,readonly=on,file={}", fw.code.display()));
@@ -20583,29 +20590,62 @@ fn end_qemu(child: &mut std::process::Child) {
 fn qemu_gdb_state(pid: u32, log: &Path) -> String {
     let exe = fs::read_link(format!("/proc/{pid}/exe")).unwrap_or_default();
     let arm = exe.to_string_lossy().contains("aarch64");
-    let cpu = if arm {
-        "p/x ((ARMCPU*)$c)->env.pc\n\
-         p/x ((ARMCPU*)$c)->env.pstate\n\
-         p/x ((ARMCPU*)$c)->env.daif\n\
-         p/x ((ARMCPU*)$c)->env.xregs[0]\n\
-         p/x ((ARMCPU*)$c)->env.xregs[1]\n\
-         p/x ((ARMCPU*)$c)->env.xregs[29]\n\
-         p/x ((ARMCPU*)$c)->env.xregs[30]\n\
-         p/x ((ARMCPU*)$c)->env.xregs[31]\n\
-         p/x ((ARMCPU*)$c)->env.elr_el[1]\n\
-         p/x ((ARMCPU*)$c)->env.cp15.esr_el[1]\n\
-         p/x ((ARMCPU*)$c)->env.cp15.vbar_el[1]\n\
-         p/x ((ARMCPU*)$c)->env.cp15.ttbr0_el[1]\n\
-         p/x ((ARMCPU*)$c)->power_state\n"
+    // One `vcpu` line per field, named: the guest's registers, then what
+    // decides whether a halted vCPU wakes: the interrupts QEMU holds for
+    // it (interrupt_request, CPU_INTERRUPT_HARD is 0x2) and, on aarch64,
+    // each generic timer's control and compare value and when QEMU's timer
+    // for it fires, against the virtual clock's now (`clock`, ns). A vCPU
+    // halted with an interrupt held is a wakeup QEMU lost; one halted
+    // with none held waits for a timer that never fires.
+    let fields: &[(&str, &str)] = if arm {
+        &[
+            ("pc", "((ARMCPU*)$c)->env.pc"),
+            ("pstate", "((ARMCPU*)$c)->env.pstate"),
+            ("daif", "((ARMCPU*)$c)->env.daif"),
+            ("x0", "((ARMCPU*)$c)->env.xregs[0]"),
+            ("x1", "((ARMCPU*)$c)->env.xregs[1]"),
+            ("x29", "((ARMCPU*)$c)->env.xregs[29]"),
+            ("x30", "((ARMCPU*)$c)->env.xregs[30]"),
+            ("sp", "((ARMCPU*)$c)->env.xregs[31]"),
+            ("elr_el1", "((ARMCPU*)$c)->env.elr_el[1]"),
+            ("esr_el1", "((ARMCPU*)$c)->env.cp15.esr_el[1]"),
+            ("vbar_el1", "((ARMCPU*)$c)->env.cp15.vbar_el[1]"),
+            ("ttbr0_el1", "((ARMCPU*)$c)->env.cp15.ttbr0_el[1]"),
+            ("power_state", "((ARMCPU*)$c)->power_state"),
+            ("cntp_ctl", "((ARMCPU*)$c)->env.cp15.c14_timer[0].ctl"),
+            ("cntp_cval", "((ARMCPU*)$c)->env.cp15.c14_timer[0].cval"),
+            ("cntv_ctl", "((ARMCPU*)$c)->env.cp15.c14_timer[1].ctl"),
+            ("cntv_cval", "((ARMCPU*)$c)->env.cp15.c14_timer[1].cval"),
+            ("cntp_timer_expires", "((ARMCPU*)$c)->gt_timer[0]->expire_time"),
+            ("cntv_timer_expires", "((ARMCPU*)$c)->gt_timer[1]->expire_time"),
+        ]
     } else {
-        "p/x ((X86CPU*)$c)->env.eip\n\
-         p/x ((X86CPU*)$c)->env.eflags\n\
-         p/x ((X86CPU*)$c)->env.regs[4]\n\
-         p/x ((X86CPU*)$c)->env.hflags\n"
+        &[
+            ("rip", "((X86CPU*)$c)->env.eip"),
+            ("rflags", "((X86CPU*)$c)->env.eflags"),
+            ("rsp", "((X86CPU*)$c)->env.regs[4]"),
+            ("hflags", "((X86CPU*)$c)->env.hflags"),
+        ]
     };
+    let common = [
+        ("halted", "$c->halted"),
+        ("stopped", "$c->stopped"),
+        ("exception_index", "$c->exception_index"),
+        ("interrupt_request", "$c->interrupt_request"),
+        ("exit_request", "$c->exit_request"),
+        ("thread_kicked", "$c->thread_kicked"),
+    ];
+    let cpu: String = common
+        .iter()
+        .chain(fields)
+        .map(|(name, expr)| {
+            format!("printf \"vcpu %d {name} %#lx\\n\", $c->cpu_index, (unsigned long)({expr})\n")
+        })
+        .collect();
     let script = format!(
-        "set pagination off\nset $c = cpus_queue.tqh_first\nwhile $c\n\
-         p $c->cpu_index\np $c->halted\np $c->stopped\np $c->exception_index\n{cpu}\
+        "set pagination off\n\
+         printf \"clock virtual %ld\\n\", (long)qemu_clock_get_ns(1)\n\
+         set $c = cpus_queue.tqh_first\nwhile $c\n{cpu}\
          set $c = $c->node.tqe_next\nend\nthread apply all bt 20\n\
          call (int)fflush(0)\n"
     );
@@ -20625,7 +20665,7 @@ fn qemu_gdb_state(pid: u32, log: &Path) -> String {
             let mut lines = String::from("xtask: QEMU's own state (gdb, XTASK_QEMU_GDB):\n");
             for line in text
                 .lines()
-                .filter(|l| l.starts_with('$') || l.starts_with("Thread ") || l.starts_with('#'))
+                .filter(|l| ["vcpu ", "clock ", "Thread ", "#"].iter().any(|p| l.starts_with(p)))
             {
                 lines += &format!("xtask: gdb: {line}\n");
             }

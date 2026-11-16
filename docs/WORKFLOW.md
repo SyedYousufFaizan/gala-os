@@ -4179,11 +4179,23 @@ before blaming CI:
   for the dump; a wedged guest answers none): the failed log has QEMU's
   view of each CPU at the timeout (`xtask: QEMU's CPU#n: PC=...
   PSTATE=...`, from the monitor). `XTASK_QEMU_GDB=1` adds QEMU's own
-  record (`xtask: gdb:` lines: halted, PC, x0/x1/x29/x30/SP, ELR, ESR,
-  VBAR, TTBR0, the power state; RIP/RFLAGS on x86-64) and every QEMU
-  thread's stack: a halted vCPU says the guest stopped (where, and what
-  last called), a thread inside `exit()` or a lock says QEMU did. The
-  monitor's PC under TCG can be a stale value; gdb's halted flag is not.
+  record (`xtask: gdb: vcpu <n> <field> <value>` lines: halted, PC,
+  x0/x1/x29/x30/SP, ELR, ESR, VBAR, TTBR0, the power state, the
+  interrupts QEMU holds for it (`interrupt_request`), each generic
+  timer's control, compare value and QEMU expiry against `clock
+  virtual`; RIP/RFLAGS on x86-64) and every QEMU thread's stack: a
+  halted vCPU says the guest stopped (where, and what last called), a
+  thread inside `exit()` or a lock says QEMU did; a halted vCPU with an
+  interrupt held is a wakeup QEMU lost, one whose timer keeps being
+  re-armed is a guest still ticking while it waits. The monitor's PC
+  under TCG can be a stale value; gdb's halted flag is not.
+  Pitfall: xtask's timeout handling (the NMI request, the monitor, gdb's
+  attach) can wake a stalled guest, which then runs on until QEMU is
+  killed, so the serial log of a timed-out boot can hold lines printed
+  after the timeout, above xtask's lines: a log that reaches the
+  kernel's end with a pre-kernel CPU state in gdb's record is such a
+  guest. Read where the guest was from gdb's record, not the log's last
+  line.
   With `XTASK_REPEAT`, catching a 1-in-100 hang takes a few hundred
   boots; `XTASK_QEMU_LOG=int` adds every exception taken (the last ones
   before the stop). The kernel says each step of its exit (`qemu: ending
