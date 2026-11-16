@@ -40,10 +40,6 @@ export function llmsText(): string {
       "a real Windows build. x86_64 works; an ARM64 port is in progress.",
   );
   out.push("");
-  out.push(
-    "Source and documentation: https://github.com/bjorn-ali-goransson/gala-os",
-  );
-  out.push("");
 
   out.push("## In progress now");
   out.push("");

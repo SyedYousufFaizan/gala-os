@@ -234,12 +234,8 @@ a {
   color: var(--ink);
 }
 
-.top-src {
-  color: var(--accent) !important;
-}
-
 @media (max-width: 52rem) {
-  .top-nav a:not(.top-src) {
+  .top-nav {
     display: none;
   }
 }
@@ -335,12 +331,6 @@ a {
 .sub {
   font-size: 1.125rem;
   margin: 2.5rem 0 1rem;
-}
-
-.aside {
-  margin-top: 1.5rem;
-  color: var(--ink-soft);
-  font-size: 0.9375rem;
 }
 
 /* ------------------------------------------------------------ diagrams */
