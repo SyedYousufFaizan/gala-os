@@ -93,6 +93,59 @@ pub const TCGETS: u32 = 0x5401;
 pub const TCSETS: u32 = 0x5402;
 pub const TCSETSW: u32 = 0x5403;
 pub const TCSETSF: u32 = 0x5404;
+/// termios2 (`struct termios2`: the termios, then c_ispeed and c_ospeed;
+/// 44 bytes): glibc 2.43's isatty and tcgetattr ask with TCGETS2.
+pub const TCGETS2: u32 = 0x802c_542a;
+pub const TCSETS2: u32 = 0x402c_542b;
+pub const TCSETSW2: u32 = 0x402c_542c;
+pub const TCSETSF2: u32 = 0x402c_542d;
+/// The input speed's bits in c_cflag (0: the output speed's).
+pub const CIBAUD: u32 = CBAUD << 16;
+
+/// The speed in bits per second of baud code `code` (c_cflag's CBAUD
+/// bits: B0 .. B38400, then B57600 .. B4000000 with CBAUDEX).
+pub fn speed(code: u32) -> u32 {
+    const LOW: [u32; 16] =
+        [0, 50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800, 9600, 19200, 38400];
+    const HIGH: [u32; 15] = [
+        57600, 115200, 230400, 460800, 500000, 576000, 921600, 1000000, 1152000, 1500000, 2000000,
+        2500000, 3000000, 3500000, 4000000,
+    ];
+    let code = code & CBAUD;
+    if code & 0o10000 == 0 {
+        LOW[code as usize]
+    } else {
+        // 0o10000 alone is BOTHER (a speed given in c_ispeed/c_ospeed,
+        // which gala's terminals do not keep): 0.
+        ((code & 0o17) as usize).checked_sub(1).and_then(|i| HIGH.get(i)).copied().unwrap_or(0)
+    }
+}
+
+/// The baud code of `bps` bits per second, if it has one.
+pub fn code_of(bps: u32) -> Option<u32> {
+    (0..16).chain(0o10001..0o10020).find(|&c| speed(c) == bps && (c != 0 || bps == 0))
+}
+
+/// TCSETS2's c_cflag: a BOTHER speed (c_ospeed, c_ispeed) that has a baud
+/// code becomes that code, as Linux encodes it; None for one without.
+pub fn encode_speeds(cflag: u32, ispeed: u32, ospeed: u32) -> Option<u32> {
+    const BOTHER: u32 = 0o10000;
+    let mut c = cflag;
+    if c & CBAUD == BOTHER {
+        c = (c & !CBAUD) | code_of(ospeed)?;
+    }
+    if (c & CIBAUD) >> 16 == BOTHER {
+        c = (c & !CIBAUD) | (code_of(ispeed)? << 16);
+    }
+    Some(c)
+}
+
+/// termios2's c_ispeed and c_ospeed for c_cflag `cflag` (TCGETS2).
+pub fn speeds(cflag: u32) -> (u32, u32) {
+    let out = speed(cflag);
+    let input = (cflag & CIBAUD) >> 16;
+    (if input == 0 { out } else { speed(input) }, out)
+}
 pub const TIOCSCTTY: u32 = 0x540e;
 pub const TIOCGPGRP: u32 = 0x540f;
 pub const TIOCSPGRP: u32 = 0x5410;
@@ -225,6 +278,20 @@ mod tests {
         assert_eq!(parse("slave"), Termios::fresh_pty());
         assert_eq!(parse("master"), Termios::fresh_pty());
         assert_eq!(value(PTY, "TCGETS writes bytes") as usize, size_of::<Termios>());
+    }
+
+    #[test]
+    fn speeds_of_the_baud_codes() {
+        assert_eq!(speed(B38400), 38400);
+        assert_eq!(speed(0), 0);
+        assert_eq!(speed(0o10002), 115200);
+        assert_eq!(speed(0o10017), 4000000);
+        assert_eq!(speed(0o10000), 0);
+        assert_eq!(speeds(B38400), (38400, 38400));
+        assert_eq!(speeds(B38400 | (0o15 << 16)), (9600, 38400));
+        assert_eq!(encode_speeds(0o10000 | CS8, 0, 9600), Some(0o15 | CS8));
+        assert_eq!(encode_speeds(B38400, 0, 0), Some(B38400));
+        assert_eq!(encode_speeds(0o10000, 0, 12345), None);
         assert!(Termios::fresh_pty().canonical());
     }
 

@@ -421,13 +421,16 @@ fn page_out_process(
     let peb = super::layout::PEB_ADDRESS;
     let mut virt = from;
     let mut freed = 0;
+    // Nothing to page out of a process that has exited: its address space
+    // is gone (`process::release_space`).
+    let Some(space_of) = p.space_now() else { return Err(freed) };
     let mut batch =
         [Candidate { virt: 0, frame: platform::Frame::from_number(0), token: 0 }; BATCH];
     while freed < want && *budget > 0 && virt < USER_END {
         // The clock: ages pages until a batch of old ones is found.
         let mut n = 0;
         {
-            let mut space = p.space.lock();
+            let mut space = space_of.lock();
             let mut next = space.next_mapped(virt, USER_END);
             while let Some(at) = next {
                 if *budget == 0 || n == BATCH {
@@ -478,7 +481,7 @@ fn page_out_process(
         // The copies, after the flush.
         let mut copied = [false; BATCH];
         {
-            let mut space = p.space.lock();
+            let mut space = space_of.lock();
             for (i, c) in batch[..n].iter().enumerate() {
                 copied[i] =
                     space.copy_page(c.virt, c.frame, &mut staging[i * PAGE..(i + 1) * PAGE]);
@@ -507,7 +510,7 @@ fn page_out_process(
         {
             let _views = p.views.lock();
             let _vad = p.vad.lock();
-            let mut space = p.space.lock();
+            let mut space = space_of.lock();
             let room = space.reserve_frees(n);
             for (i, c) in batch[..n].iter().enumerate() {
                 if room && copied[i] && space.page_out(c.virt, c.frame, c.token) {
@@ -570,7 +573,8 @@ fn write_batch(batch: &[Candidate], copied: &[bool], staging: &[u8]) -> Result<(
 /// frame now; Raise(STATUS_IN_PAGE_ERROR): the disk failed the read.
 pub fn page_in(process: &Process, addr: u64) -> Fault {
     let page = addr / PAGE_SIZE * PAGE_SIZE;
-    let Some(token) = process.space.lock().swapped(page) else { return Fault::Resolved };
+    let Some(space_of) = process.space_now() else { return Fault::Denied };
+    let Some(token) = space_of.lock().swapped(page) else { return Fault::Resolved };
     let _turn = Turn::take(&IN_TURN);
     let Some(mut buf) = IN_BUFFER.lock().take() else { return Fault::OutOfMemory };
     let result = page_in_with(process, page, token, &mut buf);
@@ -603,7 +607,8 @@ fn page_in_with(process: &Process, page: u64, token: u64, buf: &mut [u8]) -> Fau
         // Decommitted meanwhile (its slot went with it): the fault decides.
         return Fault::Resolved;
     };
-    let mut space = process.space.lock();
+    let Some(space_of) = process.space_now() else { return Fault::Denied };
+    let mut space = space_of.lock();
     match space.page_in(page, token, buf, vm::flags_for(protect)) {
         Ok(true) => {
             swap::release(token);
@@ -630,10 +635,11 @@ pub fn bring_back(process: &Process) -> Result<(), NtStatus> {
     if SIZE.load(Ordering::Relaxed) == 0 {
         return Ok(());
     }
+    let space_of = process.live_space()?;
     let mut virt = 0;
     loop {
         let found = {
-            let mut space = process.space.lock();
+            let mut space = space_of.lock();
             let mut next = space.next_mapped(virt, USER_END);
             loop {
                 match next {
@@ -646,7 +652,7 @@ pub fn bring_back(process: &Process) -> Result<(), NtStatus> {
         };
         let Some(at) = found else { return Ok(()) };
         let mut tries = 0;
-        while process.space.lock().swapped(at).is_some() {
+        while space_of.lock().swapped(at).is_some() {
             match page_in(process, at) {
                 Fault::Raise(s) => return Err(s),
                 Fault::OutOfMemory if tries < 100 => {

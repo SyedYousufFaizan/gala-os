@@ -22,6 +22,10 @@
 #include <sys/wait.h>
 
 #define TCGETS 0x5401
+#define TCGETS2 0x802c542a
+#define TCSETS2 0x402c542b
+#define TCSETSW2 0x402c542c
+#define TCSETSF2 0x402c542d
 #define TCSETS 0x5402
 #define TCSETSF 0x5404
 #define TIOCSCTTY 0x540E
@@ -231,6 +235,40 @@ int main(void)
 	say_term("slave", &def);
 	sys3(SYS_ioctl, master, TCGETS, &t);
 	say_term("master", &t);
+
+	/* termios2 (glibc 2.43's isatty and tcgetattr ask with TCGETS2):
+	 * TCGETS's 36 bytes, then the input and output speeds. */
+	say_text("-- termios2");
+	static unsigned char raw2[128];
+	u64 written2 = 0;
+	for (int fill = 0x55; fill <= 0xaa; fill += 0x55) {
+		lx_memset(raw2, fill, sizeof raw2);
+		sys3(SYS_ioctl, slave, TCGETS2, raw2);
+		u64 w = written_size(raw2, sizeof raw2, fill);
+		if (w > written2)
+			written2 = w;
+	}
+	say("TCGETS2 writes bytes", written2);
+	say_bool("  its first 36 are TCGETS's", lx_memeq(raw2, &def, 36));
+	unsigned speeds[2];
+	lx_memcpy(speeds, raw2 + 36, 8);
+	say("  c_ispeed", speeds[0]);
+	say("  c_ospeed", speeds[1]);
+	struct kterm t2 = def;
+	t2.lflag &= ~ECHO_;
+	lx_memcpy(raw2, &t2, 36);
+	say_ret("TCSETS2(no ECHO)", sys3(SYS_ioctl, slave, TCSETS2, raw2));
+	sys3(SYS_ioctl, slave, TCGETS, &t2);
+	say_bool("  TCGETS sees it", (t2.lflag & ECHO_) == 0);
+	lx_memcpy(raw2, &def, 36);
+	say_ret("TCSETSW2(back)", sys3(SYS_ioctl, slave, TCSETSW2, raw2));
+	say_ret("TCSETSF2(back)", sys3(SYS_ioctl, slave, TCSETSF2, raw2));
+	sys3(SYS_ioctl, slave, TCGETS, &t2);
+	say_bool("  as fresh", lx_memeq(&t2, &def, 36));
+	sys2(SYS_pipe2, pfd, 0);
+	say_ret("TCGETS2 on a pipe", sys3(SYS_ioctl, pfd[0], TCGETS2, raw2));
+	sys1(SYS_close, pfd[0]);
+	sys1(SYS_close, pfd[1]);
 	struct winsz ws = { 7, 7, 7, 7 };
 	say_ret("TIOCGWINSZ", sys3(SYS_ioctl, slave, TIOCGWINSZ, &ws));
 	say("  rows", ws.row);

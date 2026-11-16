@@ -414,6 +414,7 @@ impl ImageLayout {
             }
         }
         let image = PeImage::parse_headers(&head, file_len).map_err(|e| match e {
+            PeError::Empty => NtStatus::INVALID_FILE_FOR_SECTION,
             PeError::BadDosSignature => NtStatus::INVALID_IMAGE_NOT_MZ,
             _ => NtStatus::INVALID_IMAGE_FORMAT,
         })?;
@@ -1190,7 +1191,10 @@ fn unmap_everywhere(layout: &KArc<ImageLayout>, batch: &[Taken]) {
         if !at_base && !at_dynamic {
             return;
         }
-        let mut space = p.space.lock();
+        // An exited process has no space to unmap from
+        // (`process::release_space`); its views went with it.
+        let Some(space_of) = p.space_now() else { return };
+        let mut space = space_of.lock();
         for (i, page, relocated) in batch.iter().flatten() {
             let offset = *i as u64 * PAGE_SIZE;
             if let (true, Some(page)) = (at_base, page) {
@@ -1646,7 +1650,8 @@ fn map_image_view_at(
     }
     // Elsewhere private pages, relocated a page at a time (a large image
     // is never copied whole).
-    let mut space = process.space.lock();
+    let space_of = process.live_space()?;
+    let mut space = space_of.lock();
     let mut page_buf = [0u8; PAGE_SIZE as usize];
     for (i, &protect) in image.page_protect.iter().enumerate() {
         let va = view_base + i as u64 * PAGE_SIZE;
@@ -1703,7 +1708,8 @@ pub fn unmap_view(process: &Process, addr: u64) -> Result<(), NtStatus> {
     let view = views.swap_remove(i);
     // The pages mapped (most of a large image's never are): in time of
     // those, not of the view's size.
-    let mut space = process.space.lock();
+    let space_of = process.live_space()?;
+    let mut space = space_of.lock();
     let end = view.base + view.size;
     let mut next = space.next_mapped(view.base, end);
     while let Some(page) = next {

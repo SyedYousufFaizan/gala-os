@@ -35,6 +35,10 @@ pub fn calibrate(info: &BootInfo, stall: bool, carried: Option<(u64, u64)>) -> C
     }
 }
 
+/// The cycle counter's and the tick timer's names in the clock's log.
+pub const COUNTER_NAME: &str = "TSC";
+pub const TIMER_NAME: &str = "APIC timer";
+
 /// Measures again on this (the boot) CPU, with the inputs of `old`.
 pub fn recalibrate(old: &Calibration) -> Option<Calibration> {
     apic::recalibrate(&old.0).ok().map(Calibration)

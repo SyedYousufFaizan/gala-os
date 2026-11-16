@@ -359,7 +359,8 @@ pub fn current_stack(process: &Process) -> Option<(u64, u64, u64)> {
     if !core::ptr::eq(&*t.process, process) {
         return None;
     }
-    let mut space = process.space.lock();
+    let space_of = process.space_now()?;
+    let mut space = space_of.lock();
     let mut word = |off: u64| {
         let mut b = [0u8; 8];
         space.read(t.teb + off, &mut b).ok().map(|()| u64::from_le_bytes(b))
@@ -398,7 +399,8 @@ pub fn current_stack32(process: &Process) -> Option<(u64, u64, u64)> {
     if !core::ptr::eq(&*t.process, process) || t.teb32 == 0 {
         return None;
     }
-    let mut space = process.space.lock();
+    let space_of = process.space_now()?;
+    let mut space = space_of.lock();
     let mut word = |off: u64| {
         let mut b = [0u8; 4];
         space.read(t.teb32 + off, &mut b).ok().map(|()| u64::from(u32::from_le_bytes(b)))
@@ -587,7 +589,7 @@ fn create_inner(
         process.name,
         thread_entry,
         id as usize,
-        process.space.clone(),
+        process.live_space()?,
         teb_addr,
         process.personality,
         id,
@@ -632,7 +634,7 @@ fn allocate_teb(
         vad.commit(addr, size, vad::PAGE_READWRITE)?;
         // Mapped under the VAD lock (ARCHITECTURE "Virtual memory").
         let flags = PageFlags { user: true, global: false, ..PageFlags::KERNEL_RW };
-        let mapped = process.space.lock().map_zeroed(addr, teb::PAGES, flags);
+        let mapped = process.live_space()?.lock().map_zeroed(addr, teb::PAGES, flags);
         mapped.map_err(|_| NtStatus::NO_MEMORY)?;
         addr
     };
@@ -1187,7 +1189,7 @@ pub fn start_adopted(object: &ObjectRef) -> Result<(), NtStatus> {
         p.name,
         thread_entry,
         t.id as usize,
-        p.space.clone(),
+        p.live_space()?,
         t.teb,
         p.personality,
         t.id,
@@ -1289,22 +1291,27 @@ pub fn dump() {
         // the inverse of `resume`'s order).
         let sched = *t.sched_id.lock();
         let suspended = *t.suspend_count.lock();
-        let name = t.name.lock();
-        info!(
-            "thread: pid {} tid {} (sched {:?}) start {:#x}{} suspend {} exited {} in a system call {} \
-             session {} personality {} ({})",
-            t.process.id,
-            t.id,
-            sched,
-            t.win32_start,
-            NameField(&name),
-            suspended,
-            t.has_exited(),
-            in_syscall.is_some(),
-            t.process.session,
-            t.process.personality,
-            t.process.name
-        );
+        {
+            // The name's guard ends with the line it prints: what follows
+            // copies user memory, which waits for a page that is not
+            // there, and no lock may be held across a wait.
+            let name = t.name.lock();
+            info!(
+                "thread: pid {} tid {} (sched {:?}) start {:#x}{} suspend {} exited {} \
+                 in a system call {} session {} personality {} ({})",
+                t.process.id,
+                t.id,
+                sched,
+                t.win32_start,
+                NameField(&name),
+                suspended,
+                t.has_exited(),
+                in_syscall.is_some(),
+                t.process.session,
+                t.process.personality,
+                t.process.name_now()
+            );
+        }
         let Some((number, regs)) = in_syscall else {
             // Running user code: where a tick last caught it.
             if let Some(rip) = (*t.sched_id.lock()).and_then(platform::last_user_rip) {
@@ -1341,7 +1348,11 @@ pub fn dump() {
         }
         // The first argument, as a handle: what a wait is on.
         let handle = super::object::Handle(arg(0));
-        if let Some(e) = t.process.handles.lock().get(handle) {
+        // The entry leaves the table on this line (`get` clones it): the
+        // lines below copy user memory, which waits for a page that is
+        // not there, and no lock may be held across a wait.
+        let entry = t.process.handles.lock().get(handle);
+        if let Some(e) = entry {
             if let ObjectBody::IoCompletion(c) = &e.object.body {
                 // A port is ready while it holds packets (its dispatcher
                 // flag is set by a post and never cleared: not a sign).

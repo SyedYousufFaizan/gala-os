@@ -407,6 +407,24 @@ enum CaptionButton {
     Close,
 }
 
+/// A `window` event `pointer` for each change of the buttons the
+/// desktop takes (`pressed` and `released`: bit 0 left, bit 1 right) at
+/// (x, y), with what got it (`to`: the capturing window, else what was
+/// under the pointer): a screen check that finds the screen behind tells
+/// from these whether the guest saw its click, and where (QEMU's PS/2
+/// mouse merges a press it has no room for with the release after it:
+/// WORKFLOW "Screen checks").
+fn note_buttons(pressed: u8, released: u8, x: i64, y: i64, to: core::fmt::Arguments<'_>) {
+    if pressed | released == 0 {
+        return;
+    }
+    crate::events::emit(
+        crate::events::Category::Window,
+        "pointer",
+        format_args!(r#""pressed":{pressed},"released":{released},"x":{x},"y":{y},"to":"{to}""#),
+    );
+}
+
 /// What is under the pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Hit {
@@ -787,6 +805,11 @@ impl Desktop {
         style: u32,
     ) -> Result<u32, NtStatus> {
         self.s.create(owner, x, y, w, h, title, style)
+    }
+
+    /// Window `id`'s program name (`program_name`).
+    pub fn set_program(&mut self, id: u32, owner: u64, name: &[u16]) -> Result<(), NtStatus> {
+        self.s.set_program(id, owner, name)
     }
 
     /// Shows or hides a window (shown: on top and active).
@@ -1439,6 +1462,7 @@ impl Desktop {
             };
             if self.s.outside_popup_grab(target) {
                 self.s.end_popup_grab(x, y);
+                note_buttons(pressed, 0, x, y, format_args!("the end of a popup grab"));
                 self.buttons |= pressed;
                 self.swallowed |= pressed;
             }
@@ -1452,6 +1476,7 @@ impl Desktop {
             let pressed = buttons & !self.buttons;
             let released = self.buttons & !buttons;
             self.buttons = buttons;
+            note_buttons(pressed, released, x, y, format_args!("capture {id}"));
             self.s.pointer_over(Some(id));
             if (dx, dy) != (0, 0) {
                 self.s.send(id, WM_MOUSEMOVE, keys, lp);
@@ -1480,6 +1505,7 @@ impl Desktop {
         let pressed = buttons & !self.buttons;
         let released = self.buttons & !buttons;
         self.buttons = buttons;
+        note_buttons(pressed, released, x, y, format_args!("{hit:?}"));
         let keys = u64::from(buttons & 1) | (u64::from(buttons & 2));
         // The taskbar's context menu takes the next press: its item starts
         // Task Manager, anywhere else only closes it.
@@ -2145,11 +2171,8 @@ impl Desktop {
                 }
                 continue;
             }
-            let initial = char::decode_utf16(win.title.iter().copied())
-                .next()
-                .and_then(|c| c.ok())
-                .unwrap_or('?');
-            let (c0, c1) = tile_colors(&win.title);
+            let (initial, from) = tile_initial(&win.title, &win.program);
+            let (c0, c1) = tile_colors(from);
             c.round_rect(x + 10, y + 8, 24, 24, 5, c0, c1, 255);
             let iw = Font::Ui12Semibold.measure(core::iter::once(initial));
             c.text(
@@ -2679,6 +2702,50 @@ fn ring(step: i64, r: i64) -> i64 {
 }
 
 /// A program's tile colours from its title (a stable hue).
+/// A taskbar tile's initial and the name it is from (its colours'
+/// too), capitalized: the title's first character if a letter or digit
+/// ("in.svg - Inkscape": "I"), else the program's first letter or digit ("[in] (imported)" is
+/// GIMP's title with an image open: `gimp-3.2` gives "G"), else '?'.
+pub fn tile_initial<'a>(title: &'a [u16], program: &'a [u16]) -> (char, &'a [u16]) {
+    let first = char::decode_utf16(title.iter().copied()).next().and_then(|c| c.ok());
+    if let Some(c) = first.filter(|c| c.is_alphanumeric()) {
+        return (c.to_uppercase().next().unwrap_or(c), title);
+    }
+    let named = char::decode_utf16(program.iter().copied())
+        .filter_map(|c| c.ok())
+        .find(|c| c.is_alphanumeric())
+        .and_then(|c| c.to_uppercase().next());
+    match named {
+        Some(c) => (c, program),
+        None => (first.unwrap_or('?'), title),
+    }
+}
+
+/// The name of process `pid`'s program, as a window's (`set_program`):
+/// a Linux process's executable now (after its last execve), else the
+/// NT image's file name; its length (at most 64 UTF-16 units). Not
+/// called under the desktop's lock (it reads the file system).
+pub fn program_name(pid: u64) -> ([u16; 64], usize) {
+    let mut out = [0u16; 64];
+    let mut n = 0;
+    let mut put = |bytes: &[u8]| {
+        let name = bytes.rsplit(|&b| b == b'/' || b == b'\\').next().unwrap_or(bytes);
+        for (o, &b) in out.iter_mut().zip(name) {
+            *o = u16::from(b);
+            n += 1;
+        }
+    };
+    if let Some(lx) = crate::lx::state::get(pid) {
+        let node = *lx.exe.lock();
+        if let Ok(path) = crate::lx::file::path_of(lx.root, node) {
+            put(&path);
+        }
+    } else if let Some(p) = crate::nt::process::by_id(pid) {
+        put(p.name.as_bytes());
+    }
+    (out, n)
+}
+
 fn tile_colors(title: &[u16]) -> (u32, u32) {
     const PALETTE: [(u32, u32); 6] = [
         (0x00_4c_9a_ff, 0x00_1f_6f_e0),
@@ -3681,7 +3748,7 @@ fn save_prefs(p: linux::Prefs) {
         crate::events::Category::Window,
         "start menu",
         format_args!(
-            r#""op":"linux prefs","hidden":{},"collapsed":{},"dismissed":"{}","status":{}"#,
+            r#""op":"linux prefs","hidden":{},"collapsed":{},"dismissed":{},"status":{}"#,
             p.hidden,
             p.collapsed,
             crate::events::Str(dismissed),

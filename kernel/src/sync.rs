@@ -180,7 +180,9 @@ mod host_cpu {
 /// out.
 pub mod lockdep {
     #[cfg(debug_assertions)]
-    use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+    use core::sync::atomic::{
+        AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+    };
 
     /// Lockdep runs (the kernel turns it on once each CPU's per-CPU data,
     /// which says which CPU it is, exists).
@@ -198,12 +200,31 @@ pub mod lockdep {
     const MAX_EDGES: usize = 8192;
     #[cfg(debug_assertions)]
     const MAX_HELD: usize = 16;
+    /// How much of its name every class keeps for messages. Type names are
+    /// long (`core::option::Option<kernel::sched::Scheduler>` is 44
+    /// bytes); a longer one is cut at a character boundary and shown with
+    /// `..`, never dropped.
+    #[cfg(debug_assertions)]
+    const NAME_MAX: usize = 96;
 
-    /// The classes' names (`type_name` pointer and length), id = index + 1.
+    /// What makes a class a class: the address of its name, which is one
+    /// `&'static str` per type (`type_name`) or per `IrqMutex::named`
+    /// literal. Id = index + 1.
     #[cfg(debug_assertions)]
     static NAMES: [AtomicUsize; MAX_CLASSES] = [const { AtomicUsize::new(0) }; MAX_CLASSES];
+    /// Each class's whole name length, and the marker that its name has
+    /// been written (0: the slot's claimer has not finished copying).
     #[cfg(debug_assertions)]
     static LENS: [AtomicUsize; MAX_CLASSES] = [const { AtomicUsize::new(0) }; MAX_CLASSES];
+    /// Each class's name, copied byte by byte because a `&'static str`
+    /// fits in no atomic and rebuilding one from a pointer and a length
+    /// needs `unsafe`, which this module may not use. The CPU that claims
+    /// the slot writes it before handing the id out, so every class a
+    /// message can mention has its name: there is no side table to fill
+    /// up and no name is lost to contention (both of which printed "?").
+    #[cfg(debug_assertions)]
+    static NAME_BYTES: [[AtomicU8; NAME_MAX]; MAX_CLASSES] =
+        [const { [const { AtomicU8::new(0) }; NAME_MAX] }; MAX_CLASSES];
     /// The orders seen: `a << 16 | b` for "a held when b was taken".
     #[cfg(debug_assertions)]
     static EDGES: [AtomicU32; MAX_EDGES] = [const { AtomicU32::new(0) }; MAX_EDGES];
@@ -219,8 +240,17 @@ pub mod lockdep {
                 p if p == ptr => return (i + 1) as u16,
                 0 => match NAMES[i].compare_exchange(0, ptr, Ordering::AcqRel, Ordering::Acquire) {
                     Ok(_) => {
+                        // This CPU owns slot i now: copy the name, then
+                        // publish the length, which is what `name` reads
+                        // first (its Acquire pairs with this Release, so
+                        // it sees whole bytes).
+                        let room = NAME_MAX.min(len);
+                        let keep =
+                            (0..=room).rev().find(|&k| name.is_char_boundary(k)).unwrap_or(0);
+                        for (slot, b) in NAME_BYTES[i].iter().zip(&name.as_bytes()[..keep]) {
+                            slot.store(*b, Ordering::Relaxed);
+                        }
                         LENS[i].store(len, Ordering::Release);
-                        NAME_STRS.note(name);
                         return (i + 1) as u16;
                     }
                     Err(p) if p == ptr => return (i + 1) as u16,
@@ -232,59 +262,85 @@ pub mod lockdep {
         0 // the table is full: untracked
     }
 
+    /// A class's name, read out of `NAME_BYTES` for a message. Every
+    /// class an id was handed out for has one, so this is "?" only for
+    /// class 0, which is no class.
     #[cfg(debug_assertions)]
-    fn name(class: u16) -> &'static str {
-        let i = usize::from(class).saturating_sub(1).min(MAX_CLASSES - 1);
-        let (ptr, len) = (NAMES[i].load(Ordering::Acquire), LENS[i].load(Ordering::Acquire));
-        // The pointer and length of a `&'static str` from `type_name`,
-        // stored as numbers: rebuild it without unsafe code from a table
-        // of the names seen.
-        NAME_STRS.iter().find(|(p, l, _)| *p == ptr && *l == len).map_or("?", |(_, _, s)| s)
-    }
-
-    /// Names kept as `&'static str` (filled as classes appear; up to
-    /// MAX_CLASSES, behind a tiny spinlock of its own).
-    #[cfg(debug_assertions)]
-    static NAME_STRS: NameTable = NameTable::new();
-
-    /// (pointer, length, name) of each class seen, and how many.
-    #[cfg(debug_assertions)]
-    type Names = ([(usize, usize, &'static str); 64], usize);
-
-    #[cfg(debug_assertions)]
-    struct NameTable {
-        busy: AtomicBool,
-        cell: spin::Mutex<Names>,
+    struct ClassName {
+        bytes: [u8; NAME_MAX],
+        len: usize,
+        /// The whole name was longer than `NAME_MAX`: shown with `..`.
+        cut: bool,
     }
 
     #[cfg(debug_assertions)]
-    impl NameTable {
-        const fn new() -> Self {
-            NameTable {
-                busy: AtomicBool::new(false),
-                cell: spin::Mutex::new(([(0, 0, ""); 64], 0)),
-            }
+    impl ClassName {
+        /// As much of the name as is kept (`..` is left to `Display`).
+        fn as_str(&self) -> &str {
+            core::str::from_utf8(&self.bytes[..self.len]).unwrap_or("?")
         }
+    }
 
-        fn note(&self, s: &'static str) {
-            if self.busy.swap(true, Ordering::Acquire) {
-                return; // names are for messages only: skip when contended
+    #[cfg(debug_assertions)]
+    impl core::fmt::Display for ClassName {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str(self.as_str())?;
+            if self.cut {
+                f.write_str("..")?;
             }
-            if let Some(mut t) = self.cell.try_lock() {
-                let key = (s.as_ptr() as usize, s.len());
-                let n = t.1;
-                if !t.0[..n].iter().any(|(p, l, _)| (*p, *l) == key) && n < t.0.len() {
-                    t.0[n] = (key.0, key.1, s);
-                    t.1 = n + 1;
-                }
-            }
-            self.busy.store(false, Ordering::Release);
+            Ok(())
         }
+    }
 
-        fn iter(&self) -> impl Iterator<Item = (usize, usize, &'static str)> {
-            let copy = self.cell.try_lock().map(|t| (t.0, t.1));
-            let (items, n) = copy.unwrap_or(([(0, 0, ""); 64], 0));
-            (0..n).map(move |i| items[i])
+    #[cfg(debug_assertions)]
+    fn name(class: u16) -> ClassName {
+        let unknown = ClassName { bytes: [b'?'; NAME_MAX], len: 1, cut: false };
+        let Some(i) = usize::from(class).checked_sub(1).filter(|i| *i < MAX_CLASSES) else {
+            return unknown;
+        };
+        // A slot's claimer copies the name with interrupts off and
+        // takes no lock, so it publishes the length within a few
+        // hundred cycles of the id it handed out: wait that out rather
+        // than print "?" for a class that has a name. Bounded, because
+        // the message may be a panic's and the claimer may be the CPU
+        // that is panicking.
+        let mut len = LENS[i].load(Ordering::Acquire);
+        for _ in 0..10_000 {
+            if len != 0 {
+                break;
+            }
+            core::hint::spin_loop();
+            len = LENS[i].load(Ordering::Acquire);
+        }
+        if len == 0 {
+            return unknown; // claimed, and its claimer never finished
+        }
+        let mut out = ClassName { bytes: [0; NAME_MAX], len: 0, cut: len > NAME_MAX };
+        for (b, slot) in out.bytes.iter_mut().zip(NAME_BYTES[i].iter()) {
+            *b = slot.load(Ordering::Relaxed);
+        }
+        out.len = out.bytes.iter().position(|b| *b == 0).unwrap_or(NAME_MAX);
+        out
+    }
+
+    /// A lock's holder in a message. The token is a thread's own number
+    /// plus one (0: no thread recorded), printed the way the rest of the
+    /// log prints a thread (`sched::ThreadIdNumber`): the index, and
+    /// `.generation` when the thread record has been reused.
+    #[cfg(debug_assertions)]
+    struct Holder(u64);
+
+    #[cfg(debug_assertions)]
+    impl core::fmt::Display for Holder {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let Some(raw) = self.0.checked_sub(1) else {
+                return f.write_str("an unknown thread");
+            };
+            write!(f, "thread {}", raw & 0xffff_ffff)?;
+            match raw >> 32 {
+                0 => Ok(()),
+                generation => write!(f, ".{generation}"),
+            }
         }
     }
 
@@ -321,49 +377,121 @@ pub mod lockdep {
         }
     }
 
-    /// The classes this CPU (thread) holds.
+    /// The locks one CPU (one host thread, in tests and gala-um) holds:
+    /// the class in each slot and the thread that took it. The holder is
+    /// kept because the slots belong to the CPU, not to the thread: a
+    /// lock left held across a wait or a switch is found by whatever runs
+    /// next, and only the holder says whose it was.
+    #[cfg(debug_assertions)]
+    struct Slots<'a> {
+        class: &'a [AtomicU16; MAX_HELD],
+        holder: &'a [AtomicU64; MAX_HELD],
+    }
+
+    #[cfg(debug_assertions)]
+    impl Slots<'_> {
+        /// Slot `i`'s class (0: free) and the thread that took it.
+        fn get(&self, i: usize) -> (u16, u64) {
+            (self.class[i].load(Ordering::Relaxed), self.holder[i].load(Ordering::Relaxed))
+        }
+
+        /// The holder goes in before the class, so a slot that reads as
+        /// taken always reads with its holder.
+        fn take(&self, i: usize, class: u16, holder: u64) {
+            self.holder[i].store(holder, Ordering::Relaxed);
+            self.class[i].store(class, Ordering::Relaxed);
+        }
+
+        fn free(&self, i: usize) {
+            self.class[i].store(0, Ordering::Relaxed);
+            self.holder[i].store(0, Ordering::Relaxed);
+        }
+    }
+
     #[cfg(all(debug_assertions, not(any(test, feature = "hosted"))))]
     mod held {
-        use super::MAX_HELD;
-        use core::sync::atomic::{AtomicU16, Ordering};
+        use super::{MAX_HELD, Slots};
+        use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
         const CPUS: usize = crate::arch::smp::MAX_CPUS;
         static HELD: [[AtomicU16; MAX_HELD]; CPUS] =
             [const { [const { AtomicU16::new(0) }; MAX_HELD] }; CPUS];
+        static HOLDER: [[AtomicU64; MAX_HELD]; CPUS] =
+            [const { [const { AtomicU64::new(0) }; MAX_HELD] }; CPUS];
+        /// The thread each CPU runs, as the scheduler last said
+        /// (`lockdep::running`). Lockdep runs inside `IrqMutex::lock` and
+        /// the scheduler's own state is behind such a lock, so it cannot
+        /// ask the scheduler who is running: it is told instead.
+        static CURRENT: [AtomicU64; CPUS] = [const { AtomicU64::new(0) }; CPUS];
+
+        fn here() -> usize {
+            (crate::arch::percpu::cpu_index() as usize).min(CPUS - 1)
+        }
 
         /// Runs `f` on this CPU's slots (interrupts are off while any
         /// IrqMutex is held, so the CPU does not change under it).
-        pub fn with<R>(f: impl FnOnce(&[AtomicU16; MAX_HELD]) -> R) -> R {
-            let cpu = (crate::arch::percpu::cpu_index() as usize).min(CPUS - 1);
-            f(&HELD[cpu])
+        pub fn with<R>(f: impl FnOnce(&Slots<'_>) -> R) -> R {
+            let cpu = here();
+            f(&Slots { class: &HELD[cpu], holder: &HOLDER[cpu] })
         }
 
-        pub fn get(slot: &AtomicU16) -> u16 {
-            slot.load(Ordering::Relaxed)
+        /// The thread taking a lock here: whoever the scheduler last put
+        /// on this CPU.
+        pub fn current() -> u64 {
+            CURRENT[here()].load(Ordering::Relaxed)
         }
 
-        pub fn set(slot: &AtomicU16, v: u16) {
-            slot.store(v, Ordering::Relaxed);
+        pub fn set_current(cpu: usize, thread: u64) {
+            CURRENT[cpu.min(CPUS - 1)].store(thread, Ordering::Relaxed);
+        }
+
+        /// How many `UserMemoryUnchecked` guards this CPU has (made with
+        /// a lock held, so interrupts are off and the CPU does not change
+        /// under them).
+        static UNCHECKED: [AtomicU32; CPUS] = [const { AtomicU32::new(0) }; CPUS];
+
+        pub fn unchecked() -> u32 {
+            UNCHECKED[here()].load(Ordering::Relaxed)
+        }
+
+        pub fn set_unchecked(n: u32) {
+            UNCHECKED[here()].store(n, Ordering::Relaxed);
         }
     }
 
     #[cfg(all(debug_assertions, any(test, feature = "hosted")))]
     mod held {
-        use super::MAX_HELD;
-        use core::sync::atomic::{AtomicU16, Ordering};
+        use super::{MAX_HELD, Slots};
+        use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
         std::thread_local! {
-            static HELD: [AtomicU16; MAX_HELD] = const { [const { AtomicU16::new(0) }; MAX_HELD] };
+            static HELD: ([AtomicU16; MAX_HELD], [AtomicU64; MAX_HELD]) = const {
+                ([const { AtomicU16::new(0) }; MAX_HELD], [const { AtomicU64::new(0) }; MAX_HELD])
+            };
+            /// This host thread's number: here a kernel thread is a host
+            /// thread, so the holder needs no word from the scheduler.
+            static ID: u64 = NEXT.fetch_add(1, Ordering::Relaxed) + 1;
+            static UNCHECKED: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
+        }
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+
+        pub fn with<R>(f: impl FnOnce(&Slots<'_>) -> R) -> R {
+            HELD.with(|h| f(&Slots { class: &h.0, holder: &h.1 }))
         }
 
-        pub fn with<R>(f: impl FnOnce(&[AtomicU16; MAX_HELD]) -> R) -> R {
-            HELD.with(|h| f(h))
+        pub fn current() -> u64 {
+            // 0 ("an unknown thread") once this thread's locals are gone.
+            ID.try_with(|id| *id).unwrap_or(0)
         }
 
-        pub fn get(slot: &AtomicU16) -> u16 {
-            slot.load(Ordering::Relaxed)
+        pub fn set_current(_cpu: usize, _thread: u64) {}
+
+        /// How many `UserMemoryUnchecked` guards this thread has (here a
+        /// kernel thread is a host thread).
+        pub fn unchecked() -> u32 {
+            UNCHECKED.try_with(|n| n.get()).unwrap_or(0)
         }
 
-        pub fn set(slot: &AtomicU16, v: u16) {
-            slot.store(v, Ordering::Relaxed);
+        pub fn set_unchecked(n: u32) {
+            let _ = UNCHECKED.try_with(|slot| slot.set(n));
         }
     }
 
@@ -378,26 +506,30 @@ pub mod lockdep {
         if class == 0 {
             return 0;
         }
+        let me = held::current();
         held::with(|slots| {
-            for s in slots.iter() {
-                let a = held::get(s);
+            for i in 0..MAX_HELD {
+                let (a, by) = slots.get(i);
                 if a == 0 || a == class {
                     continue;
                 }
                 if check && edge_seen(class, a) {
                     panic!(
-                        "lockdep: {} taken while holding {}, but {} was taken while holding {} before",
+                        "lockdep: {} taken by {} while holding {} (taken by {}), \
+                         but {} was taken while holding {} before",
                         name(class),
+                        Holder(me),
                         name(a),
+                        Holder(by),
                         name(a),
                         name(class)
                     );
                 }
                 add_edge(a, class);
             }
-            match slots.iter().find(|s| held::get(s) == 0) {
+            match (0..MAX_HELD).find(|&i| slots.get(i).0 == 0) {
                 Some(free) => {
-                    held::set(free, class);
+                    slots.take(free, class, me);
                     class
                 }
                 None => 0, // nested too deep to track
@@ -415,8 +547,8 @@ pub mod lockdep {
         #[cfg(debug_assertions)]
         if class != 0 {
             held::with(|slots| {
-                if let Some(s) = slots.iter().rev().find(|s| held::get(s) == class) {
-                    held::set(s, 0);
+                if let Some(i) = (0..MAX_HELD).rev().find(|&i| slots.get(i).0 == class) {
+                    slots.free(i);
                 }
             });
         }
@@ -431,22 +563,252 @@ pub mod lockdep {
     pub fn none_held(class: u16) {
         #[cfg(all(debug_assertions, not(any(test, feature = "hosted"))))]
         if ON.load(Ordering::Acquire) {
-            let held = held::with(|slots| slots.iter().map(held::get).find(|&c| c != 0));
-            if let Some(other) = held {
+            let still =
+                held::with(|slots| (0..MAX_HELD).map(|i| slots.get(i)).find(|&(c, _)| c != 0));
+            if let Some((other, by)) = still {
+                // `by` is the thread that took the lock and `me` the one
+                // releasing: when they differ, the lock was held across a
+                // wait, a yield or a migration, and this CPU's slots
+                // outlived the thread that filled them.
+                let me = held::current();
                 panic!(
                     "lockdep: releasing {} turns interrupts on while {} is still held \
-                     (locks released out of order)",
+                     (locks released out of order); {} was taken by {}, and {} is \
+                     released by {}",
                     name(class),
-                    name(other)
+                    name(other),
+                    name(other),
+                    Holder(by),
+                    name(class),
+                    Holder(me)
                 );
             }
         }
         let _ = class;
     }
 
+    /// Before a thread gives up its CPU (`sched::schedule`): panics if
+    /// it still holds a lock. The held locks belong to the CPU, so one
+    /// carried across a switch is found by whichever thread runs here
+    /// next, and the panic lands in a thread that is not the culprit.
+    /// This catches it while the culprit is still on the CPU.
+    pub fn none_held_at_switch() {
+        #[cfg(debug_assertions)]
+        if ON.load(Ordering::Acquire) {
+            let still =
+                held::with(|slots| (0..MAX_HELD).map(|i| slots.get(i)).find(|&(c, _)| c != 0));
+            if let Some((class, by)) = still {
+                panic!(
+                    "lockdep: {} gives up its CPU while holding {} (taken by {}): \
+                     a lock may not be held across a wait, a yield or a switch",
+                    Holder(held::current()),
+                    name(class),
+                    Holder(by)
+                );
+            }
+        }
+    }
+
+    /// Before the kernel copies user memory (`nt::process::with_faults`):
+    /// panics if the copying thread holds a lock (debug kernel builds). A
+    /// page that is not there is made on the way, which reads the file or
+    /// the disk and waits, so a lock held over a copy is a lock held
+    /// across a wait. Checked at every copy, not only at the copies that
+    /// do wait: whether a page is there depends on what the machine has
+    /// been doing, so without this the mistake shows up as a panic in a
+    /// long run under memory pressure and in no test.
+    ///
+    /// The copying thread's own locks only: the slots belong to the CPU,
+    /// and one whose holder is another thread is a lock carried across a
+    /// switch, which `none_held_at_switch` and `none_held` report where
+    /// it happens. Such a slot has been seen here all the same (ROADMAP
+    /// "A lock can be marked held by a thread that is not running"), and
+    /// a copy is not where that is diagnosed.
+    pub fn none_held_at_user_memory() {
+        #[cfg(debug_assertions)]
+        if ON.load(Ordering::Acquire) && held::unchecked() == 0 {
+            let me = held::current();
+            let mine = held::with(|slots| {
+                (0..MAX_HELD).map(|i| slots.get(i)).find(|&(c, by)| c != 0 && by == me)
+            });
+            if let Some((class, _)) = mine {
+                panic!(
+                    "lockdep: {} copies user memory while holding {}: the copy waits \
+                     for a page that is not there, and a lock may not be held across \
+                     a wait",
+                    Holder(me),
+                    name(class)
+                );
+            }
+        }
+    }
+
+    /// While one of these lives, this CPU may copy a program's memory
+    /// with a lock held: `none_held_at_user_memory` says nothing about
+    /// it. It is for the paths that still serve a request under their own
+    /// lock -- each names itself where it makes its guard, and ROADMAP
+    /// carries the work of turning it around. The invariant itself holds
+    /// for them too: a copy that does wait panics in `none_held_at_switch`
+    /// as before; it is only the deterministic check at every copy that
+    /// such a path is not ready for.
+    ///
+    /// Made with the lock already held: interrupts are off then, so the
+    /// CPU whose count it is does not change under it.
+    pub struct UserMemoryUnchecked(());
+
+    impl UserMemoryUnchecked {
+        /// `why`: the path, for whoever reads it here.
+        pub fn new(why: &'static str) -> Self {
+            let _ = why;
+            #[cfg(debug_assertions)]
+            held::set_unchecked(held::unchecked().saturating_add(1));
+            UserMemoryUnchecked(())
+        }
+    }
+
+    impl Drop for UserMemoryUnchecked {
+        fn drop(&mut self) {
+            #[cfg(debug_assertions)]
+            held::set_unchecked(held::unchecked().saturating_sub(1));
+        }
+    }
+
+    /// The scheduler has made `thread` what CPU `cpu` runs: the thread
+    /// lockdep names as the holder of the locks taken there from now on.
+    /// `thread` is the thread's own number plus one (`sched`'s
+    /// `lockdep_holder`), and this is called with interrupts off, where
+    /// the scheduler records the same thread as the CPU's current one.
+    pub fn running(cpu: usize, thread: u64) {
+        #[cfg(debug_assertions)]
+        held::set_current(cpu, thread);
+        let _ = (cpu, thread);
+    }
+
+    /// The thread recorded as holding `class` on this CPU (0: not held).
+    #[cfg(test)]
+    fn holder_of(class: u16) -> u64 {
+        held::with(|slots| {
+            (0..MAX_HELD).map(|i| slots.get(i)).find(|&(c, _)| c == class).map_or(0, |(_, by)| by)
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::super::IrqMutex;
+        use super::{MAX_CLASSES, NAME_MAX, class_of, held, holder_of, name};
+        use std::boxed::Box;
+        use std::{format, vec::Vec};
+
+        /// Every class keeps its name, however many classes there are.
+        /// The names used to live in a side table of 64, so the 65th
+        /// class and up printed "?" in panics -- which is what hid the
+        /// lock in the Office install's panic.
+        #[test]
+        fn every_class_keeps_its_name() {
+            let mut classes = Vec::new();
+            for i in 0..MAX_CLASSES / 2 {
+                let want: &'static str = Box::leak(format!("class_{i}").into_boxed_str());
+                classes.push((class_of(want), want));
+            }
+            for (class, want) in classes {
+                assert_ne!(class, 0, "the class table filled up");
+                assert_eq!(name(class).as_str(), want);
+            }
+        }
+
+        /// A name too long for the room kept per class is cut and says so.
+        #[test]
+        fn a_name_longer_than_its_room_is_cut_not_dropped() {
+            let want: &'static str = Box::leak("l".repeat(NAME_MAX + 20).into_boxed_str());
+            let shown = format!("{}", name(class_of(want)));
+            assert_eq!(shown, format!("{}..", &want[..NAME_MAX]));
+        }
+
+        /// Each held lock records the thread that took it, so a panic can
+        /// say whose lock it is -- the point being the case where that is
+        /// not the thread the panic happens in.
+        #[test]
+        fn each_held_lock_records_the_thread_that_took_it() {
+            let mine: &'static str = "lockdep_holder_test";
+            let lock = IrqMutex::named(mine, ());
+            let class = class_of(mine);
+            let guard = lock.lock();
+            assert_eq!(holder_of(class), held::current());
+            assert_ne!(holder_of(class), 0, "a held lock with no holder");
+            drop(guard);
+            assert_eq!(holder_of(class), 0, "the slot kept its holder after release");
+
+            // Another thread's locks are its own: the holder tells them
+            // apart, which is what the kernel's per-CPU slots cannot.
+            let theirs: &'static str = "lockdep_holder_test_elsewhere";
+            let (id, recorded) = std::thread::spawn(move || {
+                let other = IrqMutex::named(theirs, ());
+                let _held = other.lock();
+                (held::current(), holder_of(class_of(theirs)))
+            })
+            .join()
+            .unwrap();
+            assert_eq!(id, recorded);
+            assert_ne!(id, held::current());
+        }
+
+        /// Giving up the CPU while holding a lock is caught there, in
+        /// the thread that holds it, not later in an innocent one.
+        #[test]
+        fn giving_up_the_cpu_while_holding_a_lock_panics() {
+            let held = std::thread::spawn(|| {
+                let lock = IrqMutex::named("lockdep_switch_test", ());
+                let _guard = lock.lock();
+                super::none_held_at_switch();
+            })
+            .join();
+            let message = held.unwrap_err();
+            let text = message.downcast_ref::<std::string::String>().unwrap();
+            assert!(text.contains("gives up its CPU while holding lockdep_switch_test"), "{text}");
+        }
+
+        #[test]
+        fn copying_a_program_s_memory_while_holding_a_lock_panics() {
+            let held = std::thread::spawn(|| {
+                let lock = IrqMutex::named("lockdep_usermem_test", ());
+                let _guard = lock.lock();
+                super::none_held_at_user_memory();
+            })
+            .join();
+            let message = held.unwrap_err();
+            let text = message.downcast_ref::<std::string::String>().unwrap();
+            assert!(
+                text.contains("copies user memory while holding lockdep_usermem_test"),
+                "{text}"
+            );
+        }
+
+        #[test]
+        fn a_path_that_says_it_is_not_ready_may_copy_with_a_lock_held() {
+            // Through, while its guard lives.
+            std::thread::spawn(|| {
+                let lock = IrqMutex::named("lockdep_unchecked_test", ());
+                let _guard = lock.lock();
+                let _unchecked = super::UserMemoryUnchecked::new("a path of this test's own");
+                super::none_held_at_user_memory();
+            })
+            .join()
+            .unwrap();
+            // Checked again once the guard is gone.
+            let held = std::thread::spawn(|| {
+                let lock = IrqMutex::named("lockdep_unchecked_test", ());
+                let _guard = lock.lock();
+                drop(super::UserMemoryUnchecked::new("a path of this test's own"));
+                super::none_held_at_user_memory();
+            })
+            .join();
+            let message = held.unwrap_err();
+            let text = message.downcast_ref::<std::string::String>().unwrap();
+            assert!(
+                text.contains("copies user memory while holding lockdep_unchecked_test"),
+                "{text}"
+            );
+        }
 
         struct First;
         struct Second;

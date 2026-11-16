@@ -4,12 +4,17 @@
 //! installed. The expected values are those of Wine's conformance tests
 //! (dlls/msi/tests/msi.c, run against Windows), and of real Windows on
 //! CI's runner (this program's run there):
-//! - the ordinals: #8 MsiCloseHandle, #39 MsiEnumComponentQualifiersW,
-//!   #45 MsiEnumProductsW, #90 MsiLocateComponentW, #113
-//!   MsiQueryProductStateW, #141 MsiSetInternalUI, #173
-//!   MsiGetComponentPathW, #190 MsiConfigureProductExW, #203
-//!   MsiProvideQualifiedComponentExW (GetProcAddress by ordinal gives
-//!   the named export);
+//! - the ordinals: #8 MsiCloseHandle, #32 MsiDatabaseOpenViewW, #39
+//!   MsiEnumComponentQualifiersW, #45 MsiEnumProductsW, #88
+//!   MsiInstallProductW, #90 MsiLocateComponentW, #92
+//!   MsiOpenDatabaseW, #113
+//!   MsiQueryProductStateW, #115 MsiRecordGetFieldCount, #116
+//!   MsiRecordGetInteger, #118 MsiRecordGetStringW, #119
+//!   MsiRecordIsNull, #141 MsiSetInternalUI, #158 MsiViewClose, #159
+//!   MsiViewExecute, #160 MsiViewFetch, #165
+//!   MsiDatabaseIsTablePersistentW, #173 MsiGetComponentPathW, #190
+//!   MsiConfigureProductExW, #203 MsiProvideQualifiedComponentExW
+//!   (GetProcAddress by ordinal gives the named export);
 //! - MsiCloseHandle(0) is ERROR_SUCCESS, a handle never opened
 //!   ERROR_INVALID_HANDLE;
 //! - MsiSetInternalUI returns the previous level: INSTALLUILEVEL_DEFAULT
@@ -30,7 +35,32 @@
 //!   malformed product, ERROR_UNKNOWN_PRODUCT for one not installed;
 //! - MsiProvideQualifiedComponentExW and MsiEnumComponentQualifiersW:
 //!   ERROR_UNKNOWN_COMPONENT for a component not installed;
-//!   MsiEnumComponentQualifiersW ERROR_INVALID_PARAMETER without one.
+//!   MsiEnumComponentQualifiersW ERROR_INVALID_PARAMETER without one;
+//! - MsiOpenDatabaseW: ERROR_INVALID_PARAMETER without a path, with an
+//!   empty one, or without a handle; ERROR_OPEN_FAILED, whichever of
+//!   the read, transact and direct modes is asked, both for a path that
+//!   is not there and for a file that is not an installer database
+//!   (this program's own image); ERROR_CREATE_FAILED for a create mode
+//!   that cannot create one (a path in a directory that is not there).
+//!   The handle is set to 0 unless the call is refused for the pointer
+//!   itself (a NULL path), which Windows answers before it touches the
+//!   handle. The create modes on a path that can be created make a
+//!   database, which gala cannot: not checked here, since the two
+//!   answer differently by design (ROADMAP OF).
+//! - MsiInstallProductW: ERROR_INVALID_PARAMETER for a NULL package;
+//!   ERROR_PATH_NOT_FOUND for an empty path and for one whose directory
+//!   is not there; ERROR_FILE_NOT_FOUND for a path that is not there in
+//!   a directory that is; ERROR_INSTALL_PACKAGE_OPEN_FAILED for a
+//!   directory; ERROR_INSTALL_PACKAGE_INVALID for a file that is there
+//!   and is not a package (this program's own image). A package it
+//!   could install is not asked for here: Windows would install it and
+//!   gala cannot, so the two answer differently by design, as with the
+//!   database create modes above (ROADMAP OF).
+//!
+//! Reading a database is in `db`, over a fixture this program writes
+//! beside its own image (`user/galapkg/testdata/msi/basic.msi`, built
+//! with wixl and checked in), so the one program asks Windows and gala
+//! the same questions of the same file.
 //!
 //! The same source builds `wow64_msi_test`, the 32-bit (x86) program.
 //! Prints `msi_test: ok` (`wow64_msi_test: ok`), or `<name>: check N got
@@ -39,9 +69,11 @@
 #![no_std]
 #![no_main]
 
-use core::ptr::{null, null_mut};
+use core::ptr::{null, null_mut, without_provenance};
 
 use ntrt as _;
+
+mod db;
 
 #[cfg(target_arch = "x86_64")]
 const NAME: &str = "msi_test";
@@ -63,6 +95,7 @@ unsafe extern "system" {
     fn SetLastError(e: u32);
     fn LoadLibraryW(name: *const u16) -> usize;
     fn GetProcAddress(module: usize, name: *const u8) -> usize;
+    fn GetModuleFileNameW(module: usize, path: *mut u16, size: u32) -> u32;
 }
 
 #[cfg_attr(
@@ -72,6 +105,8 @@ unsafe extern "system" {
 #[cfg_attr(not(target_arch = "x86"), link(name = "msi", kind = "raw-dylib"))]
 unsafe extern "system" {
     fn MsiCloseHandle(handle: u32) -> u32;
+    fn MsiOpenDatabaseW(path: *const u16, persist: *const u16, database: *mut u32) -> u32;
+    fn MsiInstallProductW(package: *const u16, command_line: *const u16) -> u32;
     fn MsiSetInternalUI(level: u32, window: *mut usize) -> u32;
     fn MsiQueryProductStateW(product: *const u16) -> i32;
     fn MsiEnumProductsW(index: u32, product: *mut u16) -> u32;
@@ -111,6 +146,12 @@ unsafe extern "system" {
 const ERROR_SUCCESS: u32 = 0;
 const ERROR_INVALID_HANDLE: u32 = 6;
 const ERROR_INVALID_PARAMETER: u32 = 87;
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+const ERROR_PATH_NOT_FOUND: u32 = 3;
+const ERROR_OPEN_FAILED: u32 = 110;
+const ERROR_INSTALL_PACKAGE_OPEN_FAILED: u32 = 1619;
+const ERROR_INSTALL_PACKAGE_INVALID: u32 = 1620;
+const ERROR_CREATE_FAILED: u32 = 1631;
 const ERROR_NO_MORE_ITEMS: u32 = 259;
 const ERROR_UNKNOWN_PRODUCT: u32 = 1605;
 const ERROR_UNKNOWN_COMPONENT: u32 = 1607;
@@ -123,6 +164,27 @@ const INSTALLUILEVEL_DEFAULT: u32 = 1;
 const INSTALLUILEVEL_NONE: u32 = 2;
 const INSTALLUILEVEL_FULL: u32 = 5;
 const INSTALLMODE_EXISTING: u32 = -1i32 as u32;
+
+/// The persistence modes: a small integer passed where a string pointer
+/// goes, standing for a mode and not a path (msiquery.h), so an address
+/// with no provenance is exactly what each one is.
+const MSIDBOPEN_READONLY: *const u16 = null();
+const MSIDBOPEN_TRANSACT: *const u16 = without_provenance(1);
+const MSIDBOPEN_DIRECT: *const u16 = without_provenance(2);
+const MSIDBOPEN_CREATE: *const u16 = without_provenance(3);
+const MSIDBOPEN_CREATEDIRECT: *const u16 = without_provenance(4);
+
+/// A database no machine has. MsiOpenDatabaseW answers
+/// ERROR_OPEN_FAILED whether or not the directory above it is there
+/// (measured on Windows 11 26100: 110 for both of these), so naming a
+/// directory of gala's own costs nothing here. MsiInstallProductW does
+/// tell the two apart, which is why `installs` builds its paths from a
+/// directory it knows is there instead.
+const MISSING_DATABASE: &str = r"C:\gala\no-such-database.msi";
+
+/// A database in a directory no machine has: a create mode cannot make
+/// one there.
+const MISSING_DIRECTORY_DATABASE: &str = r"C:\gala\no-such-directory\no-such-database.msi";
 
 /// A product and a component no machine has (made-up GUIDs).
 const PRODUCT: &str = "{6700E8CF-95AB-4D9C-BC2C-15840DEA7A5D}";
@@ -231,25 +293,47 @@ fn wide<const N: usize>(text: &str) -> [u16; N] {
     out
 }
 
-/// The nine ordinals setup.exe imports: GetProcAddress by ordinal is the
-/// export of that name.
+/// A NUL-terminated path: `directory` itself, or `tail` inside it.
+/// `directory` carries no separator of its own; None if the result
+/// would not fit in `N` units, the NUL included.
+fn path_in<const N: usize>(directory: &[u16], tail: Option<&str>) -> Option<[u16; N]> {
+    let tail = tail.unwrap_or("");
+    let end = if tail.is_empty() { directory.len() } else { directory.len() + 1 + tail.len() };
+    if end + 1 > N {
+        return None;
+    }
+    let mut out = [0u16; N];
+    out[..directory.len()].copy_from_slice(directory);
+    if !tail.is_empty() {
+        out[directory.len()] = u16::from(b'\\');
+        for (slot, b) in out[directory.len() + 1..].iter_mut().zip(tail.bytes()) {
+            *slot = u16::from(b);
+        }
+    }
+    Some(out)
+}
+
+/// The eleven ordinals setup.exe and integrator.exe import by name here:
+/// GetProcAddress by ordinal is the export of that name.
 fn ordinals(c: &mut Checks) -> Result<(), u32> {
     // SAFETY: a NUL-terminated name.
     let module = unsafe { LoadLibraryW(wide::<8>("msi.dll").as_ptr()) };
     // SAFETY: plain call.
     c.ok(module != 0, u64::from(unsafe { GetLastError() }))?;
-    let named: [(u16, &core::ffi::CStr); 9] = [
+    let named: [(u16, &core::ffi::CStr); 11] = [
         (8, c"MsiCloseHandle"),
         (39, c"MsiEnumComponentQualifiersW"),
         (45, c"MsiEnumProductsW"),
+        (88, c"MsiInstallProductW"),
         (90, c"MsiLocateComponentW"),
+        (92, c"MsiOpenDatabaseW"),
         (113, c"MsiQueryProductStateW"),
         (141, c"MsiSetInternalUI"),
         (173, c"MsiGetComponentPathW"),
         (190, c"MsiConfigureProductExW"),
         (203, c"MsiProvideQualifiedComponentExW"),
     ];
-    for (ordinal, name) in named {
+    for (ordinal, name) in named.into_iter().chain(db::ORDINALS) {
         // SAFETY: a loaded module; an ordinal (MAKEINTRESOURCE) and a name.
         let (by_ordinal, by_name) = unsafe {
             (
@@ -471,12 +555,143 @@ fn components(c: &mut Checks) -> Result<(), u32> {
     Ok(())
 }
 
+/// MsiOpenDatabaseW (#92), which integrator.exe imports: no database
+/// opens here. Windows gives the same answer for a path that is not
+/// there and for a file that is not an installer database, whichever
+/// mode that only opens is asked, and ERROR_CREATE_FAILED for a create
+/// mode that cannot create one. It sets the handle to 0 before it looks
+/// at the path, so only the call it refuses for the pointer itself (a
+/// NULL path) leaves the handle as it was.
+fn databases(c: &mut Checks) -> Result<(), u32> {
+    let missing = wide::<29>(MISSING_DATABASE);
+    let uncreatable = wide::<47>(MISSING_DIRECTORY_DATABASE);
+    let empty = [0u16; 1];
+    let mut own = [0u16; 260];
+    // SAFETY: our buffer, its length in units.
+    let n = unsafe { GetModuleFileNameW(0, own.as_mut_ptr(), own.len() as u32) };
+    c.ok(n > 0 && (n as usize) < own.len(), u64::from(n))?;
+    let mut handle;
+    // SAFETY: documented calls with our arguments.
+    unsafe {
+        handle = 0xdead_beef;
+        c.eq(
+            MsiOpenDatabaseW(null(), MSIDBOPEN_READONLY, &mut handle).into(),
+            ERROR_INVALID_PARAMETER.into(),
+        )?;
+        c.eq(handle.into(), 0xdead_beef)?;
+
+        handle = 0xdead_beef;
+        c.eq(
+            MsiOpenDatabaseW(empty.as_ptr(), MSIDBOPEN_READONLY, &mut handle).into(),
+            ERROR_INVALID_PARAMETER.into(),
+        )?;
+        c.eq(handle.into(), 0)?;
+
+        c.eq(
+            MsiOpenDatabaseW(missing.as_ptr(), MSIDBOPEN_READONLY, null_mut()).into(),
+            ERROR_INVALID_PARAMETER.into(),
+        )?;
+
+        for mode in [MSIDBOPEN_READONLY, MSIDBOPEN_TRANSACT, MSIDBOPEN_DIRECT] {
+            handle = 0xdead_beef;
+            c.eq(
+                MsiOpenDatabaseW(missing.as_ptr(), mode, &mut handle).into(),
+                ERROR_OPEN_FAILED.into(),
+            )?;
+            c.eq(handle.into(), 0)?;
+        }
+
+        for mode in [MSIDBOPEN_CREATE, MSIDBOPEN_CREATEDIRECT] {
+            handle = 0xdead_beef;
+            c.eq(
+                MsiOpenDatabaseW(uncreatable.as_ptr(), mode, &mut handle).into(),
+                ERROR_CREATE_FAILED.into(),
+            )?;
+            c.eq(handle.into(), 0)?;
+        }
+
+        // This program's own image: a file that is there and is not a
+        // database.
+        handle = 0xdead_beef;
+        c.eq(
+            MsiOpenDatabaseW(own.as_ptr(), MSIDBOPEN_READONLY, &mut handle).into(),
+            ERROR_OPEN_FAILED.into(),
+        )?;
+        c.eq(handle.into(), 0)?;
+    }
+    Ok(())
+}
+
+/// MsiInstallProductW (#88), which integrator.exe imports: nothing is
+/// installed here. Every path named is one no package could be read
+/// from, so the call is refused before an install could begin -- which
+/// is what makes these answers safe to ask of the host's own Windows
+/// (and of CI's runner) as well as of gala. Windows tells apart what the
+/// path failed on: the file, its directory, that it is a directory, and
+/// that it is a file which is not a package.
+///
+/// They are all built inside the directory this program was loaded
+/// from, which is there wherever the program runs at all. Whether the
+/// directory is there is exactly what tells ERROR_FILE_NOT_FOUND from
+/// ERROR_PATH_NOT_FOUND, so a path under a hard-coded `C:\gala` would
+/// ask the host, not msi.dll: gala lays that directory down and a
+/// machine this project has run on has one, while a stock Windows has
+/// none and answers ERROR_PATH_NOT_FOUND for every path in it.
+fn installs(c: &mut Checks) -> Result<(), u32> {
+    let empty = [0u16; 1];
+    let mut own = [0u16; 260];
+    // SAFETY: our buffer, its length in units.
+    let n = unsafe { GetModuleFileNameW(0, own.as_mut_ptr(), own.len() as u32) };
+    c.ok(n > 0 && (n as usize) < own.len(), u64::from(n))?;
+    let separator = own[..n as usize].iter().rposition(|&u| u == u16::from(b'\\'));
+    let paths = (
+        separator.and_then(|i| path_in::<320>(&own[..i], Some("no-such-database.msi"))),
+        separator.and_then(|i| {
+            path_in::<320>(&own[..i], Some(r"no-such-directory\no-such-database.msi"))
+        }),
+        separator.and_then(|i| path_in::<320>(&own[..i], None)),
+    );
+    let (Some(missing), Some(missing_directory), Some(directory)) = paths else {
+        return c.ok(false, u64::from(n));
+    };
+    // SAFETY: documented calls with our arguments; a NULL command line
+    // is a package installed with no properties set.
+    unsafe {
+        c.eq(MsiInstallProductW(null(), null()).into(), ERROR_INVALID_PARAMETER.into())?;
+        c.eq(MsiInstallProductW(empty.as_ptr(), null()).into(), ERROR_PATH_NOT_FOUND.into())?;
+        c.eq(MsiInstallProductW(missing.as_ptr(), null()).into(), ERROR_FILE_NOT_FOUND.into())?;
+        // The command line makes no difference to a path that fails.
+        c.eq(
+            MsiInstallProductW(missing.as_ptr(), empty.as_ptr()).into(),
+            ERROR_FILE_NOT_FOUND.into(),
+        )?;
+        c.eq(
+            MsiInstallProductW(missing_directory.as_ptr(), null()).into(),
+            ERROR_PATH_NOT_FOUND.into(),
+        )?;
+        c.eq(
+            MsiInstallProductW(directory.as_ptr(), null()).into(),
+            ERROR_INSTALL_PACKAGE_OPEN_FAILED.into(),
+        )?;
+        // This program's own image: a file that is there and is not a
+        // package.
+        c.eq(
+            MsiInstallProductW(own.as_ptr(), null()).into(),
+            ERROR_INSTALL_PACKAGE_INVALID.into(),
+        )?;
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), u32> {
     let mut c = Checks(0);
     ordinals(&mut c)?;
     handles_and_ui(&mut c)?;
     products(&mut c)?;
     components(&mut c)?;
+    databases(&mut c)?;
+    installs(&mut c)?;
+    db::reading(&mut c)?;
     Ok(())
 }
 

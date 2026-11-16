@@ -90,7 +90,7 @@ Everything that depends on the processor architecture is in
 `kernel/src/arch`, behind one interface each architecture implements in
 its own module, selected by `target_arch` (x86_64; aarch64, a stub).
 The kernel's aarch64 check (CI's Clippy step: `cargo clippy -p kernel
---target aarch64-unknown-none`) builds everything else against the stub,
+--target aarch64-unknown-none-softfloat`) builds everything else against the stub,
 so code outside `arch` that names an x86-64 type, register, instruction,
 `asm!` or `core::arch::x86_64` fails to build. What an architecture
 provides (the module names neutral code uses):
@@ -125,8 +125,8 @@ provides (the module names neutral code uses):
   (interrupt masking, halting, `hw_random`), the console and debug
   ports, `qemu::exit`, the kernel handover's machine part, PS/2.
 - **Devices**: `port` and `pci_config` (x86-64: I/O ports and the 0xcf8
-  mechanism); `arch::pci` and `arch::virtio` are shared by every
-  architecture on top of them.
+  mechanism; aarch64: no ports, the MCFG's ECAM window); `arch::pci` and
+  `arch::virtio` are shared by every architecture on top of them.
 
 The personalities' ABIs are per architecture too, outside `arch` (they
 are Windows' and Linux's, not the machine's): `nt::abi` (x64: the
@@ -145,11 +145,136 @@ process's signal contexts; `compile_error!` elsewhere). WOW64's NT part
 every architecture; it runs only where the platform can enter 32-bit
 code (`set_teb32`: x86-64's compatibility mode).
 
-Limits (ROADMAP PT): `mm::paging` is x86-64's page-table format (generic
-over table access for host tests); the user thread-pointer bases keep
+Limits (ROADMAP PT): the user thread-pointer bases keep
 x86-64's names (`gs_base`, `fs_base`, `teb32`) and the FP control
-register MXCSR's; `boot` is Limine's x86-64 protocol; gala's DLLs are not
-checked for aarch64 yet.
+register MXCSR's. `boot` reads Limine's protocol for both: the MP
+response's layout is per architecture (`boot::MpInfo::hw_id`: x86-64's
+local APIC id, aarch64's MPIDR affinity; `Processors::bsp_id`), and
+x86-64's own code keeps the APIC names.
+
+gala's DLLs build for ARM64 too (`aarch64-pc-windows-msvc`, CI's Clippy
+step: Clippy and a build, which assembles inline assembly). Their
+architecture-specific parts are per-architecture modules (kernel32's,
+msvcrt's and ntdll's `x64.rs`, `x86.rs`, `aarch64.rs`; kernel32's 64-bit
+layouts, shared by x64 and ARM64, in `win64.rs`) or `cfg` branches: the
+TEB is `gs:` on x64, `fs:` on x86 and x18 on ARM64 (Microsoft's ARM64
+ABI). The ARM64 modules are stubs in the kernel's sense: the documented
+layouts and the processor's own operations are filled in, and what
+needs the port (CONTEXT services, unwinding, FPCR, rpcrt4's assembly
+calls) records the gap in the ledger and ends the process, or is not
+built for ARM64 (ROADMAP PT lists which). gala's ntdll makes system
+calls on the kernel stub's convention (the number in x8, `svc #0`,
+arguments in x0-x7 and on the stack, the result in x0). wow64 runs x86
+code on x64 and is not built for ARM64.
+
+## The aarch64 port
+
+ROADMAP AR, under way on QEMU's `virt` machine (GICv3, a PL011, virtio
+over PCIe), booted by UEFI (QEMU's own edk2 build, or AAVMF) and
+Limine's `BOOTAA64.EFI` from the same kind of ISO as x86-64's (Limine's
+EFI image carries both loaders; the ISO holds the aarch64 kernel). The
+kernel boots to its end (`gala: boot ok`) with no program run:
+scenarios `arm_boot` (to `stop_after=manifest`: both CPUs online, the
+NT layer's start, the tick seen running, PCI through the ECAM, the disk
+and network drivers set up on their devices, the manifest verified),
+`arm_net_echo` (the kernel's echo server: frames both ways through the
+card), `arm_persist` (C: kept on the disk: formatted by a first boot,
+read back by the second), `arm_clock` (the counter's rate made wrong by
+`calwrong`, caught by the RTC check against the PL031, taken again),
+`arm_sched` (`schedtest`: kernel threads
+switched, woken, joined), `arm_fault_ud` and `arm_fault_pagefault` (the
+vectors' report). User mode is the next step: no program runs yet.
+
+- **Soft-float**: the kernel is built for
+  `aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE: it
+  never touches the FP/SIMD registers, so interrupts save only the
+  general registers and the FP/SIMD state is user mode's alone.
+- **Entry** (`arch/aarch64/entry.rs`): Limine (base revision 6) enters
+  at EL1, or at EL2 with VHE (the `_EL1` register names then reach EL2's),
+  with the MMU on, IRQs masked and FP/SIMD trapped (`CPACR_EL1` = 0); the
+  entry turns FP/SIMD on (for EL0). It also moves the boot stack to SP_EL1: Limine
+  left the kernel on SP_EL0, and an exception at EL1 runs on SP_EL1, so
+  the first exception ran on a stale stack and faulted again inside the
+  handler (what `arm_fault_*` caught).
+- **Vectors**: `VBAR_EL1` is undefined at entry; `init_boot_cpu` installs
+  the kernel's. An IRQ (each origin's second vector) saves a `TrapFrame`
+  on the stack (x0-x30, the interrupted SP, ELR, SPSR: `UserRegs`'
+  layout, then ESR and FAR; 288 bytes), runs `gic::dispatch` and returns
+  with `eret`. Every other exception is reported for now (the vector's
+  kind and origin, ESR's class named, ELR, FAR, SPSR) and ends the kernel.
+- **Interrupts** (`gic.rs`): a GICv3 (QEMU `virt`'s distributor at
+  0x0800_0000, redistributors from 0x080a_0000: the board's layout),
+  brought up with its first source: the distributor (affinity routing,
+  group 1), this CPU's redistributor (found by GICR_TYPER's affinity,
+  woken), the CPU interface by its system registers (ICC_SRE, PMR,
+  IGRPEN1). An IRQ is acknowledged (ICC_IAR1) and ended (ICC_EOIR1)
+  before its handler runs. Invariant: the end comes first because a
+  handler may switch threads (the tick's preemption), and until the EOI
+  the CPU's running priority holds back every interrupt of that priority:
+  the thread switched to would run without ticks (`schedtest`'s second
+  spin caught it). Private interrupts (SGIs, PPIs) have handlers.
+- **Time** (`timer.rs`): the generic timer's virtual channel (PPI 27).
+  Its counter's rate is CNTFRQ_EL0's, architected: nothing is calibrated
+  (`timer: generic timer ... counter at <n> kHz`). The tick is periodic by
+  compare value (CNTV_CVAL moved on one period per tick, not drifting
+  with the handler's latency).
+- **Devices before the kernel's page tables** (`early_map`): the
+  bootloader's higher half maps the kernel and the HHDM of memory, no
+  device. A device page is added to its TTBR1 tables, in the 2 MiB below
+  the kernel image, with MAIR_EL1's slot 2 set to Device-nGnRE (slots
+  2-7 are guaranteed unused); missing tables come from a pool in .bss.
+  The console's PL011 (QEMU `virt`'s at 0x0900_0000, the board's fixed
+  layout) is mapped this way by `serial::init`.
+- **Page tables** (`arch/aarch64/paging.rs`): the kernel's higher half
+  (TTBR1_EL1) is `mm::paging::Mapper` with the `Vmsa` encoding, built as
+  x86-64's (the HHDM of the regions Limine maps, the image per segment,
+  and the early device pages again at their addresses), then TTBR1 and
+  MAIR_EL1 are switched and EL1's TLB invalidated. MAIR holds one
+  attribute per `CacheMode` at its value (the leaves' AttrIndx); slot 0
+  stays write-back and slot 2 Device-nGnRE, so the bootloader's and
+  `early_map`'s entries keep their meaning across the switch. Device
+  mappings go in a window at 0xffff_e000_0000_0000 (`map_mmio`); a kernel
+  page's unmap invalidates it everywhere (`tlbi vaae1is`). User spaces
+  (TTBR0) are not ported.
+- **Exit**: semihosting's SYS_EXIT_EXTENDED (`hlt #0xf000`; xtask runs
+  QEMU with `-semihosting-config enable=on`), with x86-64's statuses (33
+  success, 35 failure). There is no ISA bus: no debug console (no event
+  stream yet) and no phase port (`bootphase` marks are no-ops).
+- **Threads** (`context.rs`, `percpu.rs`): kernel stacks in a window of
+  guard-paged slots, as x86-64's. The switch saves x19-x30 on the
+  outgoing stack and its SP in the context, and the FP/SIMD registers
+  (V0-V31, FPCR, FPSR: user mode's, the kernel being soft-float) in the
+  context's save area; a new thread starts at a trampoline calling its
+  entry (x19). TPIDR_EL1 points at this CPU's block (index, the running
+  thread's kernel stack, client, personality, the user thread-pointer
+  bases). There is no NMI yet: the state dump's handler is kept and the
+  log says a dump at a timeout is not taken (the GIC's pseudo-NMI comes
+  with the port).
+- **Other CPUs** (`smp.rs`): Limine started them; each waits at EL1 on
+  the bootloader's tables for its `goto_address`. `start_aps` gives each a
+  kernel stack and its index (`extra_argument`) and sends it to the AP
+  entry: FP/SIMD on, the stack as SP_EL1, the kernel's MAIR and TTBR1
+  (the TLB invalidated), then its per-CPU block, vectors and GIC part
+  (`gic::init_cpu`: its redistributor, found by affinity, with the
+  private interrupts already handled), online, and `sched::run_ap`
+  (its tick). IPIs are SGIs (SGI 0 reschedules); a TLB flush everywhere
+  is a broadcast `tlbi vmalle1is`, no IPI. Hardware ids are MPIDR's
+  affinity fields everywhere (Limine's MP response, the MADT's GICC
+  entries, `smp::online_cpus`); the GIC packs them for GICR_TYPER and
+  ICC_SGI1R itself.
+- **What the NT layer registers at its start**: the personalities'
+  system call dispatchers (`syscall::set_handler`, the neutral
+  `personality::Dispatchers`), the user-return hook and the user
+  exception handler are kept for user mode's paths; KUSER_SHARED_DATA is
+  a kernel frame written through the HHDM (`paging::SharedPage`).
+- **Limits**: the UART's and the GIC's addresses are the board's, not read
+  from the firmware (SPCR, the MADT's GICD/GICR entries or the device
+  tree: the port); CPUs the bootloader did not start are not started
+  (PSCI CPU_ON); SGIs reach an Aff0 below 16 only; no NMI (the GIC's
+  pseudo-NMI: no state dump at a timeout, no `stop_others`); no user
+  mode; the PL031 RTC's address is the board's too; entered at EL2 with VHE the timer would
+  be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
+  enrollment is BOOTX64.EFI's).
 
 ## Boot
 
@@ -246,7 +371,10 @@ Whitespace-separated `flag` and `key=value` words (`kernel/src/cmdline.rs`).
 | `nomigrate` | a thread that runs user code stays on the CPU it first ran on (tells migration bugs from others) |
 | `framecheck` | user mappings of each frame are counted; freeing a frame a user space still maps panics |
 | `eagercommit` | committed private pages get their frames at once instead of at the first touch (no demand-zero faults in user code) |
-| `calwrong`, `calstall` | clock-calibration tests: the first TSC calibration 20x low (the RTC check must catch it), or the boot CPU stalled inside the calibration (scenarios `clockcal_*`; "Interrupts and time") |
+| `stop_after=<phase>` | end the boot after that boot phase (`memory_map`, `frames`, `paging`, `timer`, `sched`, `smp_start`, `smp_done`, `drivers`, `manifest`): logged (`boot: stopping after boot phase <phase> (stop_after)`; once interrupts are on, with whether the tick runs: three ticks waited for, at most 2 s), then QEMU exits with success under `qemu_exit` (else the CPU halts). The aarch64 port's scenarios use it while the phases after are unported |
+| `schedtest` | the scheduler's check, just after it starts: two kernel threads yield to each other 100 rounds each, spin until each other arrives and leaves (only the tick's preemption moves them on, also on the thread a tick switched to), sleep 10 ms and are joined; `schedtest: ok: ...` if they took turns and ended, else `schedtest: failed: ...` (scenarios `arm_sched`, `sched_selftest`) |
+| `early_fault=<ud\|pagefault\|stackoverflow>` | provoke that fault right after the exception vectors are installed, before anything else is up (`fault=` is the same later, on a scheduler thread); scenarios `arm_fault_ud`, `arm_fault_pagefault` |
+| `calwrong`, `calstall` | clock-calibration tests: the first calibration of the cycle counter 20x low (the RTC check must catch it; also on aarch64, `arm_clock`), or the boot CPU stalled inside the calibration (x86-64; scenarios `clockcal_*`; "Interrupts and time") |
 | `failpoint=<point>:<mode>:<n>[,...]` | fault injection while the `start=`/`run=` programs run (debug builds; "Fault injection"). Points `heap`, `frame`, `disk_io`, `net_tx`, `pageout`; modes `every:<n>` (the n-th, 2n-th, ... occurrence fails), `nth:<n>` (only the n-th), `random:<per-mille>` (from `failseed=`). Example: `failpoint=heap:every:97,net_tx:random:50` |
 | `failpoint=disk_io:delay:<ms>` | added latency: each disk request waits that long first, nothing fails (debug builds; R7) |
 | `failseed=<n>` | seed of the `random` failpoints (default 0): the same seed fails the same occurrences |
@@ -319,9 +447,16 @@ address.
 The kernel's own address space; processes' address spaces are in
 "Virtual memory of processes" under the NT personality.
 
-`mm::paging::Mapper` implements 4-level tables (4K/2M/1G leaves, NX, PAT
-cache modes) over a `TableMemory` trait; the host tests use a fake, the
-kernel uses `arch::paging::HhdmTables`. At boot `arch::paging::init`
+`mm::paging::Mapper` implements 4-level tables (4K/2M/1G leaves) over a
+`TableMemory` trait (the host tests use a fake, the kernel
+`arch::paging::HhdmTables`) and a `Format`, the entry encoding: x86-64's
+(`X86`, the default: NX, PAT cache modes) or VMSAv8-64's with the 4 KiB
+granule (`Vmsa`: AttrIndx into MAIR, AP, PXN/UXN; aarch64, "The aarch64
+port"). Both index 48-bit addresses 9 bits a level and map blocks at
+levels 2 and 3, so the walk, the large pages and their tests are one;
+what is valid to map differs (`Format::valid_virt`: x86-64's canonical
+form, aarch64's two halves from 0 and from 0xffff_0000_0000_0000). On
+x86-64, at boot `arch::paging::init`
 programs the PAT (WB, WT, UC-, UC, WP, WC, UC-, UC), enables NXE and
 PGE, builds the kernel address space and switches CR3:
 
@@ -429,8 +564,12 @@ channel 2 as a free-running counter.
 ### The RTC check
 
 `time::start_clock_check` starts a kernel thread "clockcheck" after boot
-that polls the CMOS RTC's seconds every millisecond and times its second
-edges with the TSC (each edge bracketed by the polls around it). The
+that polls the RTC's seconds (`arch::timer::rtc_seconds`: x86-64's CMOS
+RTC, aarch64's PL031) every millisecond and times its second edges with
+the cycle counter (each edge bracketed by the polls around it; the log
+names the counter and the timer, `timer::COUNTER_NAME` and
+`TIMER_NAME`: the TSC and the APIC timer, the generic counter and
+timer). The
 seconds between two edges are counted from the RTC's decoded value, not
 from the edges seen (a poll more than a second late misses an edge).
 After k seconds `clockcal::rtc_verdict` compares the calibrated rate with
@@ -442,16 +581,20 @@ what the RTC allows:
 - wrong (more than 3% outside, twice in a row): `clock: WRONG: ...`
   (error, and a `clock_wrong` event whatever the event mask). The
   calibration is then redone on the boot CPU with interrupts off (its
-  timer restarted; the RTC's coarse rate is used only if the new
-  measurement has too few good samples and still disagrees), the TSC's
+  timer restarted; the RTC's coarse rate is used only if the new rate
+  is not reliable and still disagrees: an x86-64 measurement with too
+  few good samples, or aarch64's CNTFRQ_EL0, the firmware's statement
+  rather than a measurement, read again), the counter's
   zero is moved so that `monotonic_ns` goes on without a jump (a seqlock
   over the rate and the zero), and the other CPUs reprogram their timer
   at their next tick (`CAL_GEN`).
 
 `calwrong` divides the first calibration by 20 to test this path
-(scenario `clockcal_recal`; the programs then wait for the check). The
-check's two log lines carry `uptime_ms=` marks, which xtask times against
-the host (`xtask/src/clockcheck.rs`).
+(scenarios `clockcal_recal` and `arm_clock`; the programs, or the boot's
+end, then wait for the check). The check's log lines carry `uptime_ms=`
+marks, which xtask times against the host (`xtask/src/clockcheck.rs`);
+a `clock: recalibrated:` line starts its marks again (the time before it
+was wrong, and the kernel said so).
 
 ### What a guest's clock follows
 
@@ -496,6 +639,9 @@ of the time, and the HPET still advanced exactly with host time). So:
   no less than 4 GHz: a low calibration makes them longer, never shorter.
 - Invariant: no timeout or delay may be computed from `raw_monotonic_ns`
   alone where ending early is harmful.
+- A sleep of `n` ticks wakes `n + 1` ticks from now (`sched::sleep_ms`):
+  the current tick period is partly over, so `n` ticks from now can be
+  just over `n - 1` periods, and a sleep promises at least its time.
 
 ## Threads and scheduling
 
@@ -834,11 +980,30 @@ current process, -2 = current thread.
     waiting loses a request made in between.
 - **Exit order**: when the last thread exits, the process records its
   exit status, closes all its handles (breaking reference cycles) and
-  leaves the registry, and only then is its object signaled (as on
-  Windows: a waiter that wakes finds its handles closed and its named
-  objects gone). The address space is freed when the last thread is
-  reaped.
-- **Leak check**: `run=` checks that the address space is freed and logs
+  leaves the registry, gives up its address space, and only then is its
+  object signaled (as on Windows: a waiter that wakes finds its handles
+  closed, its named objects gone and no memory left to read).
+- **The address space goes at the exit**, not with the last handle:
+  `process::release_space` drops the section views, clears the VAD
+  (keeping its peaks, so VM_COUNTERS still answers PeakVirtualSize and
+  PeakWorkingSetSize) and releases the process's reference to the space,
+  which is why `Core::space` is an `Option`. Windows tears the virtual
+  address space down at the exit and keeps only the object; holding the
+  space with the object instead kept the frames of every exited process
+  someone had a handle to (Chromium's crashpad handler holds one to each
+  process it watches, and a browser that had exited left 290 MiB). The
+  frames themselves go a moment later: the exiting thread's scheduler
+  record still holds a reference and the CPU is running on those page
+  tables, so the last reference goes in `sched::reap`, after the switch
+  away. What is left of the process then answers as on Windows
+  (process_test, measured on 11 26100): its exit code and its peak
+  counters, while VirtualQueryEx fails with ERROR_ACCESS_DENIED
+  (STATUS_PROCESS_IS_TERMINATING, from `Core::live_space`) and
+  ReadProcessMemory with ERROR_PARTIAL_COPY having copied nothing. A
+  refused call is an `address space gone` event (events=process).
+- **Leak check**: `run=` takes its own reference to the address space
+  before the program starts (the process gives its up at the exit),
+  checks that the space is freed and logs
   "address space still referenced" otherwise, which fails the boot
   scenario. A leak is a second without progress (each reference that
   goes restarts the second); the message is preceded by who holds the
@@ -2027,8 +2192,17 @@ share it (LX seam 4; the Linux side is `lx::file`, "The lx module"):
   path); FILE_LINK/RENAME_POSIX_SEMANTICS (replacing an open target;
   recorded, refused as without it); IGNORE_READONLY_ATTRIBUTE on a rename
   (recorded, ignored).
-- **Volume**: reports itself as an NTFS disk (FileFs* classes) with RAM
-  as its size.
+- **Volume**: reports itself as an NTFS disk (FileFs* classes), sized by
+  the disk's data area (by RAM without a disk). Its
+  FILE_FS_ATTRIBUTE_INFORMATION flags (`file::VOLUME_ATTRIBUTES`) are the
+  features it has: case-preserved Unicode names, persistent ACLs, reparse
+  points, POSIX unlink and rename, hard links. A feature that works but
+  is not reported is one programs do not use: a program asks the volume
+  what it can do before it uses it, and takes the answer
+  (`user/volume_test`). NTFS reports more (sparse files,
+  named streams, object IDs, open by file ID, a USN journal, quotas,
+  compression, encryption, transactions, case-sensitive search per open),
+  which gala has not; each bit goes in with its feature.
 - **Completion**: file objects are waitable: NtReadFile/NtWriteFile reset
   the caller's event (and the file object) when an I/O starts and signal
   both when it completes, which for ramfs is always before the system
@@ -3136,7 +3310,7 @@ own name).
 | networking | ws2_32 ("ws2_32.dll"), mswsock (forwarders to ws2_32), wsock32 (Winsock 1.1: forwarders to ws2_32 with the standard ordinals), iphlpapi, winhttp, wininet, urlmon, dhcpcsvc, netapi32, mpr, wldap32 |
 | UI | user32, gdi32, comctl32, comdlg32, uxtheme, msimg32, riched20, msftedit, oleacc, uiautomationcore ("Windows on the screen", "UI Automation"), msctf (input scopes, "Other DLLs"), gdiplus (GDI+'s flat API: bitmaps, PNG, solid fills, "Other DLLs"), windows.ui (Windows.UI.ViewManagement.UISettings, "Other DLLs") |
 | COM, shell | ole32, combase (forwarders to ole32), oleaut32, rpcrt4, shell32, shlwapi, xmllite, msxml6, appxdeploymentclient (Windows.Management.Deployment.PackageManager with no packages) |
-| other | winmm, powrprof, version, dbghelp, pdh, setupapi, odbc32, xolehlp, webservices, wintrust, clusapi, resutils, msi (Windows Installer's queries: nothing installed, "Other DLLs"), rstrtmgr (the Restart Manager, "Other DLLs"), wofutil (the Windows Overlay Filter's API: no filter, "Other DLLs"), sppc (the Software Protection Platform's client over gala's license store, "Other DLLs"), wldp (Windows Lockdown Policy: unlocked, no policy in force) |
+| other | winmm, powrprof, version, dbghelp, pdh, setupapi, odbc32, xolehlp, webservices (Windows Web Services' XML reader, "Other DLLs"), wintrust, clusapi, resutils, msi (Windows Installer: nothing installed, and reading a database, "Other DLLs"), rstrtmgr (the Restart Manager, "Other DLLs"), wofutil (the Windows Overlay Filter's API: no filter, "Other DLLs"), sppc (the Software Protection Platform's client over gala's license store, "Other DLLs"), wldp (Windows Lockdown Policy: unlocked, no policy in force) |
 
 Programs in System32 beside the DLLs: `user/conhost` (conhost.exe,
 "Consoles") and `user/cmd` (cmd.exe, "Other DLLs and programs").
@@ -5315,8 +5489,9 @@ of their own, clients of it) is the yardstick.
   (`user/<dll>/src/unimplemented.rs`, the `gala_stubs` crate's
   `unimplemented_exports!`; ntdll has its own copy). A stub cannot fail
   in the function's own terms (it does not know the return type), so a
-  call reports `dll!function` ("not implemented") and ends the process
-  with STATUS_NOT_IMPLEMENTED (`unimplemented_test`). The stubs live in a
+  call reports `dll!function` ("stub", the one kind whose line says the
+  process ended) and ends the process with STATUS_NOT_IMPLEMENTED
+  (`unimplemented_test`). The stubs live in a
   `.gstub` section: LdrGetProcedureAddress (GetProcAddress) treats an
   export resolving there as absent (by name STATUS_ENTRYPOINT_NOT_FOUND,
   by ordinal STATUS_ORDINAL_NOT_FOUND, as a missing export), so programs probing for optional
@@ -5326,8 +5501,9 @@ of their own, clients of it) is the yardstick.
   comctl32, shell32, ole32 and others); a function is implemented by
   removing its name from the list.
 - **Stub-only DLLs**: pdh, xolehlp, odbc32, authz,
-  webservices, dhcpcsvc and oleacc are nothing but such stubs (wintrust's
-  catalog functions are too: "wintrust: Authenticode").
+  dhcpcsvc and oleacc are nothing but such stubs (wintrust's
+  catalog functions are too: "wintrust: Authenticode", and so is
+  webservices' SOAP side: "Other DLLs").
   comdlg32 (`comdlg32_test`) draws no dialog yet: GetFileTitleW (the
   name without its directory, the size needed when the buffer is
   short; the extension kept), the parameter checks FindTextW,
@@ -5928,8 +6104,9 @@ processor number; also NtGetCurrentProcessorNumber), then enters
 boot CPU), at most 64.
 
 - `boot::acpi` reads the MADT (RSDP from Limine's RSDP request, XSDT or
-  RSDT; enabled local APIC and x2APIC entries; host-tested parser) into
-  `BootInfo::firmware_cpus`. `start_aps` starts the CPUs Limine
+  RSDT; enabled local APIC and x2APIC entries, and on aarch64 GICC
+  entries' MPIDR; host-tested parser) into `BootInfo::firmware_cpus`, as
+  hardware ids (`boot::MpInfo::hw_id`'s). `start_aps` starts the CPUs Limine
   reported, then every MADT CPU it did not report with the kernel's own
   trampoline (next section).
 - The CPUs Limine started get a second to reach `ap_main`, then (with a
@@ -6048,22 +6225,36 @@ only. ROADMAP N1 (TCP/IP and sockets) and N2 (Nginx) are the items.
 
 ### Devices
 
-- `arch::pci`: configuration space through ports 0xcf8/0xcfc,
-  brute-force enumeration (bus 0-255, functions 1-7 only for
-  multifunction devices). The firmware (SeaBIOS or OVMF) has assigned
-  the BARs; the kernel only turns on I/O decoding and bus mastering.
-- `arch::virtio`: the virtio *legacy* PCI interface (registers in I/O
-  BAR 0; QEMU gets `disable-legacy=off`). It is in `arch` because the
-  device DMAs: `LegacyDevice` owns its queues and resets the device in
-  `drop` before the queue memory is freed (fields drop after `drop`).
+- `arch::pci`: configuration space through the architecture's
+  `pci_config` (x86-64: ports 0xcf8/0xcfc; aarch64: segment 0's ECAM
+  window from the MCFG, mapped once before the drivers enumerate, every
+  read seeing no device without it), brute-force enumeration (bus 0-255,
+  functions 1-7 only for multifunction devices). x86-64 keeps the ports
+  although q35 has an MCFG: a handover boot gets no ACPI tables from the
+  previous kernel, and the ports need none (aarch64's handover, when
+  ported, carries the window). The boot log names the mechanism (`pci:
+  configuration space through ...`). The firmware (SeaBIOS, OVMF or
+  AAVMF) has assigned the BARs; the kernel only turns on memory decoding
+  and bus mastering.
+- `arch::virtio`: virtio's modern PCI interface only (`ModernDevice`:
+  the common, notify and device-configuration structures in memory
+  BARs, found through vendor capabilities), for every driver (disk,
+  network, GPU) on every architecture: it needs no port I/O, which
+  aarch64 has none of. QEMU's devices are transitional (ids 0x1000,
+  0x1001: the legacy registers are there, unused) or modern-only (0x1041,
+  0x1042); the drivers take either. It is in `arch` because the device
+  DMAs: `ModernDevice` owns its queues and resets the device in `drop`
+  before the queue memory is freed (fields drop after `drop`). A
+  queue's ring is sized for the buffers the driver asks for (twice for
+  chained requests), as far as the device allows.
   Each `Virtqueue` has physically contiguous ring memory and a buffer
   region of up to 64 fixed slots; slot *i* is descriptor *i*, and a bit
   mask tracks which slots the device owns (chained slots for block
   requests: "Disk"). Drivers poll (the available ring asks for no
   interrupts).
 - `net::virtio_net`: queue 0 receive, 1 transmit, 32 slots of 2 KiB
-  each, the 10-byte legacy header in front of every frame (no
-  offloads). It is a smoltcp `Device`; a received frame is copied out
+  each, the 12-byte `virtio_net_hdr` VERSION_1 gives every frame (with
+  `num_buffers`; no offloads); features MAC (and VERSION_1). It is a smoltcp `Device`; a received frame is copied out
   and its slot reposted at once, a sent frame is copied into a free
   transmit slot (counted as dropped when none is free; TCP retransmits).
 - `net::loopback`: a smoltcp `Device` (medium IP, MTU 16 KiB) whose
@@ -6678,9 +6869,9 @@ clusters of a data area, a disk-backed C: (D4). gala-um has no disk.
   2*i*+1 (the device writes: a read's data and the status), over
   consecutive parts of the slot (`post_chain`), which is what a block
   request needs.
-- `disk::virtio_blk`: the first transitional virtio-blk function (legacy
-  interface, `disable-legacy=off`), capacity from its configuration,
-  features RO, FLUSH and ANY_LAYOUT; one queue with one slot of 64 KiB
+- `disk::virtio_blk`: the first virtio-blk function (modern interface),
+  capacity from its configuration, features RO and FLUSH (and VERSION_1,
+  which implies any layout); one queue with one slot of 64 KiB
   of data. A request is the 16-byte header (type IN/OUT/FLUSH, sector),
   the data and a status byte.
 - `disk` (the kernel's API, independent of NT): `read`/`write` of whole
@@ -7147,7 +7338,15 @@ session's is shown by nothing unless GalaSession attaches a presenter
   keys. The input thread turns on an IntelliMouse-compatible wheel (the
   sample-rate knock 200, 100, 80, then device id 3: 4-byte packets, the
   fourth byte's low nibble the signed movement, positive towards the
-  user).
+  user). It counts the bytes it reads from each device (`BYTES_READ`:
+  keyboard, mouse) and logs their address once (`input: bytes read at
+  <address> ..., mouse packets of N bytes`): xtask's screen checks send
+  their next input only once the guest has read all they sent, as
+  QEMU's 16-byte PS/2 queues lose what does not fit (WORKFLOW "Screen
+  checks"). The `input:` line at exit counts packets, presses, wheel
+  notches and keys. A shown window that leaves the screen is logged as
+  `desktop: window '<title>' left the screen (hidden | closed | its
+  process ended)`, the counterpart of `desktop: shown window`.
 - **Boot splash** (`console.rs`): from when the kernel takes the
   framebuffer until the desktop does, the screen shows the fortress
   (160 px) over the wordmark (220 px) on a dark gradient, with a
@@ -9544,8 +9743,9 @@ file's buffer is reserved fallibly (`try_reserve_exact`, an
 package's as `<package>/<file>`), the block, expected and actual
 values, and for XML the element and line.
 
-**XML** (`user/gala_xml`, gala's own, shared with msxml6.dll; host
-tests `cargo test -p gala_xml`): elements, attributes, text, CDATA,
+**XML** (`user/gala_xml`, gala's own, shared with msxml6.dll's DOM
+and webservices.dll's reader; host tests `cargo test -p gala_xml`):
+elements, attributes, text, CDATA,
 comments, PIs (the XML declaration among them), the predefined entities
 and character references, namespaces (declarations kept as attributes
 in the xmlns namespace, as the DOM has them), UTF-8 (with or without
@@ -9555,7 +9755,18 @@ concatenated text. DTDs are refused (no entity expansion), as are
 undeclared prefixes, duplicate attributes and nesting beyond 256;
 errors carry the line and column; iterative, so depth costs no stack.
 Its allocations are infallible (`alloc`'s String and Vec: the input's
-size bounds them).
+size bounds them). Two faces over the same character-level rules, so
+both refuse the same documents: `parse` and `parse_document` read a
+document whole into the tree above, and `Scan` hands out one node at a
+time (`next_event(text)` -> `Event`) for a caller that pulls, as
+WS_XML_READER's does. The text is passed to each call and not held, so
+the scan is an offset into the document and borrows nothing; a caller
+can keep the document and the scan side by side. A scan can be told
+that its text is a fragment (`allow_fragment`): more than one root
+element, every other rule unchanged, which is what webservices.dll's
+WS_XML_READER_PROPERTY_ALLOW_FRAGMENT asks for. It also says where it
+has got to (`position`: the line from 1 and the bytes into it), which
+is what that DLL's ROW and COLUMN are made of.
 **ZIP64** (`zip.rs`): the zip64 end record, locator and extra field
 (MSIX packages are zip64 with data descriptors; the central directory is
 authoritative); entries of 4 GiB or more are refused (archives are in
@@ -9652,12 +9863,61 @@ stations and desktops a program creates are refused until stage 3).
   INSTALLSTATE_INVALIDARG or ERROR_INVALID_PARAMETER; MsiSetInternalUI
   keeps the process's level and owner window (an invalid level returns
   INSTALLUILEVEL_NOCHANGE yet its known flags replace the current ones,
-  as on Windows); MsiCloseHandle knows no handle
-  but 0. Each "nothing installed" answer is recorded (`msi.dll!<function>:
-  nothing installed`, kind other, the ordinal as detail). The exports
-  carry Windows' ordinals (build.rs; ODT's setup.exe imports them by
-  ordinal). Installing (MsiInstallProduct and the rest) is absent:
-  galapkg's MSI reader (ROADMAP PK) installs packages, not msi.dll.
+  as on Windows). Each "nothing installed" answer is recorded
+  (`msi.dll!<function>: nothing installed`, kind other, the ordinal as
+  detail). The exports carry Windows' ordinals (build.rs; ODT's
+  setup.exe and the integrator.exe it runs both import them by
+  ordinal). Installing a package is galapkg's business (its MSI reader,
+  ROADMAP PK), not msi.dll's, so MsiInstallProductW installs nothing --
+  and is exported all the same, because integrator.exe delay-loads it
+  and a delay load that cannot be resolved ends the process with
+  0xc06d007f before it can handle anything, where a refusal it can see
+  it reports. It answers Windows' own code for every path that is no
+  package to begin with: ERROR_INVALID_PARAMETER for a NULL path,
+  ERROR_PATH_NOT_FOUND for an empty one and for a missing directory,
+  ERROR_FILE_NOT_FOUND for a missing file,
+  ERROR_INSTALL_PACKAGE_OPEN_FAILED for a directory and for every other
+  reason an open can fail, ERROR_INSTALL_PACKAGE_INVALID for a file that
+  is no package. The other installing functions stay absent until a run
+  shows one imported.
+
+  A database on disk is another matter, since reading one asks nothing
+  of an installer: `user/msi/src/db.rs` is the API over galapkg's MSI
+  reader, and it is what Office's integrator.exe reads the
+  Click-to-Run MSIs with. MsiOpenDatabaseW opens a file for reading in
+  the modes that only open (READONLY, TRANSACT, DIRECT) and answers
+  ERROR_OPEN_FAILED where the path is absent or the file is no database;
+  it refuses a NULL or empty path and a NULL handle with
+  ERROR_INVALID_PARAMETER, and writes 0 through the handle in every case
+  it gets past the pointer check -- only the NULL path pointer, refused
+  first, leaves the caller's handle untouched. Handles (databases, views
+  and records in one table of slots under one SRW lock, a handle being
+  its slot index plus 1, so 0 is no handle and closing it succeeds),
+  MsiDatabaseIsTablePersistentW, MsiDatabaseOpenViewW, MsiViewExecute
+  (which is where the rows are read, the cursor before the first),
+  MsiViewFetch (a record per row; past the last, ERROR_NO_MORE_ITEMS and
+  the cursor rewound, as Windows does), MsiViewClose (the rows dropped,
+  the view kept), MsiRecordGetFieldCount, MsiRecordGetStringW
+  (ERROR_MORE_DATA and the length needed, which it also reports when
+  given no buffer at all), MsiRecordGetInteger (MSI_NULL_INTEGER for a
+  field that holds no integer) and MsiRecordIsNull. A query is a SELECT
+  of a whole table or of named columns of one; the table and the columns
+  must be the database's, or ERROR_BAD_QUERY_SYNTAX.
+
+  **Limits**, each recorded in the ledger where a program asks for it
+  (ROADMAP OF): a query with a WHERE or an ORDER BY, and the query
+  parameters a record stands in for, are refused rather than answered
+  wrongly; a query that changes a database runs as
+  ERROR_FUNCTION_FAILED, which is Windows' own answer for a database
+  opened read-only, and a create mode or persist path is
+  ERROR_CREATE_FAILED, where Windows would create one; and a package
+  gala does read, asked of MsiInstallProductW, is
+  ERROR_INSTALL_FAILURE -- Windows' own code for an install that failed
+  -- with the package named in the ledger, where Windows would install
+  it. Windows also
+  keeps bookkeeping per database file that gala does not: while a
+  database is open it refuses a second open of the same file, and gala
+  opens it.
 - rstrtmgr (`user/rstrtmgr`, x64 and x86; `rstrtmgr_test`,
   `wow64_rstrtmgr_test`): the Restart
   Manager, which installers ask what uses the files they will replace
@@ -9743,6 +10003,75 @@ stations and desktops a program creates are refused until stage 3).
   a store file that is not a license as `sppc.dll!store: unreadable
   license file`. No 32-bit build, no sppcext.dll (SLActivateProduct)
   and no slc.dll yet: nothing has asked for them.
+- webservices (`user/webservices`, x64 and x86; `webservices_test`,
+  `wow64_webservices_test`): Windows Web Services' XML reader, the part
+  of WWSAPI the Office Deployment Tool's setup.exe delay-loads to read
+  the configuration service's answer. Heaps (WsCreateHeap, WsResetHeap,
+  WsFreeHeap): the memory a read hands back, in blocks of 8-byte words
+  so that each is aligned for what is put in it, and bounded by the size
+  the heap was created with (WS_E_QUOTA_EXCEEDED beyond it). Error
+  objects (WsCreateError, WsResetError, WsFreeError, WsGetErrorProperty,
+  WsGetErrorString): the strings describing a failure, newest first, as
+  Windows leaves them; a buffer that is not the property's own size is
+  E_INVALIDARG and is left untouched, and an index past the last string
+  is E_INVALIDARG with the WS_STRING untouched (both measured). Readers
+  over a buffer of text XML (WsCreateReader, WsSetInput, WsFillReader,
+  WsFreeReader; a buffer input is the whole document, so a fill never
+  waits) and the reads setup.exe makes: WsReadToStartElement (the
+  element by local name and namespace, `found` FALSE with S_OK when it
+  is not there and WS_E_INVALID_FORMAT when the caller passed no
+  `found`), WsReadStartElement, WsReadEndElement, and WsReadType for
+  WS_WSZ_TYPE (a string onto the heap) and WS_UINT32_TYPE (a number;
+  WS_E_NUMERIC_OVERFLOW for one that does not fit) under both element
+  mappings. The reader reads ahead: a read that consumes a node leaves
+  it on the node after that one, which is what Windows' reader does
+  (its ROW and COLUMN stand there, measured) and the reason a document
+  with two root elements fails at the first root's end tag and not at
+  the read after it. WS_ELEMENT_TYPE_MAPPING reads a whole element,
+  start tag to end tag, and leaves the reader past it;
+  WS_ELEMENT_CONTENT_TYPE_MAPPING reads from inside an element whose
+  start tag the caller has read and leaves the reader on the end tag,
+  for the caller's own WsReadEndElement -- the way setup.exe reads the
+  answer. The content mapping refuses nothing on where the reader
+  stands: it takes the text from there up to the first node that is not
+  text and consumes neither that node nor the end tag, so an element
+  that holds elements holds the empty string, as Windows reads it. A
+  read of a value the document does not hold -- a number that is not
+  one, a number too big for its type, an element where a value was
+  expected -- faults the reader, as a malformed document does.
+  WsGetReaderProperty answers for the settings and the position, in
+  Windows' own order of refusals (measured): a reader with no input
+  refuses every id with WS_E_INVALID_OPERATION and a faulted one with
+  WS_E_OBJECT_FAULTED; then an id the reader does not report is
+  E_INVALIDARG; then a buffer that is not the property's own size is
+  E_INVALIDARG, is left untouched, and faults the reader.
+  WS_XML_READER_PROPERTY_MAX_DEPTH (32 by default) is enforced on a
+  start tag as it is read ahead, which is the read Windows refuses with
+  WS_E_QUOTA_EXCEEDED; ALLOW_FRAGMENT (FALSE) allows more than one root
+  element (`gala_xml`'s `Scan::allow_fragment`); CHARSET, IN_ATTRIBUTE,
+  ROW and COLUMN are reported and not set, ROW being the line counted
+  from 0 (the strings in errors count it from 1) and COLUMN the bytes
+  into that line. How Windows divides ROW and COLUMN over a document
+  written on several lines is not separately measured; gala counts the
+  line ends its scan has passed. The document is read node by node with
+  gala's XML reader ("XML", `gala_xml`'s `Scan`), so a malformed
+  document fails at the read that reaches it and faults the reader --
+  every later call on it is WS_E_OBJECT_FAULTED -- as Windows' reader
+  does, and not when the input is set. A writer is an object and
+  nothing more (WsCreateWriter, WsFreeWriter: setup.exe creates one and
+  imports no write function). Limits: the buffer input and the text
+  encoding only; every other WS_TYPE, type mapping, read option and
+  encoding is recorded in the missing-features ledger with the number
+  it was handed and answered WS_E_NOT_SUPPORTED, so a program that
+  needs more says which. MAX_ATTRIBUTES, MAX_NAMESPACES,
+  READ_DECLARATION and the stream and trim sizes are taken, kept and
+  recorded as "other" instead of refused: the reader is created and the
+  ledger names what a program asked for, where a refusal that ends the
+  process would hide everything after it. A null namespace matches an
+  element in any namespace, which of the two readings Windows takes not
+  being measured, so it is recorded
+  too. The SOAP side -- channels, service proxies, calls, custom headers
+  -- is stubs for SQL Server LocalDB ("Stub-only DLLs").
 - gdiplus (`user/gdiplus`, x64 and x86; `gdiplus_test`,
   `wow64_gdiplus_test`): GDI+'s flat API, the part ODT's setup.exe
   draws its window with (Display Level Full): GdiplusStartup (versions
@@ -11524,9 +11853,12 @@ The running parts (milestone 1; `lxrun=`):
   shared copy-on-write are its parent's alone again, and a section's
   frames are freed only once no page table maps them, though the
   address space itself may outlive the process, held by a reap or by
-  `run`; `framecheck` caught the order), the fds close next, then the parent is told
-  (a zombie, SIGCHLD, its wait4 waiters woken), so a parent woken by a
-  child's end reads EOF from a pipe only the child held.
+  `run`; `framecheck` caught the order), the fds close next, then the
+  process leaves the table and becomes its parent's zombie in one step
+  under the table's lock (`become_zombie`: never neither, so a kill or
+  a pidfd always finds it until it is reaped), then the parent is told
+  (SIGCHLD, its wait4 waiters woken), so a parent woken by a child's end
+  reads EOF from a pipe only the child held.
 - **Memory** (`lx::mm`; mmap_test, dyn_test): mmap (the hint if free,
   else top-down below `MMAP_TOP`; MAP_FIXED replaces, MAP_FIXED_NOREPLACE
   gives EEXIST; MAP_DENYWRITE, MAP_STACK and the other hints ignored, as
@@ -11761,7 +12093,37 @@ The running parts (milestone 1; `lxrun=`):
   devices are; glibc's ld.so reads it for `$ORIGIN`): the path of the
   program the process runs (`LxProcess::exe`, its node: execve sets it,
   to the interpreter for a `#!` script; a fork's child has its
-  parent's); other /proc paths are ENOENT (ledgered for readlink).
+  parent's).
+- **/proc, its first part** (`lx::procfs`; procfs_test, `lx_procfs`): a
+  volume the kernel keeps in the shared file system, mounted over
+  `/proc` for processes rooted at the shared tree as `/run` is
+  (`lx::file`'s mounts), so open, stat, readlink, getdents and O_PATH
+  work on it as on any directory: `sys/kernel/overflowuid` and
+  `overflowgid` (65534), `sys/user/max_user_namespaces` (0), and per
+  process (made at its first image, removed at its end) `<pid>/ns/<kind>`
+  links named as Linux's initial namespaces (`user:[4026531837]`: one set
+  for all), `exe` (set at each execve) and `auxv` (the pairs up to
+  AT_NULL), `mounts` (the shared tree as a tmpfs at `/`, `/proc` and
+  `/run`: GIO's mount monitor reads it; `/proc/mounts` is a link to
+  `self/mounts` as on Linux); `self` is the caller's pid in the walk and
+  for readlink.
+  readlink of `/proc/<pid>/fd/<n>` (and `self`'s) answers from that
+  process's descriptor table (`file::fd_link`): a file's path as it sees
+  it, `pipe:[N]`, `socket:[N]`, `anon_inode:[eventfd]` and the like, a
+  device's path; ENOENT for a descriptor not open. GLib names an open
+  file so before handing it to a glycin loader (GTK's icons). Limits:
+  the `fd` directories are not listed or opened (readlink only), and
+  N is fstat's inode number, 1 for every pipe and socket. What changes
+  as a process runs (maps, stat, status, the fd directory) is not there
+  yet (files generated when opened, proc_test's, are the design to
+  make).
+- **Namespaces are refused** (`procfs::namespace_refusal`; procfs_test):
+  gala makes none. clone, clone3 and unshare asking for a user namespace
+  get ENOSPC (Linux's answer at max_user_namespaces 0); another without
+  CAP_SYS_ADMIN (any uid but 0) EPERM; uid 0's EINVAL, ledgered.
+  bubblewrap then fails as on such a Linux, and glycin (GTK 3's image
+  loader on Ubuntu 26.04) runs its loaders unsandboxed, warning so on
+  stderr as Linux's does.
 - **Process attributes** (`lx::prctl`; prctl_test, `lx_prctl`): prctl's
   PR_SET_NAME and PR_GET_NAME are the calling thread's name
   (`state::Comm` in `LxThread`, Linux's "comm": up to 15 bytes and a
@@ -11779,6 +12141,125 @@ The running parts (milestone 1; `lxrun=`):
   anonymous inode their pseudo file systems' magics, without blocks.
   fontconfig asks whether its cache may be mapped, libselinux whether
   /sys/fs/selinux is there, GLib a file's file system.
+- **Descriptor arguments are their low 32 bits** (`state::slot`;
+  fdbits_test): Linux takes descriptors as int or unsigned int, and the
+  x86-64 C ABI leaves an int's upper register half undefined, so the
+  descriptor table, dup2/dup3 and fcntl's F_DUPFD minimum look at the low
+  half only (a dirfd's AT_FDCWD is compared as an int the same way).
+- **ioctls every descriptor answers** (`dispatch::generic_ioctl`;
+  fdioctl_test): FIOCLEX and FIONCLEX (the descriptor's close-on-exec),
+  FIONBIO (O_NONBLOCK on the open file description: a dup sees it), before
+  any object's own requests; a pipe's FIONREAD (the bytes it holds).
+- **Capabilities** (`lx::caps`; caps_test): capget and capset with
+  Linux's version handshake (v1 one structure, v2 and v3 two; an unknown
+  version answered with v3 written back and EINVAL, 0 without data). The
+  sets follow the uid (uid 0 all up to CAP_LAST_CAP 40, others none: no
+  file capabilities); capset accepts the sets held, refuses raising them
+  and other processes (EPERM), and a root process dropping some is not
+  kept (ledgered).
+- **timerfd** (`lx::timerfd`, `Object::TimerFd`; timerfd_test): the next
+  expiry on its clock (real-time, or monotonic for CLOCK_MONOTONIC and
+  CLOCK_BOOTTIME), an interval and the expirations not read, counted from
+  the clock whenever looked at (`Setting::settle`: none lost, none early);
+  a read gives them (blocking until the next, EAGAIN with O_NONBLOCK),
+  poll and epoll see it readable while some wait; a kernel thread
+  (`timerfd`) sleeps until the earliest armed expiry and wakes the waiters
+  then. The alarm clocks need uid 0 (CAP_WAKE_ALARM); CANCEL_ON_SET is
+  taken and not acted on (ledgered).
+- **prctl's no-new-privileges and auxiliary vector** (`lx::prctl`;
+  prctl_test): PR_SET_NO_NEW_PRIVS (only 1) and PR_GET_NO_NEW_PRIVS, a flag
+  kept by children and across execve; PR_GET_AUXV, the image's auxiliary
+  vector saved at exec (`LxProcess::auxv`, from the initial stack) as
+  Linux's 448-byte saved_auxv (zeros after AT_NULL), copied as far as it
+  fits, that size returned; PR_SET_PDEATHSIG and PR_GET_PDEATHSIG, the
+  signal a process gets when its parent ends (sent by `state::ended` to
+  each child still running; cleared in a fork's child, kept across
+  execve: glycin's loaders die with the program that started them).
+- **pidfds and waitid** (`lx::pidfd`, `fork::waitid`; pidfd_test,
+  `lx_pidfd`): pidfd_open (EINVAL for pid 0 or flags but
+  PIDFD_NONBLOCK, ESRCH; always close-on-exec; `anon_inode:[pidfd]`) gives
+  an `Object::PidFd` holding the process's `Life` (an ended flag and a
+  wait queue, shared with the `LxProcess`: not the process, whose
+  descriptors would stay open); `state::ended` ends it before the parent
+  hears, so poll and epoll see the pidfd readable once its process has
+  ended. pidfd_send_signal is kill(2) of its process (flags: the thread,
+  its group or its process group, one at most; EBADF for what is not a
+  pidfd). waitid (P_ALL, P_PID, P_PIDFD; WEXITED with WNOHANG and
+  WNOWAIT) reads wait4's `Children::ended` and fills si_signo SIGCHLD,
+  si_code, si_pid, si_uid, si_status; WNOHANG with nothing ended writes
+  zeros; a nonblocking pidfd's wait is EAGAIN while it runs. A signal to
+  a zombie (ended, in a live process's `Children::ended`) is 0 and does
+  nothing, from kill or a pidfd, as Linux's; ESRCH once reaped
+  (`state::is_zombie`). Limits: stopped and continued children are not
+  told (ledgered), P_PGID waits for any child (ledgered), siginfo given
+  to pidfd_send_signal is unused (ledgered), no PIDFD_THREAD pidfds, no
+  pidfd_getfd.
+- **seccomp** (`lx::seccomp`; seccomp_test, `lx_seccomp`): strict mode
+  and filters per thread (`LxThread::seccomp`: a thread it makes and a
+  fork's child get it, execve keeps it), checked in `dispatch` before
+  each call of a process that has some (`LxProcess::seccomp_used`).
+  Filters are classic BPF on the call's `seccomp_data` (nr,
+  AUDIT_ARCH_X86_64, ip, args), checked before they are taken as Linux's
+  seccomp_check_filter and bpf_check_classic check them (EINVAL), each
+  run newest first, the lowest action winning (the newest of equals):
+  ALLOW, LOG; ERRNO (its data); TRAP (SIGSYS to the thread, SYS_SECCOMP
+  with the data, the call's address, number and arch; the call skipped,
+  rax its number; forced to the default end if blocked or ignored);
+  TRACE and USER_NOTIF answer ENOSYS (no tracer, no listener);
+  KILL_THREAD, KILL_PROCESS end with SIGSYS. Strict mode allows read,
+  write, exit and rt_sigreturn, SIGKILL otherwise. A filter needs
+  no_new_privs or uid 0 (EACCES). The probes: GET_ACTION_AVAIL,
+  GET_NOTIF_SIZES (80, 24, 64); prctl's PR_GET_SECCOMP and
+  PR_SET_SECCOMP. Limits: no listener fd (NEW_LISTENER: EINVAL,
+  ledgered); a read of scratch memory before a write is not refused.
+- **A process's name after execve** (`Core::current_name`,
+  `name_now`): the new program's file name (the path given: a script's,
+  as `comm`), in the log lines (its exit, a missing call, the thread
+  dump); the first image's name (`Core::name`, static) stays for the
+  scheduler's thread names. The task manager shows `comm`.
+- **inotify** (`lx::inotify`; inotify_test, `lx_inotify`): instances
+  (`Object::Inotify`; inotify_init, inotify_init1 with IN_NONBLOCK and
+  IN_CLOEXEC) hold watches on nodes (add_watch resolves the path as stat
+  does: the same wd again for a node watched, its mask replaced or added
+  to with IN_MASK_ADD; IN_ONLYDIR, IN_MASK_CREATE; rm_watch queues
+  IN_IGNORED). Events come from the file system's change journal, NT's
+  directory notifications' (`nt::notify::collect` gives each batch to
+  `inotify::collect` with the file system held, and the instances are
+  woken once it is released): a watched directory's entries made,
+  removed, written or truncated and renamed (IN_CREATE, IN_DELETE,
+  IN_MODIFY, IN_MOVED_FROM and IN_MOVED_TO with one cookie; IN_ISDIR), a
+  watched file written (IN_MODIFY). Queued as `struct inotify_event`, the
+  name NUL-padded to a multiple of 16; an event like the last unread one
+  is not queued again; read gives whole events (EINVAL if the first does
+  not fit), FIONREAD the bytes queued, poll and epoll POLLIN while some
+  are. Limits: no IN_ACCESS, IN_OPEN, IN_CLOSE_*, IN_ATTRIB, IN_*_SELF
+  (the journal has no such changes; asked for: ledgered), no
+  IN_Q_OVERFLOW (the queue stops at a bound, ledgered).
+- **sysinfo and sched_getaffinity** (`lx::sysinfo`; sysinfo_test,
+  `lx_sysinfo`): sysinfo counts in bytes (`mem_unit` 1): RAM is the frame
+  allocator's managed frames and free ones (NT's NumberOfPhysicalPages),
+  no swap, shared, buffer or high memory, `procs` the running processes'
+  threads, the uptime the monotonic clock's rounded up to a second; the
+  load averages are 0 (gala keeps none). sched_getaffinity copies the
+  thread's scheduler mask (NT's ThreadAffinityMask; one long, at most 64
+  CPUs) after Linux's size checks (EINVAL below the CPUs or not whole
+  longs), ESRCH for no such thread. glibc's `_SC_PHYS_PAGES` is
+  sysinfo's (GIMP sizes its undo memory from it), GLib's processor count
+  the mask's (GEGL's threads).
+- **System V shared memory** (`lx::shm`; shm_test, `lx_shm`): a segment
+  is a pagefile-backed section held by a registry (ids a slot below
+  SHMMNI plus 32768 times a sequence number, keys, Linux's ipcperms);
+  shmat maps a view of that section (`mm::attach`), so attachments in
+  every process and a fork's child share its pages; `shm_nattch` is the
+  number of views of it in the running processes (Linux's VMAs). IPC_RMID
+  marks it SHM_DEST with the key IPC_PRIVATE; it goes once nothing maps
+  it (`shm::collect` after a detach, an exit or an execve; a shmat
+  between its look-up and its mapping keeps it), and until then shmat by
+  id still works, which GIMP relies on (it removes its tile segment at
+  once and its plug-ins attach it). IPC_STAT, IPC_SET and IPC_RMID;
+  SHM_REMAP, SHM_LOCK and the INFO commands are EINVAL and ledgered.
+  `lx shm` events (`events=ipc`) and `lx: shm segment` lines in the
+  state dump.
 - **Clocks and timers** (`lx::time`, `lx::timer`; clock_test is the
   spec): clock_gettime/clock_getres (REALTIME and its variants from the
   system time, MONOTONIC, _RAW, _COARSE, BOOTTIME from the monotonic
@@ -11873,7 +12354,11 @@ The running parts (milestone 1; `lxrun=`):
   the description's last close removes it from every set
   (`Fd::watchers`, `Epoll::forget`); closing the epoll fd empties its
   set. Ready entries come out in the order they were added; struct
-  epoll_event is the packed 12 bytes.
+  epoll_event is the packed 12 bytes. A waiter waits on the set's own
+  queue (`Epoll::waiters`) beside its objects'; ADD and MOD wake it, so a
+  wait begun before them (another thread's) looks again and watches the
+  new entry (epoll_test's "the set changed while a thread waits": glycin
+  arms its loader connection from one thread while another waits).
 - **eventfd** (`lx::eventfd`; eventfd_test, `lx_eventfd`): eventfd and
   eventfd2 (EFD_SEMAPHORE, EFD_NONBLOCK, EFD_CLOEXEC; another flag
   EINVAL), a 64-bit counter as `Object::EventFd`: a read (8 bytes at
@@ -12027,8 +12512,16 @@ The running parts (milestone 1; `lxrun=`):
     comes back at once if no handler runs: `Signals::suspend`,
     `frame_mask`, `restore_saved_mask`); SA_RESTART also restarts readv,
     pread64/pwrite64, accept/accept4, recvfrom and sendto.
+  - sigaltstack (altstack_test, `lx_altstack`): each thread's alternate
+    stack (`LxThread::altstack`; disabled at first and after execve, a
+    fork's child's its creator's), set with Linux's checks (EPERM while
+    on it, EINVAL for other flags, ENOMEM below MINSIGSTKSZ). An
+    SA_ONSTACK handler gets its frame at its top unless the thread is on
+    it already; the frame's uc_stack records it (SS_ONSTACK when the
+    interrupted code was on it), SS_AUTODISARM disarms it while the
+    handler runs, rt_sigreturn sets it back from uc_stack. Rust's runtime
+    sets one up in every thread (Ubuntu 26.04's glycin loaders, uutils).
   - Not yet: rt_sigqueueinfo,
-    sigaltstack (SA_ONSTACK is ledgered and the current stack used),
     CPU faults as signals (an exception still ends the process with its
     NT status, read as SIGSEGV etc.), delivery to a thread running user
     code (only at a system call's return), stop/continue, UC_FP_XSTATE's
@@ -12115,7 +12608,7 @@ The running parts (milestone 1; `lxrun=`):
   address, bitset, thread), so a hang shows who waits where. Ledger:
   `linux clone flags missing` (and vfork's CLONE_VM, unsupported thread
   flag sets), `linux signal action missing`
-  (Stop), `linux signal option missing` (SA_ONSTACK), `linux option
+  (Stop), `linux option
   missing` (wait4's and kill's process groups, open flags, an unlink or
   rename an NT program's open refuses, names the file system cannot
   hold, socket families and types, socket options, CPU-time clocks and
@@ -12124,7 +12617,7 @@ The running parts (milestone 1; `lxrun=`):
   mremap's MREMAP_DONTUNMAP and old length 0, madvise advice not taken,
   a resource limit set but not enforced, another process's limits, the
   shrinking of a mapped file,
-  /proc paths other than /proc/self/exe, no random generator), `linux
+  a namespace asked for by uid 0, no random generator), `linux
   syscall stub` (ioctl, wait4's rusage); a page mremap could not move
   logs why (and `out of memory`).
 - **Invariants**: a Linux process is never handed over (carry refuses "a
@@ -12203,7 +12696,14 @@ fields at the `repr(C)` offsets, host-tested), since `lx` has no
   of a new pty start with: iflag ICRNL|IXON, oflag OPOST|ONLCR, cflag
   B38400|CS8|CREAD, lflag ISIG|ICANON|ECHO|ECHOE|ECHOK|ECHOCTL|ECHOKE|
   IEXTEN; INTR ^C, QUIT ^\, ERASE DEL, KILL ^U, EOF ^D, VMIN 1, VTIME
-  0); `make_raw` (cfmakeraw); `Winsize`; the tty ioctl numbers.
+  0); `make_raw` (cfmakeraw); `Winsize`; the tty ioctl numbers. termios2
+  (TCGETS2, TCSETS2, TCSETSW2, TCSETSF2: the termios then c_ispeed and
+  c_ospeed, 44 bytes; `speeds`, `encode_speeds`): glibc 2.43 (Ubuntu
+  26.04) asks with it in isatty and tcgetattr, so a terminal without it
+  is no terminal to dash or xterm. A BOTHER speed with a baud code is
+  stored as that code, as Linux's tty_termios_encode_baud_rate does;
+  one without is B38400's (ledgered). A terminal request ('T') on what
+  is not a terminal is ENOTTY, not ledgered.
 - **`lx_abi::layout`**: `Stat` (144), `Statx` (256), `Dirent64Head` (19,
   packed, the name at 19; `dirent64_reclen` = align8(19 + len + 1)),
   `EpollEvent` (packed, 12: data at 4), `Timespec`, `Timeval`, `Pollfd`
@@ -12405,7 +12905,7 @@ Offered globals: `wl_compositor` 6, `wl_shm` 2, `xdg_wm_base` 6,
 | a client connection | a `wayland::Connection`: the accepted socket, the connector's pid (SO_PEERCRED), its `Client` (object table, input buffer and descriptor queue, output) |
 | `wl_display` | `sync` answers `wl_callback.done` (a serial) at once; `get_registry` lists the globals; every destroyed client object, and every callback once done, is answered with `delete_id` |
 | `wl_compositor`, `wl_surface` | a surface holds its pending state (attach, damage and damage_buffer as a band of rows, frame callbacks) until `commit`; it is a window only once a role gives it one. Regions, buffer scale and transform other than 1 and normal and `offset` are accepted and not used yet (ledgered) |
-| `xdg_wm_base`, `xdg_surface`, `xdg_toplevel` | a `winstate` window owned by the client's process (`Desktop::create`, shown at once, cascaded from (64, 48)): the first commit without a buffer is answered with `configure_bounds` (the screen's size, version 4), `wm_capabilities` (none yet, version 5), `xdg_toplevel.configure` 0x0 and `xdg_surface.configure`; once acked, a commit with a buffer maps the window (titled by `set_title`, retitled when it changes), a null buffer unmaps it and the next commit configures it again. The frame's close button (and `gala close`: `Action::Close`, a WM_SYSCOMMAND SC_CLOSE in the window's input) sends `xdg_toplevel.close`; the client decides. The desktop's sizing is a configure ("Configure from the desktop" below); `set_maximized`, `unset_maximized` and `set_minimized` are the desktop's actions on the window (`Action::Maximize`, `Restore`, `Minimize`, as its caption buttons), whose answer comes back as input; before mapping they are ignored (ledgered). The app id is kept; the window geometry is what a frameless window shows ("Frameless windows") and what its popups are placed against; move, resize, menus, min and max sizes and fullscreen are accepted and not acted on yet (ledgered). Pings are not sent: the desktop marks no window as not responding yet (a hung user32 window is not ghosted either); `xdg_wm_base.ping` on a timer comes with that, and pongs are accepted |
+| `xdg_wm_base`, `xdg_surface`, `xdg_toplevel` | a `winstate` window owned by the client's process (`Desktop::create`, shown at once, cascaded from (64, 48)): the first commit without a buffer is answered with `configure_bounds` (the screen's size, version 4), `wm_capabilities` (none yet, version 5), `xdg_toplevel.configure` 0x0 and `xdg_surface.configure`; once acked, a commit with a buffer maps the window (titled by `set_title`, retitled when it changes), a null buffer unmaps it and the next commit configures it again. The frame's close button (and `gala close`: `Action::Close`, a WM_SYSCOMMAND SC_CLOSE in the window's input) sends `xdg_toplevel.close`; the client decides. The desktop's sizing is a configure ("Configure from the desktop" below); `set_maximized`, `unset_maximized` and `set_minimized` are the desktop's actions on the window (`Action::Maximize`, `Restore`, `Minimize`, as its caption buttons), whose answer comes back as input; `set_maximized` before the window exists makes the configures maximized at the work area's size from then on and the desktop maximizes the window once it is made (`maximize_when_mapped`; `unset_maximized` takes it back; xdg-shell lets a client ask before its first commit, Inkscape does: wl_maximize_test, `lx_wl_maximize`), `set_minimized` then is ignored (ledgered). The app id is kept; the window geometry is what a frameless window shows ("Frameless windows") and what its popups are placed against; move, resize, menus, min and max sizes and fullscreen are accepted and not acted on yet (ledgered). Pings are not sent: the desktop marks no window as not responding yet (a hung user32 window is not ghosted either); `xdg_wm_base.ping` on a timer comes with that, and pongs are accepted |
 | `zxdg_decoration_manager_v1`, `zxdg_toplevel_decoration_v1` | the decoration mode, sent with each configure: server-side (shasha's frame) unless the client asked for client-side. A toplevel without a decoration object is client-side: "if compositor and client do not negotiate the use of a server-side decoration using this protocol, clients continue to self-decorate as they see fit" (the protocol's description). GTK 3 never binds the manager and draws its own title bar (gtk_test), GTK 4 negotiates; a client that draws no frame (weston-simple-shm, wl_test) is shown without one. Client-side is a frameless window (`STYLE_FRAMELESS`: all client area, its window geometry's size ("Frameless windows" below), on the taskbar and activated as framed ones). The mode is fixed when the window is made: `set_mode` on a mapped toplevel is answered with a configure carrying the window's mode (the protocol lets the compositor choose), the next mapping follows the new one. Its errors: `already_constructed`, `unconfigured_buffer` (on the manager), `orphaned` (a toplevel destroyed before its decoration), `invalid_mode` |
 | `wl_seat`, `wl_pointer`, `wl_keyboard` | the desktop's input for the client's windows ("Input" below): capabilities pointer and keyboard, name `seat0`; `get_touch` is `missing_capability`. A keyboard gets the keymap (xkb_v1, a sealed read-only file passed as SCM_RIGHTS, its size counting the NUL) and `repeat_info` 30/s after 500 ms (version 4; Windows' defaults); a pointer or keyboard made while the client has a focus gets its enter at once. `set_cursor` is accepted and not used (the desktop draws its pointer; a surface with another role is the `role` error) |
 | `xdg_positioner`, `xdg_popup` | a popup window (`STYLE_POPUP`: frameless, above the framed windows, never active, not on the taskbar, as user32's menus are) at the place the positioner gives against its parent's window geometry and the work area; a grab takes the keyboard focus and the desktop's popup grab, which a press outside the client's windows ends ("Popups" below) |
@@ -12878,7 +13378,11 @@ real Linux does not print, or a ledger line):
   at assembly as dpkg and its triggers would: the MIME database's
   `mime.cache` (`update-mime-database` from shared-mime-info's XML;
   gdk-pixbuf picks a loader by MIME type through GIO, so without it GTK
-  aborts on its own PNG icons). The user database is not the root's:
+  aborts on its own PNG icons) and the GSettings schemas'
+  `gschemas.compiled` (`glib-compile-schemas` from the root's schema
+  XML: GTK's; GIMP stops without it). A directory a program looks for
+  with nothing used beneath it is a `<dir>/` entry (each GIMP plug-in
+  checks for `/usr/share/locale`). The user database is not the root's:
   the kernel makes `/etc/passwd` and `/etc/group` from gala's accounts
   ("The lx module", Linux identity); the user's home is their profile
   (`/Users/gala`), where fontconfig keeps its cache.
@@ -13659,9 +14163,7 @@ The first GPU driver (G1). Code: `kernel/src/arch/virtio.rs`
 (`ModernDevice`), `kernel/src/display/` (`mod.rs`, `pci.rs`,
 `virtio_gpu/{mod,proto,tests}.rs`).
 
-- **Transport** (`arch::virtio::ModernDevice`): virtio-gpu has no legacy
-  interface (virtio-blk and -net use the legacy one), so this is the
-  modern one: the PCI capability list (`pci::Function::capabilities`),
+- **Transport** (`arch::virtio::ModernDevice`, every virtio driver's): the PCI capability list (`pci::Function::capabilities`),
   vendor capabilities for the common, notify and device-configuration
   structures (`find_layout`: the first of each), memory BARs (32/64-bit)
   mapped uncached once per device (`paging::map_mmio`); reset,
@@ -14610,7 +15112,7 @@ New code follows them; old code is brought in line (ROADMAP R1).
    and resubmit what was in flight.
    - virtio-blk: a request whose device gave up (FAILED, NEEDS_RESET)
      or lost DRIVER_OK (reset under the driver) re-initializes it in
-     place (`LegacyDevice::reinit`: a second device value would reset it
+     place (`ModernDevice::reinit`: a second device value would reset it
      again when dropped) and posts the request again, up to 3 times
      (scenario `disk_reset`).
    - virtio-net: before receiving or sending it checks the device and
@@ -14642,9 +15144,50 @@ New code follows them; old code is brought in line (ROADMAP R1).
   - a lock's class is its name (`IrqMutex::named("thread.sched_id",
     ..)`, for locks over plain types: a number, an Option of an id) or
     the type it protects;
+  - a class is identified by the address of that name, and the name's
+    first 96 bytes are copied into the class table (512 classes), so
+    every class a message can mention has its name. A `&'static str`
+    fits in no atomic and rebuilding one from a pointer and a length
+    needs `unsafe`, which `sync.rs` may not use; keeping the names in a
+    side table instead gave them a capacity and a failure mode, and
+    classes past it printed `?`;
   - each CPU (each host thread in tests and gala-um) keeps the classes
     it holds (16 slots; interrupts are off while an IrqMutex is held, so
-    the CPU does not change);
+    the CPU does not change), and for each slot the thread that took it.
+    The scheduler names that thread on every switch
+    (`lockdep::running`), because lockdep cannot ask it: the scheduler's
+    own state is behind one of these locks;
+  - **the invariant**: an `IrqMutex` is released by the thread that took
+    it, on the same CPU, before that thread waits, yields or ends. It is
+    checked where it is broken: `sched::schedule` panics if the thread
+    giving up its CPU still holds a lock, naming the lock, the thread
+    that took it and the thread leaving. Without that check the break
+    is only noticed later, because the held slots belong to the CPU: a
+    lock left behind is found by whichever thread runs there next, and
+    the panic lands at that thread's first release that turns interrupts
+    back on, in a thread that is not the culprit. That message (locks
+    released out of order, which is also a bug of its own) names each
+    lock's holder for the same reason;
+  - **the same invariant at the user-memory copies**
+    (`nt::process::with_faults`, the one path every copy of a program's
+    memory takes): the copy makes a page that is not there, which reads
+    the file or the disk and waits, so a lock held over a copy is a lock
+    held across a wait. It is checked at every copy and not only at the
+    copies that do wait, because whether a page is there depends on what
+    the machine has been doing: a lock held over the state dump's reads
+    is a panic in a long run under memory pressure and nothing at all in
+    a test that has memory to spare. The message says which lock and
+    which thread (`lockdep: thread N copies user memory while holding
+    X`). A path that is not ready for it says so where it is, with a
+    `sync::lockdep::UserMemoryUnchecked` guard that turns the check off
+    for this CPU while it lives (`nt::afd`'s three, the only ones:
+    ROADMAP "Stopgaps"); the invariant still holds for such a path, a
+    copy that does wait panics as before. The check looks at the copying
+    thread's own locks: a slot whose holder is another thread is a lock
+    carried across a switch, which the two checks above report where it
+    happens, and one has been seen at a copy all the same (ROADMAP
+    "Defects known": a lock marked held by a thread that is not
+    running);
   - taking B while holding A records "A before B" in an open-addressed
     table of 8192 edges; if "B before A" was seen, it panics with both
     class names before the deadlock could happen;

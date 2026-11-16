@@ -358,23 +358,34 @@ pub fn futex(
             }
             let from = key(call, addr, private)?;
             let to = key(call, addr2, private)?;
-            if cmd == CMP_REQUEUE {
-                // Read once outside the lock: a page not there yet is
-                // brought in here, not with the lock held.
-                read_word(call, addr)?;
-            }
-            let mut table = TABLE.lock();
-            if cmd == CMP_REQUEUE {
-                // Compared under the table's lock: a waiter queued
-                // meanwhile reads the word after queueing (`wait_on`), so
-                // for it the check and the move are one step.
-                if read_word(call, addr)? != val3 as u32 {
-                    return Err(EAGAIN);
+            // The word is compared under the table's lock -- a waiter
+            // queued meanwhile reads it after queueing (`wait_on`), so
+            // for it the check and the move are one step -- and no lock
+            // may be held while the kernel waits for a page. So the page
+            // is brought in with no lock held, the comparison then reads
+            // only what is there, and a page dropped in between sends us
+            // round again (Linux reads the word under
+            // `pagefault_disable` and retries the same way).
+            for _ in 0..16 {
+                if cmd == CMP_REQUEUE {
+                    read_word(call, addr)?;
                 }
+                let mut table = TABLE.lock();
+                if cmd == CMP_REQUEUE {
+                    let mut b = [0u8; 4];
+                    let Some(()) = call.process.read_if_there(addr, &mut b) else { continue };
+                    if u32::from_le_bytes(b) != val3 as u32 {
+                        return Err(EAGAIN);
+                    }
+                }
+                let (w, m) =
+                    table.requeue(from, n_wake as usize, n_requeue as usize, to, platform::wake);
+                return Ok((w + m) as u64);
             }
-            let (w, m) =
-                table.requeue(from, n_wake as usize, n_requeue as usize, to, platform::wake);
-            Ok((w + m) as u64)
+            // Brought in and gone again sixteen times over: the mapping,
+            // not the timing.
+            ledger::record("futex", "requeue word kept going away", addr);
+            Err(EFAULT)
         }
         _ => {
             ledger::record("futex", "linux option missing", cmd);

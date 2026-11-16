@@ -9,6 +9,9 @@
 //! Each AP then enters the function given to `start_aps` (the scheduler's
 //! per-CPU loop).
 
+/// What a processor's hardware id is (`boot::MpInfo::hw_id`): the local APIC id.
+pub const HW_ID_NAME: &str = "APIC id";
+
 use alloc::boxed::Box;
 use core::arch::global_asm;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -564,7 +567,9 @@ pub fn start_aps(
     let mut started = 1;
     let mut by_bootloader = [0u32; MAX_CPUS];
     let mut bootloader_count = 0;
-    for info in processors.iter().filter(|p| p.lapic_id != processors.bsp_lapic_id) {
+    // An APIC id fits in 32 bits (x2APIC's); `bsp_id` was one.
+    let bsp_lapic_id = processors.bsp_id as u32;
+    for info in processors.iter().filter(|p| p.lapic_id != bsp_lapic_id) {
         if started >= MAX_CPUS as u32 || test != SmpTest::None {
             break;
         }
@@ -598,10 +603,11 @@ pub fn start_aps(
         return Ok(report);
     };
     report.firmware = Some(firmware.len());
-    let bsp = processors.bsp_lapic_id;
+    let bsp = bsp_lapic_id;
     let by_bootloader = &by_bootloader[..bootloader_count];
     let mut missed =
-        firmware.ids().iter().copied().filter(|id| *id != bsp && !by_bootloader.contains(id));
+        // APIC ids fit 32 bits (x2APIC's): the firmware's hardware ids were.
+        firmware.ids().iter().map(|&id| id as u32).filter(|id| *id != bsp && !by_bootloader.contains(id));
     let Some(first) = missed.next() else {
         report.online = online_count();
         return Ok(report);

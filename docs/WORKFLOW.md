@@ -72,7 +72,7 @@ cargo xtask export-tests    # refresh user/bin (CI compares)
   request once its checks are green, or by a direct push after the local
   gate (`cargo xtask test`) passed; main's ruleset allows both for now.
   Its jobs:
-  - `linux` (Ubuntu 24.04): the format and clippy lines, `cargo xtask
+  - `linux` (Ubuntu 26.04): the format and clippy lines, `cargo xtask
     lx-expect && git diff --exit-code user/lx`, `cargo xtask test
     --no-boot` (everything but the boots) and `cargo xtask export-tests &&
     git diff --exit-code user/bin` (checked-in binaries and transcripts
@@ -152,6 +152,18 @@ cargo xtask export-tests    # refresh user/bin (CI compares)
   case unimplemented, call `nt::ledger::record(service, what, detail)`
   there (in DLLs: `unsupported(b"dll!Name(case)", detail)`), so real
   programs that need it show up in `target/report/ledger.md`.
+- **What gala has, it reports**: a program asks what the system can do
+  before it uses it, and takes the answer. A feature that works but is
+  not in the answer is a feature no program reaches: gala's volume kept
+  per-file security descriptors, hard links, reparse points and POSIX
+  unlink and rename while FILE_FS_ATTRIBUTE_INFORMATION left all four
+  out, so a program that asks -- Office's installer asks before it
+  stages a file -- could not use any of them (`file::VOLUME_ATTRIBUTES`,
+  `user/volume_test`). When you add a feature, add it to what reports
+  the system's features (the volume's flags, a device's
+  characteristics, GetVersionEx, IsProcessorFeaturePresent, an
+  interface's capability bits), and nowhere claim one that is not
+  there.
 - **Constants come from headers**: values typed in by hand go wrong
   silently (a wrong STATUS_OBJECT_NAME_EXISTS once matched a test that
   agreed with it). With mingw-w64 installed (`apt install
@@ -175,10 +187,21 @@ cargo xtask export-tests    # refresh user/bin (CI compares)
   `cpu::cycles`, `arch::timer`, ...); what is Windows' or Linux's ABI on
   x86-64 goes in `nt/abi/x64/` or `lx/machine/x86_64.rs`, with a stub in
   their aarch64 counterpart. The aarch64 check enforces it: `cargo clippy
-  -p kernel --target aarch64-unknown-none -- -D warnings` (CI; `rustup
-  target add aarch64-unknown-none` if the toolchain lacks it). A new
+  -p kernel --target aarch64-unknown-none-softfloat -- -D warnings` (CI; `rustup
+  target add aarch64-unknown-none-softfloat` if the toolchain lacks it). A new
   arch function used outside `arch` needs its aarch64 stub (it may end
   in `unported`).
+- **gala's DLLs build for ARM64** (`aarch64-pc-windows-msvc`, CI's
+  Clippy step: a clippy run and a build, since Clippy does not assemble
+  inline assembly; wow64 excepted). Each DLL's architecture-specific
+  code is in its per-architecture module (`x64.rs`, `x86.rs`,
+  `aarch64.rs`: kernel32, msvcrt, ntdll) or behind a `cfg` with an ARM64
+  branch: the TEB through x18 (`[x18 + 0x68]` is LastErrorValue, as
+  `gs:[0x68]` on x64), 64-bit layouts under `target_pointer_width =
+  "64"` rather than `target_arch = "x86_64"`, `_fltused` and ntdll's
+  C helpers under `not(target_arch = "x86")`. Where ARM64 needs the
+  port (its CONTEXT services, unwinding, FPCR), the stub records the gap
+  in the ledger and ends the process (`unported`).
 - **shasha features: the `gala` command first.** Everything the
   graphical shell does can be done from a terminal. Make a new feature a
   named action (`nt::desktop::Action`, or a new GalaDesktopAction
@@ -410,6 +433,7 @@ xtask that change how a scenario boots:
 | `UEFI_SCENARIOS` | boot by UEFI (the rest by BIOS) |
 | `NET_SCENARIOS` | a network card and a host-side client ("Network tests") |
 | `HOST_PAGE_SCENARIOS` | a network card whose 10.0.2.100:80 is a page served from the host (`xtask serve-page`; "Network tests") |
+| `CARD_SCENARIOS` | a network card and nothing connecting to it (the driver's set-up alone: `arm_boot`) |
 | `DISK_SCENARIOS` | a virtio-blk disk, sparse, with the most it may take on the host ("Disk tests") |
 | `GPU_SCENARIOS` | a virtio-gpu screen ("GPU tests") |
 | `SCREEN_SCENARIOS` | pixel checks through the QEMU monitor ("Screenshots") |
@@ -439,7 +463,17 @@ xtask that change how a scenario boots:
   the host's even when starved (ARCHITECTURE "What a guest's clock
   follows"). Every log has `xtask: vm time: <run> run of <wall> wall
   (<w> waiting for a host CPU)`, the triage repeats it, and the state
-  dump's wait after a timeout counts run time too.
+  dump's wait after a timeout counts run time too. What run time does
+  not discount is waiting for host storage: a vCPU blocked in a disk
+  read is running, not starved, so on slow storage a run-time limit
+  behaves like a wall limit and the I/O-heavy scenarios are the ones
+  that feel it. Measured on a laptop whose guest disk is ext4 inside
+  WSL's VHDX behind a Docker bind mount, where three of them need
+  several times the 120 s and pass when given it: volume_test 445 s in
+  the kernel, pagefile_fail 298 s, pagefile_test 282 s. Raising
+  `XTASK_TIMEOUT` is how to tell a slow scenario from a stuck one
+  before believing either -- a timeout alone does not say which, and a
+  scenario that is only slow says nothing about the code.
 - **A scenario that runs many processes** (a database, a runtime) can
   pass alone and time out under the full suite (2-3x slower); its client
   then reports a dropped connection, not a timeout. Look for "timed out
@@ -469,8 +503,8 @@ a summary go to `target/report/timing.txt`; outcomes to
 
 ### Network tests
 
-VMs have no network card unless the scenario is in `NET_SCENARIOS`
-or `HOST_PAGE_SCENARIOS` (`-nic none` otherwise).
+VMs have no network card unless the scenario is in `NET_SCENARIOS`,
+`HOST_PAGE_SCENARIOS` or `CARD_SCENARIOS` (`-nic none` otherwise).
 
 - A host-page scenario's guest fetches `http://10.0.2.100/`: QEMU runs
   `xtask serve-page` (the running xtask's own binary) per connection,
@@ -517,7 +551,7 @@ what it may take on the host, what xtask writes into the fresh raw
 image, what the image must hold afterwards).
 
 - The image is `target/.../<scenario>.disk.img` next to the ISO,
-  attached as a legacy virtio-blk device; such scenarios boot alone and
+  attached as a virtio-blk device; such scenarios boot alone and
   not in gala-um.
 - Raw disk access needs an administrator, so their programs run
   `as=system`.
@@ -805,6 +839,11 @@ XTASK_HOTSWAP_WHY=1 cargo xtask hotswap-diff ...   # why each function counts as
   only be patched: take the snapshot before the program that loads the
   DLL starts (an Office fix in a DLL integrator.exe loads: before
   `process integrator.exe (pid`), or keep the change one a patch takes.
+  Some DLLs no Office snapshot can take: setup.exe maps msi.dll as it
+  starts, so every later snapshot has it mapped, and an export the
+  change adds would not be visible to a resolver even if the patch took
+  it ("What they cannot cover"), which is what a delay load by ordinal
+  resolves through -- an msi.dll export goes from boot.
   With a list, a changed DLL not in it is replaced whole (not patched):
   the flag alone patches every changed DLL. A 4-byte function cannot take the jump
   (refused: make the old build's function longer, or swap its callers).
@@ -881,9 +920,8 @@ XTASK_HOTSWAP_WHY=1 cargo xtask hotswap-diff ...   # why each function counts as
 A scenario in `GPU_SCENARIOS` boots with `-vga none -device
 virtio-gpu-pci,xres=1280,yres=800,edid=on` (UEFI) and its command line
 says `display=virtio`; QEMU's `screendump` then shows the virtio-gpu
-scanout, so the usual `SCREEN_SCENARIOS` checks work. The device is
-modern-only (no `disable-legacy=off` as for virtio-blk/net): its driver
-uses `arch::virtio::ModernDevice`. With such a display the boot splash
+scanout, so the usual `SCREEN_SCENARIOS` checks work. Its driver uses
+`arch::virtio::ModernDevice`, as the disk's and the network's do. With such a display the boot splash
 is not visible (the firmware's framebuffer is no longer shown): read the
 serial log. The kernel flag `gputrace` logs every command; `events=display`
 the modes, resets and errors.
@@ -937,14 +975,80 @@ Vulkan-Headers) Vulkan on lavapipe through the Khronos loader (PREBUILT
   instructions the Intel way whatever vendor the guest's CPUID names, so
   behaviour that differs between Intel and AMD only shows under KVM on
   that vendor's host (CI's runners are AMD: an AMD-only bug is CI-only
-  here). The boot log's `cpu:` line names the vendor.
+  here). The boot log's `cpu:` line names the vendor, and its
+  `xtask: accelerator:` line says which accelerator ran it (QMP's
+  `query-kvm`, not what the host has): QEMU is given `-accel kvm -accel
+  tcg` and falls back to the second without failing, so a run that
+  should have been near-native and took ten times as long looks like
+  any other. A fallback on a host that has `/dev/kvm` is called out
+  with it, and QEMU's standard error says what it could not open.
 - **Docker**: `cargo xtask docker-test [xtask args]` builds
-  `docker/test.Dockerfile` (Ubuntu 24.04, QEMU, OVMF, xorriso, the
-  pinned toolchain) and runs `cargo xtask test` (or the given arguments)
-  inside it with the repository at /work and build output in
-  `target/docker`. It passes `/dev/kvm` through when the host has it and
-  forwards the `XTASK_*` variables and proxy settings. In a cloud
+  `docker/test.Dockerfile` (Ubuntu 26.04, OVMF, xorriso, the pinned
+  toolchain, QEMU's build dependencies, and the host-side programs the
+  tests run next to the VM: the ssh and sftp clients, psql, 7z, unzip,
+  msitools, musl-gcc, weston and Xvfb) and runs `cargo xtask test` (or
+  the given arguments) inside it with the repository at /work and build
+  output in `target/docker`. It passes `/dev/kvm` through when the host
+  has it, runs the container with `seccomp=unconfined` (the default
+  profile blocks clone3, which the Linux test programs call: thread_test
+  then waits for a thread that was never made and `docker-test
+  lx-expect` reads as a hung test), mounts `~/.cache/gala-qemu-docker` at
+  `/root/.cache/gala-qemu` (the container's `HOME` is /root) and builds
+  the pinned QEMU there first when it is missing, and forwards every
+  `XTASK_*` variable and the proxy settings. That cache is the
+  container's own and not the host's `~/.cache/gala-qemu`: QEMU links
+  against the glibc and libslirp of whatever built it, so sharing one
+  cache between a host newer than the image and the image gives the
+  container a QEMU it cannot load (`version GLIBC_2.42 not found`, 0.1s
+  into the run, which reads as a QEMU that crashed). The image carries
+  no QEMU package on purpose: the distribution's is 8.2.2, whose TCG
+  loses writes to a rewritten page ("QEMU" below), and a container that
+  has one runs the tests on it silently. The container is root over a tree
+  owned by the host's user, so the image lets git read it
+  (`safe.directory '*'`); without that every revision git is asked for
+  comes back empty, which read as a stale Limine checkout. In a cloud
   container without a running daemon, start one with `dockerd &`.
+- **A missing host tool is named with its package.** Several scenarios
+  run a program on the host beside the VM: a client for the server ones
+  (psql, ssh, sftp, scp), 7z or unzip to unpack a prebuilt archive,
+  msitools, musl-gcc, weston and Xvfb for the Linux-binary ones.
+  `std::io`'s message for a program that is not on PATH is "No such file
+  or directory", which reads as a missing input file, and the clients run
+  under `timeout`, which reports one as its own exit 127 -- so a host
+  without the package read as a failing test. Every program xtask spawns
+  now says which package has it (`host_package` in xtask is the one
+  table, and the list of what a host outside Docker needs): `the host has
+  no psql (apt install postgresql-client); `cargo xtask docker-test` runs
+  the tests in an image that carries it`. A client says it before the
+  boot instead of after it.
+- **The whole suite needs a machine as wide as its parallelism.**
+  `cargo xtask test` boots as many VMs at once as the host has logical
+  CPUs, each with 2 vCPUs, and the run-time limit is what keeps the host's
+  load off a test's result (`vmtime.rs`): run time is the wall time less
+  the run-queue wait of the most-starved *vCPU* thread. Two costs the
+  guest pays are outside that: the wait of the QEMU thread that serves its
+  disk (a vCPU blocked on an I/O completion is asleep, not on a run
+  queue), and the exit cost of nested virtualization. On a 6-core
+  (12-thread) i9-8950HK under WSL 2 the suite took 42m44s of wall time and
+  277m of CPU at a load average of 17 to 25, and three I/O-bound
+  scenarios timed out at 120s of run time with 35-43s of it already
+  subtracted while each of them passes alone on that machine:
+  `volume_test` (96.8s in the kernel alone), `pagefile_test` (67.3s) and
+  `pagefile_fail` (65.3s). There is no knob for fewer VMs at once
+  (`XTASK_SHARD` splits the set but each shard still fills the host), so
+  on a machine that size check such a scenario with `boot-test '<name>$'`,
+  which always boots it alone, and read a suite run's timeouts against
+  that.
+- **A scenario can want more CPU than a small host has.**
+  `winsock_async_test` runs 1000 non-blocking connects while four threads
+  keep every CPU busy, and on the i9 above it wants more than its 120s
+  even alone on an idle host: 120.9s of run time with 0.0s of it spent
+  waiting for a host CPU, the same from boot at any commit. That is the
+  scenario's work against two cores of a nested guest, not a regression
+  and not host load, and the limit stays as it is -- CI's runners finish
+  it well inside it, and raising it here would hide the real timeouts
+  above. Run it alone to see where it got and compare the run time, not
+  the verdict.
 - **Never run two xtask boot runs at once** (a full `cargo xtask test`
   and a single `boot-test`): they share ISO and serial-log files under
   `target/` and fail each other.
@@ -952,12 +1056,37 @@ Vulkan-Headers) Vulkan on lavapipe through the Khronos loader (PREBUILT
   built on first use (Limine, prebuilt programs) must also work when
   several threads need it at once.
 
+### The aarch64 kernel's scenarios
+
+ROADMAP AR's scenarios (`AARCH64_SCENARIOS` in xtask: `arm_boot`,
+`arm_fault_ud`, `arm_fault_pagefault`) run in `cargo xtask boot-test`
+like the others (`boot-test arm_`). xtask builds the kernel for
+`aarch64-unknown-none-softfloat` (`kernel/linker-aarch64.ld`) when one is
+selected, puts it in the scenario's ISO instead of x86-64's, and boots
+it with `qemu-system-aarch64 -machine virt` (`qemu_aarch64`): the pinned
+QEMU's own `edk2-aarch64-code.fd` (or Ubuntu's AAVMF, `qemu-efi-aarch64`,
+or `AAVMF_CODE`/`AAVMF_VARS`), the image on a virtio-scsi CD, semihosting
+on for the kernel's exit. Software emulation only (KVM would need an
+ARM64 host); about 8 s to the kernel, most of it the firmware.
+
+- The serial log and verdicts are as x86-64's. There is no event stream
+  and no firmware or phase log (no ISA debug consoles on `virt`).
+- A kernel address in a panic or exception line: `llvm-addr2line -f -C
+  -e target/aarch64-unknown-none-softfloat/debug/kernel <address>`.
+- Every kernel ELF (both architectures) is stripped for the image and
+  rid of its debug relocations by LLVM's objcopy: the toolchain's
+  `llvm-tools` component (rust-toolchain.toml), else `llvm-objcopy` on
+  PATH. Binutils' x86-64 build cannot read an aarch64 ELF.
+- While a phase is unported, its scenario ends the boot just before it
+  (`stop_after=<phase>`); porting the next phase moves that on.
+
 ### QEMU
 
 xtask runs a pinned QEMU (`QEMU_VERSION` in xtask, 11.1.3), built by
 `cargo xtask qemu` into `~/.cache/gala-qemu/<version>` (downloaded from
-download.qemu.org, SHA-256 checked, only `x86_64-softmmu` with user
-networking).
+download.qemu.org, SHA-256 checked, `x86_64-softmmu` and
+`aarch64-softmmu` with user networking; a prefix with only the first is
+built again, and CI's cache key names both).
 
 - `XTASK_QEMU=<path>` overrides it; without either, xtask uses
   `qemu-system-x86_64` from PATH and says so once. Every run prints which
@@ -972,7 +1101,7 @@ networking).
   carries on regardless, so those two are not required; it fails on a
   missing dependency rather than warning, one at a time, so read the
   last line of its output rather than the first.
-- Why not the distribution's: QEMU 8.1.0-8.2.5 (Ubuntu 24.04 ships
+- Why not the distribution's: QEMU 8.1.0-8.2.5 (Ubuntu 24.04's
   8.2.2) keeps running stale translations of code rewritten on a
   translated block's second page, which corrupted JIT-compiled code
   ("Known intermittent"). `straddle_test` (single-threaded TCG) rewrites
@@ -981,7 +1110,8 @@ networking).
   it is the quick way to tell whether a QEMU build has the bug. On the
   pinned QEMU `java_stress` passed 15 of 15 boots; on 8.2.2, 2 of 6
   failed. A newer distribution QEMU is no safer: on 10.2.1 (Ubuntu
-  26.04's) the `hello` scenario wedges **under KVM** before the kernel
+  26.04's, so what CI's runners and the test image carry) the `hello`
+  scenario wedges **under KVM** before the kernel
   logs a phase, three runs of three timing out at 120 s with CPU 1 at
   the reset vector (`EIP=0000fff0 CS=f000`, `HLT=1`) and no state dump,
   while `lx_hello`, `lx_hello_pie` and `go_hello` passed in the same
@@ -1042,9 +1172,15 @@ Run a program directly:
   that process (`handle SIGSYS nostop noprint`, `handle SIGURG nostop
   noprint`), and `thread apply all bt` shows where NT threads are inside
   the NT layer.
-- A run that hangs gets SIGQUIT at its timeout (`timeout -s QUIT`,
-  SIGKILL 5 s later) and prints the threads part of the state dump to
-  stderr; for a live one, `kill -QUIT <pid of exe>`.
+- A run that hangs gets SIGQUIT at its deadline (SIGKILL 5 s later)
+  and prints the threads part of the state dump to stderr; for a live
+  one, `kill -QUIT <pid of exe>`. xtask times the run itself
+  (`run_with_deadline`) rather than through `timeout -s QUIT -k 5`:
+  Ubuntu 26.04's coreutils is uutils (`timeout --version` says which a
+  host has), whose timeout(1) kills the program at the deadline instead
+  of sending the chosen signal first and waiting, which left every hung
+  run without the dump it is read from. A host tool's flavour must not
+  decide whether a hang explains itself.
 - A failure that reproduces in gala-um is in the NT layer or the
   user-mode DLLs; one that does not points at the kernel's machine code
   (paging, switches, interrupts) or at the emulator.
@@ -1396,7 +1532,14 @@ kernel32 through `raw-dylib`), run under gala and under Windows
   runs as a non-admin user in session 1, with many CPUs, a battery, its
   own UI language): files and directories go in `%TEMP%` (GetTempPathW),
   not C:\ (a user may not create files there) or C:\gala, and an
-  earlier run's leftovers are removed first; values that depend on the
+  earlier run's leftovers are removed first; a path a test only *names*
+  comes from a directory it knows is there too (its own image's, from
+  GetModuleFileNameW, or `%TEMP%`) whenever the answer turns on that
+  directory existing -- MsiInstallProductW answers ERROR_FILE_NOT_FOUND
+  for a missing package in a directory that is there and
+  ERROR_PATH_NOT_FOUND for one in a directory that is not, so
+  `C:\gala\no-such.msi` passed on gala and on a machine this project
+  had run on and failed on CI's stock runner (`msi_test`); values that depend on the
   machine (the processor count, devices, the system locale, the build,
   the volume's number) are read from another API, not typed in; per-user
   state another process may hold (the clipboard) is skipped, naming the
@@ -1583,8 +1726,10 @@ kernel32 through `raw-dylib`), run under gala and under Windows
 - A missing export stops the load (as on Windows), so add it to the
   DLL's `src/unimplemented.rs` (`gala_stubs::unimplemented_exports!`)
   to get the program running. The stub logs at once (`[warn ]
-  <program>: <dll>!<function> not implemented, ending the process`),
-  records `dll!function` in the ledger and ends the process with
+  <program>: <dll>!<function> not implemented, ending the process
+  (detail <the number the record carried>)`; a gap that is reported and
+  lived with logs the same line without the "ending the process"),
+  records `dll!function` in the ledger ("stub") and ends the process with
   STATUS_NOT_IMPLEMENTED when called. Implementing one means removing it
   from that list.
 - GetProcAddress returns NULL for stubs, so a test that checks a
@@ -1900,10 +2045,25 @@ a cache on the host:
   `Office\Data\<version>\...`), about 3.2 GB, each checked against
   its pinned SHA-256 (`OFFICE_SOURCE` in xtask). A new build: change
   OFFICE_SOURCE_VERSION, run `cargo xtask office-source --pin` and paste
-  the table it prints. The CDN serves the plain files over HTTP; ODT's
+  the table it prints. Only version-named files are fetched and pinned.
+  The CDN serves the plain files over HTTP; ODT's
   own `/download` inside gala fails in the agent sandbox (its HTTPS
   configuration requests meet the sandbox's TLS interception, whose CA
   the guest does not trust: `crypt32.dll!SSL: CERT_E_UNTRUSTEDROOT`).
+- **The channel's `v64.cab` is a pointer, not content**: the CDN
+  composes it per request. Three fetches minutes apart gave three
+  different files (12,403 and twice 12,409 bytes, every sum different),
+  all naming the same version, so no checksum pins it: a pin on it fails
+  on its own, with nothing changed here and no new build. Its
+  `<Available Build>` is also the build the rollout offers
+  (16.0.12527.22286 while the cache holds 16.0.20527.20196) rather than
+  the one under `Office\Data`, so an offline source carrying it would
+  send the client after a build the cache does not have. The cache's
+  `v64.cab` is therefore written from the version's own
+  `v64_<version>.cab` (`write_version_pointer`; unit tests
+  `every_pinned_file_names_its_version` and
+  `the_offline_source_points_at_the_build_it_holds`), which is what a
+  real `setup.exe /download` leaves behind.
 - `XTASK_LOW_DISK=1 cargo xtask boot-test office_install_local$` makes a
   fresh disk and puts the cache on it as `C:\OfficeSource` before the
   boot (`diskimage::inject`: the volume formatted by the kernel's own
@@ -1927,6 +2087,44 @@ a cache on the host:
   (`office_install`'s first half hour: the transport, ranges, the
   service's staging of what it fetched) is not exercised, so run
   `office_install` now and then for the whole path.
+
+### Word and Excel on gala's own install (ROADMAP OF)
+
+`office_word` and `office_excel` (MANUAL) start the apps from the
+install `office_install_local` made, with no file from anywhere else:
+Word makes a document from a template of that install
+(`WINWORD.EXE /t...\QuickStyles\Default.dotx`), Excel opens the blank
+workbook it put in its shell-new folder (`EXCEL12.XLSX`, what
+Explorer's "New > Microsoft Excel Worksheet" copies). Both run through
+`consolerun.exe`, so their windows are on the console's desktop
+(`XTASK_SHOTS=60,120,...` for screendumps), and both boot through UEFI
+for the framebuffer.
+
+- **Their disk is a copy of the install's.** `new_disk` copies
+  `target/debug/test-office_install_local.disk.img` (`INSTALL_DISK`), so
+  an app's run cannot spoil an install that takes an hour; without that
+  image the run says so and stops. `XTASK_REUSE_DISK=1` boots the copy
+  the last run kept instead of making another (what to iterate with).
+- The copy is about 8 GB on the host, on top of the install's own. With
+  the install's image in `/dev/shm` ("Office's fast path"), link the
+  copy there too.
+- The apps' processes start on the whole 64-bit system
+  (`FULL_SYSTEM_SCENARIOS`) and the install's own files; what they still
+  lack is in the ledger (ROADMAP OF's load list ranks it).
+- **A screen check waits for the title Windows gives the window.** The
+  marker of `OFFICE_WORD_SCREEN` and `OFFICE_EXCEL_SCREEN` is the
+  kernel's `desktop: shown window '<title>'` line, with the title
+  measured on Windows (`Document1 - Word`, `EXCEL12.XLSX`); it stops at
+  the name, because Windows appends to it (an unactivated install says
+  so in the caption).
+- **Check the window, not where it is.** A program puts its own window
+  where it likes, so both checks ask only for what a drawn document
+  shows wherever it sits: at least a tenth of the screen exactly white
+  (`PixelCheck::Most`: Word's page, Excel's cells) and the active
+  window's pill on the taskbar. The bare desktop has 0.008% white and
+  nothing near the pill, so this tells a window from an empty desktop.
+  Each check ends with Alt+F4, which closes the app and with it
+  `consolerun`, whose status is the app's.
 
 ### Linux test programs (user/lx, ROADMAP LX)
 
@@ -2001,9 +2199,36 @@ source).
   dlopen()ed is not DT_NEEDED), found through DT_RUNPATH `$ORIGIN`.
   They use libc as a program does (printf, malloc, dlopen), not raw
   system calls: what they check is that glibc's programs run. CI's
-  rebuild (ubuntu-24.04: gcc 13.3, glibc 2.39) must give the same bytes:
+  rebuild (ubuntu-26.04: gcc 15.2, glibc 2.43) must give the same bytes:
   their start-up files (`crt1.o`, `crti.o`) come from the host's
-  libc6-dev, so the binaries are rebuilt on that Ubuntu release.
+  libc6-dev, so the binaries are rebuilt on that Ubuntu release. The
+  release alone does not pin them: 26.04 publishes two builds of each
+  package under one version, the plain amd64 one and an amd64v3 one
+  optimised for x86-64-v3, and a machine opts into the variant with
+  `APT::Architecture-Variants` (GitHub's runner image does; `apt-cache
+  policy cpp-15-x86-64-linux-gnu` then names `resolute/main amd64v3
+  Packages`). Every package installed on such a machine is that build,
+  and two of them reach the bytes: gcc defaults to `-march=x86-64-v3`
+  and emits AVX2 where the plain one emits none, and `musl-dev`'s static
+  libc is compiled that way too (3961 VEX-encoded instructions against
+  the plain build's none), so the binaries differ whichever of the two
+  it is. `build.sh` refuses in either case -- the compilers by their
+  default `-march`, musl's libc by what comes out of the first program
+  it builds -- and CI's `linux` job clears the variant for its whole
+  job, before it installs anything, by writing `#clear
+  APT::Architecture-Variants;` into `/etc/apt/apt.conf.d/99-plain-amd64`
+  (a name that sorts after the image's). A file of one's own that clears
+  the option, rather than the deletion of the image's file that sets it:
+  one runner image keeps that file in
+  `/etc/apt/apt.conf.d/90arch-variant` and another does not, while
+  `#clear` -- or `-o APT::Architecture-Variants=` on a single command --
+  outranks any file whatever its name. `apt-config dump | grep -i
+  variant` then shows it empty. Check what came of it in the code, not
+  in `-march=` alone, which says nothing about musl-dev: no `__AVX2__`
+  from `gcc -dM -E -`, and no VEX-encoded instruction in
+  `/usr/lib/x86_64-linux-musl/libc.a` or in a binary the build produced.
+  The toolchain is what the rebuild rests on, and a job that states it
+  names the cause where a byte diff cannot.
   The binaries are checked in under `user/lx/bin`, not `user/bin`
   (`export-tests` copies only the Windows build's outputs); the kernel's
   host tests `include_bytes!` them.
@@ -2036,7 +2261,11 @@ source).
   `SEATED_TESTS`, gtk_test) gets weston's X11 backend instead
   (`--backend=x11 --use-pixman`) in an Xvfb of its own (apt package
   `xvfb`; Xvfb picks a free display and names it with `-displayfd`;
-  its log is `xvfb.log` in the run directory): Xvfb's keyboard and
+  its log is `xvfb.log` in the run directory, and under WSL that log
+  reads "Mode of /tmp/.X11-unix should be set to 1777" because WSLg
+  mounts that directory read-only, so no Xvfb there can make its
+  socket and the seated tests run in the test image instead):
+  Xvfb's keyboard and
   pointer make weston's seat, and nothing types or clicks there, so
   such a program drives itself when run by lx-expect (gtk_test clicks
   its own button: its header). In gala their scenarios (`lx_wl`) start the kernel's server
@@ -2139,6 +2368,10 @@ source).
   /usr/share/keyrings/ubuntu-archive-keyring.gpg`, then
   `dists/noble/main/binary-amd64/Packages.xz`, whose hash InRelease
   lists) and add a `Deb` row with the files used; a THIRD_PARTY row too.
+  A file a maintainer script installs under another name
+  (update-alternatives: libblas3's `libblas.so.3` is a link through
+  /etc/alternatives to `blas/libblas.so.3`) is written
+  `"<installed path>=<path in the package>"`.
   The packages are kept in `target/prebuilt/debs/` (shared, checked at
   each use), so a re-assembly or an interrupted fetch downloads only
   what is missing. Assembly runs the host's `update-mime-database`
@@ -2157,7 +2390,9 @@ source).
   check; cross-check it with the host's dash and coreutils (shell.sh's
   part after its setup, or httpd.sh behind a `busybox() { "$@"; }`
   shim; busybox is a test subject: it runs inside gala, where its
-  behaviour is what is tested; see "Third-party code on the host"). busybox.net's build has no standalone shell, so `shell.sh`
+  behaviour is what is tested; see "Third-party code on the host"). On
+  Ubuntu 26.04 that cross-check is against uutils coreutils rather than
+  GNU's: where the two differ, POSIX decides. busybox.net's build has no standalone shell, so `shell.sh`
   first makes `/lx/bb.bin/<applet>` symbolic links to busybox and puts
   that directory first in PATH (an applet it needs goes in that list);
   httpd.sh still calls `busybox <applet>`. To try a command line quickly, change `lx_busybox`'s
@@ -2188,6 +2423,135 @@ source).
   before its parent's wait4 returns, so whatever the parent does next
   (sealing a memfd against writing: EBUSY while a writable mapping is
   left) must not see the child's mappings (`lx::process_ended`).
+
+### Linux roots from Ubuntu 26.04 (ROADMAP LD)
+
+The Linux roots (`LINUX_ROOTS`, the "glibc", "wayland_client" and
+"weston" prebuilts) are Ubuntu 26.04 LTS's (resolute) release pocket.
+A root is what its workload opened on real 26.04, traced:
+
+- `tools/linux-roots/mkchroot.sh <base.tar.gz> <dir> <packages>` makes a
+  fresh chroot from Ubuntu's base image (`ubuntu-base-26.04-base-amd64`,
+  its SHA256SUMS checked with gpgv against the archive keyring), apt on
+  the release pocket only, the workload's packages without recommends:
+  one chroot per root, so nothing another root's packages bring is
+  traced. Run the workload (`tools/linux-roots/workloads/`) in it under
+  `strace -f -y` **as uid 1000** (`chroot --userspec=1000:1000`): gala's
+  programs are unprivileged, and some decide by it (glycin's sandbox
+  reads capget).
+- `plan.py <chroot> plan.json <traces>` gives the files by package;
+  `rows.py <index dir> plan.json rows.rs --exclude <earlier roots' files>`
+  the `Deb` rows from resolute's verified `Packages` indexes (InRelease
+  checked with gpgv, the `Packages.xz` hashes it lists); `replace_root.py
+  <root> rows.rs` puts them in xtask. The glibc prebuilt's files (ld.so,
+  libc, libm), libffi's and libwayland-client's are excluded from the
+  roots, the rest of libc6 (libresolv) is not.
+- A scenario's input is checked against 26.04 in the chroot first when
+  it misbehaves: weston on Xvfb as the compositor, `xdotool` typing into
+  weston's window (rootful Xwayland there needs `-ac` in the chroot). So
+  it was found that twm gives the keys to the xterm only with the
+  pointer on it (`lx_xdesktop`, `linux_menu` point first), and the rest
+  was gala's (termios2).
+- Pitfalls met: Xwayland caches compiled keymaps in `/var/lib/xkb`
+  (clear `*.xkm` before tracing, or the keymap's files are never
+  opened); Xwayland loads Mesa's `swrast_dri.so` (gallium and LLVM:
+  185 MB) for GLX, which gala's Xwayland runs without: move
+  `/usr/lib/x86_64-linux-gnu/dri` aside for the trace; `/usr/share/X11/xkb`
+  is a link to `xkeyboard-config-2`, and xkbcomp opens files relative to
+  the target after a chdir (the plan adds them under the link too);
+  strace's `<unfinished ...>` lines carry paths that were used;
+  `/usr/bin/sleep` (uutils) is a link into another package and
+  `icons/default/index.theme` an update-alternatives link (both
+  `<installed>=<packaged>`); a root's links to one file (an icon theme's
+  cursors) are copies at assembly; a file the menu or a desktop reads
+  but the program never opens (xterm's `debian-xterm.desktop`) is not
+  in a trace: add it to the row by hand, with a comment.
+- Transcripts recorded on 24.04 that 26.04 answers otherwise get their
+  own `<scenario>.txt`, recorded in the chroot (lx-expect's
+  expected.txt stays the CI host's).
+
+### GIMP (ROADMAP LD step 9)
+
+- Scenario `lx_gimp_batch` (`cargo xtask boot-test 'lx_gimp_batch$'`,
+  about 135 s of run time under TCG: one of `SLOW_SCENARIOS`):
+  `/bin/sh /lx/gimp/batch.sh` runs `gimp-console-3.2` in batch mode on
+  `user/lx/gimp/in.png` (made by `mkpng.py`) with `batch.scm` and a
+  writable copy of `gimprc` in `$HOME` (GIMP writes it back at the end;
+  cp keeps the source's mode, and gala's `/lx` files are 0555), then
+  busybox's sha256sum of the PNG it saved; its transcript is
+  `user/lx/sh/lx_gimp_batch.txt`. Record it in a fresh Ubuntu 26.04
+  chroot (`mkchroot.sh ... gimp`, GIMP 3.2.2-1) holding only the root's
+  plug-ins (move the others in `/usr/lib/x86_64-linux-gnu/gimp/3.0/
+  plug-ins` aside, and `extensions/org.gimp.extension.goat-exercises`),
+  as uid 1000 with a new empty home: `chroot --userspec=1000:1000 <dir>
+  env -i HOME=<home> PATH=/usr/bin:/bin BB= DIR=<a copy of user/lx/gimp>
+  sh <that copy>/batch.sh`, stdout, then `-- stderr:` and stderr, then
+  `-- exit status 0`. Run it twice: the transcripts must be the same.
+- **The saved file is compared byte for byte**, so it carries nothing
+  that changes between runs: the gimprc turns off exporting the colour
+  profile, Exif, XMP and IPTC (their dates and document ids), and
+  `file-png-export`'s arguments every optional chunk. GEGL's and babl's
+  modules come in x86_64 variants picked by the CPU's features; the
+  guest's (QEMU's `-cpu max`) gives the host's bytes.
+- **GIMP loads its data** (no `-d`): Script-Fu's scripts name a brush, a
+  gradient and a pattern as defaults and warn, with a pid and a time,
+  when they are missing; and Script-Fu crashes without its scripts'
+  directory (a `script-fu-path` without GIMP's own). The first start
+  measures babl's conversions (`~/.cache/babl`): most of the run time.
+- **The root "gimp"** is what `strace -f -y` of that run opened on
+  26.04 (`plan.py`), less what the "gtk3", "x11" and "glibc" roots ship,
+  coreutils (busybox's applets in gala) and GEGL's probe of graphviz's
+  `dot`; directories looked for with nothing used beneath them
+  (`usr/share/locale/`, which each plug-in checks for its catalogs) are
+  `<dir>/` entries. A start queries every plug-in in the plug-ins and
+  extensions directories (each a process): the root has only those the
+  scenario uses (script-fu and file-png).
+- Scenario `lx_gimp` (about 370 s under TCG, most of it in the screen
+  check): `sh /lx/gimp/gui.sh` starts `gimp-3.2` on a copy of in.png in
+  `$HOME` over the session's Wayland display, its output in
+  `$HOME/gimp.log`. GIMP_SCREEN closes the welcome dialog, waits for the
+  image on the canvas, runs Colors > Invert through `/` (GIMP's action
+  search: keys, not menu positions), exports `out.ppm` (Ctrl+Shift+E, the
+  name, Enter twice: raw PPM, as PNG's interactive export writes the time
+  into the file), then Ctrl+Q and Ctrl+D (Discard Changes). Each step
+  waits for its window's `desktop: shown window` or GIMP's new title
+  (`desktop: window titled`): keys sent before GIMP's popup or after the
+  plug-in has not finished are lost. The transcript is GIMP's exit status
+  and out.ppm's SHA-256, recorded on Ubuntu 26.04 with the same keys:
+  `tools/linux-roots/workloads/gimp-gui.sh` in the "gimp" chroot (with
+  weston, xvfb, xdotool, x11-apps and netpbm; the plug-ins script-fu,
+  file-png and file-pnm). Its screendumps: `test-lx_gimp.screen<n>.png`. A screen step dumps only
+  when it has pixels to check (a `Varied` over the screen will do);
+  `XTASK_SHOTS` is QEMU's screen, black for a `presenter=test` desktop.
+- Reading a run: `XTASK_EVENTS=ipc` shows GIMP's segment (`lx shm`:
+  gimp-console gets, attaches and removes it; each plug-in attaches and
+  detaches; it is destroyed at the last detach), `XTASK_EVENTS=syscall`
+  every Linux call (a failing open's errno is what GLib's message turns
+  into words); GLib's criticals and GIMP's own messages are on its
+  stderr in the transcript.
+
+### Inkscape (ROADMAP LD)
+
+- Scenario `lx_inkscape_batch` (`cargo xtask boot-test
+  'lx_inkscape_batch$'`): `/bin/sh /lx/inkscape/batch.sh` runs `inkscape
+  --export-type=png` on `user/lx/inkscape/in.svg`, its stderr (GTK's
+  warnings, with a pid and a time) in `$HOME/inkscape.log`, then
+  busybox's sha256sum of the PNG; its transcript is
+  `user/lx/sh/lx_inkscape_batch.txt`, recorded in a fresh Ubuntu 26.04
+  chroot (`mkchroot.sh ... inkscape`, Inkscape 1.4.3-0ubuntu2) as uid
+  1000: `chroot --userspec=1000:1000 <dir> env -i HOME=<an empty home>
+  PATH=/usr/bin:/bin BB= DIR=<a copy of user/lx/inkscape> sh <that
+  copy>/batch.sh`, then `-- exit status 0`.
+- Scenario `lx_inkscape`: `sh /lx/inkscape/gui.sh` opens a copy of
+  in.svg over the session's Wayland display (its output in
+  `$HOME/inkscape.log`); INKSCAPE_SCREEN checks the drawing's yellow on
+  the canvas (`test-lx_inkscape.screen0.png`) and quits with Ctrl+Q. Its
+  transcript (the exit status) is recorded on Ubuntu 26.04 with the same
+  key, as GIMP's (weston on Xvfb, xdotool).
+- The root "inkscape" is those runs' `strace -f -y` (`plan.py`, `rows.py`
+  excluding the "gtk3", "x11" and "glibc" roots' files), with GTK's
+  schemas and Inkscape's whole hicolor icon theme. Inkscape finds
+  its own libraries through `$ORIGIN/..`: plan.py normalizes such paths.
 
 ### The WSL facade's tests (user/wsl_test, ROADMAP CT)
 
@@ -2260,10 +2624,13 @@ source).
   HELD_DOWNLOADS), so the bar is seen mid-download under KVM as under
   TCG;
   the start button moves left by 24 pixels per window on the taskbar
-  (the console window of the terminal stays after `exit`); each move is
-  relative to where the step before left the pointer, a few moves per
-  click (a reset to (0, 0) with six large moves lost a move under load:
-  QEMU's PS/2 queue is short). A distribution's processes run as the
+  (the console window of the terminal stays after `exit`; the xterm's
+  goes, which the Hide step waits for: `desktop: window 'xterm' left the
+  screen`); the xterm's window shows before its shell runs, so `exit`
+  is typed only once its pixels show dash's prompt (keys sent earlier
+  reached Xwayland before the xterm had the X focus and were lost, and
+  the xterm never ended); each move is relative to where the step
+  before left the pointer. A distribution's processes run as the
   Windows user's Linux ids (uid 1000), so its `/etc/passwd` must name
   uid 1000: Xwayland refuses its own local clients ("Authorization
   required") when the user of the peer is unknown; the stand-in has the
@@ -2656,7 +3023,7 @@ it on first use.
 - Unpackers: unzip for zips (`apt install unzip`; a fresh Ubuntu, WSL's
   included, has none, and the prebuilt fails to spawn it), msitools'
   `msiextract` for an MSI (`apt install msitools`), 7-Zip (`7z` from
-  p7zip-full) for a `.7z` archive (mesa-dist-win's; members are file
+  7zip) for a `.7z` archive (mesa-dist-win's; members are file
   paths such as `x64/opengl32.dll`), an NSIS installer or a 7-Zip
   self-extractor, and for a Chocolatey `.nupkg` the installer in
   its `tools/` unpacked with 7-Zip; a nuget.org `.nupkg` (a library
@@ -3067,7 +3434,12 @@ about a minute under TCG. Read, in order:
   has the `amd64-unicode` stubs, so `Target amd64-unicode` gives an x64
   installer, which gala can run: there is no WOW64 for 32-bit ones; it
   has no amd64 plug-ins, so the script uses none). The build is
-  reproducible; without makensis the checked-in installers are written
+  reproducible for one makensis and not across versions, so a host whose
+  nsis is not CI's image's (Ubuntu 26.04's 3.10-2 against 24.04's) makes
+  other bytes and `export-tests` rewrites the installers and the SHA-256s
+  in their manifests: that belongs to no change, so restore
+  `user/pk_install_test/source` (or export in the image: `cargo xtask
+  docker-test`) rather than committing it. Without makensis the checked-in installers are written
   back from the working tree unchanged, so `export-tests` leaves the same
   bytes either way (make_source.py removes and remakes `source/installers`
   on every run, so keeping them means writing them back, not skipping
@@ -3310,9 +3682,10 @@ guest's state dump, and is the scenario's verdict. Such scenarios must boot by
 UEFI (BIOS boots have no framebuffer), unless their desktop is headless
 (`presenter=test`, below).
 
-- A step first sends QEMU monitor commands, 250 ms apart: `mouse_move dx
-  dy`, `mouse_button 1` (bit 0 the left button, bit 1 the right:
-  `mouse_button 2` is a right press), `sendkey`. Then it takes a
+- A step first sends QEMU monitor commands: `mouse_move dx dy`,
+  `mouse_button 1` (bit 0 the left button, bit 1 the right:
+  `mouse_button 2` is a right press), `sendkey`, each once the guest
+  has read everything the ones before it queued (below). Then it takes a
   screendump (none when the step checks no pixels, e.g. the click that
   ends the program), kept as `target/debug/test-<scenario>.screen<step>.png`,
   and checks pixels (exact colours, or "some pixel near this colour in
@@ -3320,14 +3693,45 @@ UEFI (BIOS boots have no framebuffer), unless their desktop is headless
 - A pixel check is retried (a new screendump every 0.5 s, for about
   30 s) before it fails: a redraw under load can outlast the first
   dump, and a step may wait for the program.
+- **Input is paced on what the guest has read, never on time**
+  (`Ps2Pace` in xtask). QEMU's PS/2 keyboard and mouse each queue at
+  most 16 bytes: a key that does not fit is dropped, and a mouse packet
+  that does not fit waits for the next input event, which carries only
+  the buttons as they are then, so a press followed by its release
+  before the guest made room is never seen. Input paced by time is lost
+  that way whenever the guest is busy for a second (the full suite's
+  load). So the kernel counts the bytes its input thread reads from each device
+  and logs where (`input: bytes read at <address>`); xtask reads them
+  with the monitor's `x` and sends each command only when the guest has
+  read every byte QEMU queued before it (`ps2_bytes` knows what each
+  command queues: packets of at most 127 per axis, one per change of
+  the buttons, a byte per key press and release, two with E0). A guest
+  that does not read within 120 s fails the step with the counts ("the
+  guest read N of the M mouse bytes sent"); a command `ps2_bytes` does
+  not know, or one that would not fit an empty queue, is refused by the
+  host test `every_screen_step_input_is_paced`. Under the
+  `events=window` mask, each button change the desktop takes is an
+  event `pointer` (where, and what got it: `Start`, `LinuxEntry(0)`,
+  `capture <window>`), and the exit's `input:` line counts the presses.
+- **The last step's input may end the run.** A key that ends the
+  program (Esc, Ctrl+Q) under `qemu_exit` can close QEMU, and its
+  monitor, before xtask has read the guest's counters. On the last step
+  with no pixels to check, a monitor that closed then is not a failure:
+  the verdict says so (`xtask: screen ok (step N: QEMU's monitor closed
+  after the last input ...)`) and the run's exit status and expected
+  lines decide. Anywhere else a closed monitor fails the step.
 - The guest's pointer starts in the middle of the screen and is clamped
   to it: `mouse_move -255 -255` three times puts it at (0, 0) whatever
-  the earlier steps did. Keep each `mouse_move` within 255 per axis:
-  QEMU queues PS/2 packets of at most 255 and hands the rest of a larger
-  move over with later events (a click then lands elsewhere).
-- A mouse press is sent 0.75 s after the command before it, so queued
-  moves are drained first. Typed input is queued too: check for the
-  final state.
+  the earlier steps did. Keep each `mouse_move` within 255 per axis (3
+  packets: 4 do not fit QEMU's queue with the wheel's 4-byte packets).
+- **Input that aims at something the step before changes waits for
+  that change** (`after:`): the start button moves left by 24 pixels per
+  window on the taskbar, so a click on it after `exit` in a window waits
+  for `desktop: window '<title>' left the screen` (the counterpart of
+  `desktop: shown window`); typed input waits for the prompt of what
+  reads it (a pixel check of the prompt: a window shows before its
+  program reads keys). `after` matches anywhere in the serial log, so
+  it names a line that comes only from that change.
 - Windows-key chords are one `sendkey` (`sendkey meta_l-right`: Snap).
   The wheel: `mouse_move 0 0 1` is one notch up (away from the user; a
   negative dz is down).
@@ -3678,6 +4082,16 @@ Scenarios that fail now and then, and what is known.
 - **timer_test** failed once in three full runs under the load of the
   full suite and passes alone; if it recurs, its log says which bound
   was missed.
+- **clock_test's rate check under host load**: with the clock set to
+  1000:1 the test asks that the performance counter advance 500 to 1000
+  times faster than real time, and real time is the guest's own clock,
+  which runs on while the VM waits for a host CPU. In a full run beside
+  another VM it measured 465 (30 s of program time in 64.5 ms of real
+  time; the log's `vm time` line: 7.4 s of its 14.5 s wall spent
+  off-CPU) and failed check 0x5b; it passes alone. The bound is not the
+  thing to widen -- the ratio has to be measured against time the guest
+  ran, which the guest cannot see today; until it can, run it with the
+  host quiet (`XTASK_VMS=1`).
 
 #### Reproducing the Java corruption: `java_stress`
 
@@ -3959,19 +4373,55 @@ formats.
 
 ### Lock-order checking (lockdep)
 
-Debug kernels, host tests and gala-um panic with `lockdep: X taken while
-holding Y, but Y was taken while holding X before` on the first
-lock-order inversion (ARCHITECTURE "Built in early"), and with `lockdep:
-releasing X turns interrupts on while Y is still held` when IrqMutex
-guards drop out of order.
+Debug kernels, host tests and gala-um panic with `lockdep: X taken by
+thread N while holding Y (taken by thread M), but Y was taken while
+holding X before` on the first lock-order inversion (ARCHITECTURE "Built
+in early"), and with `lockdep: releasing X turns interrupts on while Y
+is still held (locks released out of order); Y was taken by thread M,
+and X is released by thread N` when IrqMutex guards drop out of order.
 
+- **Read the two threads first** in the out-of-order message. The held
+  locks belong to the CPU, not to the thread, so when M and N differ the
+  bug is not where the panic is: thread M left Y held across a wait, a
+  yield or its end, and thread N is merely the next thread to run on
+  that CPU and release a lock. Look for Y's guard living across a
+  `sched::wait`, `yield_now`, `sleep_ms` or a blocking call in M, not in
+  the code the panic points at. Thread numbers are the log's own
+  (`14`, or `14.2` once a thread record has been reused).
+- A class name longer than 96 bytes is shown cut, with `..`.
 - A class is the protected type, so give a lock over a plain type
   (`u32`, `Option<id>`, `()`) a name with `IrqMutex::named("module.field",
   value)`, or unrelated locks of that type share a class and report
   false inversions.
 - A guard taken inside a format macro's arguments (`info!("{}",
   *a.lock())`) lives to the end of the statement: read such values into
-  locals first.
+  locals first. A guard bound to a name lives to the end of its block,
+  and binding that name again only shadows it (`let name = t.name.lock();
+  ... let name = service_name(n);` holds the lock to the end of the
+  loop's body): give such a guard a block of its own.
+- `lockdep: thread N copies user memory while holding X` comes from
+  `nt::process::with_faults`, which every copy of a program's memory
+  goes through: the copy makes a page that is not there and waits for
+  the file or the disk. Hold no lock over `Process::read`, `read_u64`,
+  `write`, `write_iosb` or anything that calls them (`crashreport::At`,
+  `abi::stub_return_address`, `wow64::saved_registers`); take what the
+  copy needs out of the lock first (the handle table's `get` clones the
+  entry for that).
+- The guard of a temporary in an `if let` scrutinee (`if let Some(e) =
+  p.handles.lock().get(h)`) lives to the end of the `if let` body: bind
+  the value first (`let e = p.handles.lock().get(h);`).
+- An event's or a log line's arguments are formatted with the debug
+  console's lock held (`events::emit`, `info!`), so a `Display` of a
+  value that reads the program's memory or takes another lock is that
+  mistake once removed: read what the line names into locals before the
+  macro (`nt::syscalls::syscall_event` reads a call's stack arguments
+  and looks the waited-on object up first).
+- A path whose lock is what keeps the work in order, and so cannot let
+  it go yet, makes a `sync::lockdep::UserMemoryUnchecked` guard with the
+  lock already held, says in a comment why, and gets an entry in
+  ROADMAP's "Stopgaps (to replace)". It is not a way around a new
+  mistake: a copy that waits still panics in `none_held_at_switch`, and
+  a new guard needs the owner's word.
 - Diagnostic code that peeks at a lock from an interrupt, an NMI or a
   panic uses `IrqMutex::try_lock_untracked`: a tracked `try_lock` there
   teaches lockdep an order no real path has, and a later correct path

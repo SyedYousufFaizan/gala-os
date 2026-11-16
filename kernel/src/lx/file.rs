@@ -145,6 +145,9 @@ static RUN: AtomicUsize = AtomicUsize::new(NO_VOLUME);
 const NO_VOLUME: NodeId = usize::MAX;
 /// The mount point's name in the root.
 const RUN_NAME: [u16; 3] = [b'r' as u16, b'u' as u16, b'n' as u16];
+/// `/proc`'s name in the root, and `self` in it (`lx::procfs`).
+const PROC_NAME: [u16; 4] = [b'p' as u16, b'r' as u16, b'o' as u16, b'c' as u16];
+const SELF_NAME: [u16; 4] = [b's' as u16, b'e' as u16, b'l' as u16, b'f' as u16];
 
 /// The user database's volume (`publish_identity`), `/etc`'s node and
 /// the two files bound over `/etc/passwd` and `/etc/group`; NO_VOLUME
@@ -167,6 +170,9 @@ struct Mounts {
     root: NodeId,
     /// `/run`'s volume root.
     run: NodeId,
+    /// `/proc`'s volume root (`lx::procfs`), and the pid its `self` names.
+    proc: NodeId,
+    pid: u64,
     /// `/etc`, and the files bound over its `passwd` and `group`.
     etc: NodeId,
     passwd: NodeId,
@@ -178,6 +184,8 @@ impl Mounts {
     const EMPTY: Mounts = Mounts {
         root: ramfs::ROOT,
         run: NO_VOLUME,
+        proc: NO_VOLUME,
+        pid: 0,
         etc: NO_VOLUME,
         passwd: NO_VOLUME,
         group: NO_VOLUME,
@@ -203,9 +211,13 @@ impl Mounts {
     fn in_dir(&self, dir: NodeId) -> ([Mounted; 2], usize) {
         let mut out = [(&b""[..], 0, 0); 2];
         let mut n = 0;
-        if dir == ramfs::ROOT && self.run != NO_VOLUME {
-            out[0] = (b"run", self.run, abi::DT_DIR);
-            n = 1;
+        if dir == ramfs::ROOT {
+            for (name, node) in [(&b"proc"[..], self.proc), (&b"run"[..], self.run)] {
+                if node != NO_VOLUME {
+                    out[n] = (name, node, abi::DT_DIR);
+                    n += 1;
+                }
+            }
         } else if dir == self.etc {
             for (name, node) in [(&b"group"[..], self.group), (&b"passwd"[..], self.passwd)] {
                 if node != NO_VOLUME {
@@ -221,13 +233,15 @@ impl Mounts {
 /// The mounts of a process whose root is `root`: the shared tree's with
 /// `/run` (made if it was not) and the user database; a distribution's
 /// tree has none (its `/run` and `/etc` are its own directories).
-fn mounts(fs: &mut ramfs::RamFs, root: NodeId) -> core::result::Result<Mounts, FsError> {
+fn mounts(fs: &mut ramfs::RamFs, root: NodeId, pid: u64) -> core::result::Result<Mounts, FsError> {
     if root != ramfs::ROOT {
         return Ok(Mounts { root, ..Mounts::EMPTY });
     }
     Ok(Mounts {
         root,
         run: run_volume(fs)?,
+        proc: super::procfs::volume(fs)?,
+        pid,
         etc: ETC.load(Ordering::Relaxed),
         passwd: PASSWD.load(Ordering::Relaxed),
         group: GROUP.load(Ordering::Relaxed),
@@ -731,7 +745,20 @@ pub fn resolve(
     let parsed = parse(path)?;
     let root = call.lx.root;
     let start = if parsed.absolute { root } else { start_dir(call, dirfd)? };
-    with_fs(|fs| walk_mounted(fs, root, start, &parsed, follow))
+    let pid = call.process.id;
+    with_fs(|fs| walk_mounted(fs, root, pid, start, &parsed, follow))
+}
+
+/// The node the path at `addr` names (from the cwd), as stat finds it
+/// (following a link at its end if `follow`): inotify_add_watch's.
+pub fn lookup_node(call: &Call<'_>, addr: u64, follow: bool) -> core::result::Result<NodeId, u16> {
+    let path = read_path(&call.process, addr)?;
+    resolve(call, AT_FDCWD, &path, follow)?.existing()
+}
+
+/// Whether node `n` is a directory.
+pub fn node_is_dir(n: NodeId) -> bool {
+    with_fs(|fs| fs.node(n).is_some_and(ramfs::Node::is_dir))
 }
 
 /// Resolves `path` from directory `root` as a process rooted there would
@@ -739,7 +766,7 @@ pub fn resolve(
 /// `follow` (`lx::distro`'s unpacking).
 pub fn resolve_in(root: NodeId, path: &[u8], follow: bool) -> core::result::Result<Found, u16> {
     let parsed = parse(path)?;
-    with_fs(|fs| walk_mounted(fs, root, root, &parsed, follow))
+    with_fs(|fs| walk_mounted(fs, root, 0, root, &parsed, follow))
 }
 
 /// `walk` with the mounts of a process rooted at `root` (`/run`,
@@ -747,11 +774,12 @@ pub fn resolve_in(root: NodeId, path: &[u8], follow: bool) -> core::result::Resu
 fn walk_mounted(
     fs: &mut ramfs::RamFs,
     root: NodeId,
+    pid: u64,
     start: NodeId,
     p: &Parsed,
     follow: bool,
 ) -> core::result::Result<Found, u16> {
-    let m = mounts(fs, root).map_err(errno_of)?;
+    let m = mounts(fs, root, pid).map_err(errno_of)?;
     walk(fs, &m, start, p, follow)
 }
 
@@ -823,6 +851,19 @@ fn walk(
             dir = m.run;
             continue;
         }
+        if dir == ramfs::ROOT && m.proc != NO_VOLUME && name[..] == PROC_NAME[..] {
+            if last {
+                return Ok(Found { dir, name: None, node: Some(m.proc), dots: None });
+            }
+            dir = m.proc;
+            continue;
+        }
+        // `/proc/self`: the caller's pid (Linux's is a link to it).
+        let name = if dir == m.proc && m.pid != 0 && name[..] == SELF_NAME[..] {
+            super::procfs::self_name(m.pid).map_err(errno_of)?
+        } else {
+            name
+        };
         if dir == m.etc
             && let Some(f) = m.etc_file(&name)
         {
@@ -987,7 +1028,11 @@ fn stat_other(object: &Object, me: (u32, u32)) -> Stat {
         Object::PipeRead(_) | Object::PipeWrite(_) => (abi::S_IFIFO | 0o600, 0),
         Object::Socket(_) | Object::Unix(_) => (abi::S_IFSOCK | 0o777, 0),
         // An anonymous inode: no file type, 0600.
-        Object::Epoll(_) | Object::EventFd(_) => (0o600, 0),
+        Object::Epoll(_)
+        | Object::EventFd(_)
+        | Object::TimerFd(_)
+        | Object::PidFd(_)
+        | Object::Inotify(_) => (0o600, 0),
         Object::Nt(n) if n.kind == super::ntio::Kind::Pipe => (abi::S_IFIFO | 0o600, 0),
         Object::Nt(n) if n.kind == super::ntio::Kind::File => (abi::S_IFREG | 0o644, 0),
         Object::Pty(end) if end.master => return DeviceKind::Ptmx.stat(),
@@ -1059,7 +1104,11 @@ pub fn fstatfs(call: &Call<'_>, fd: u64, buf: u64) -> Result {
         | Object::Pty(_) => TMPFS_MAGIC,
         Object::PipeRead(_) | Object::PipeWrite(_) => PIPEFS_MAGIC,
         Object::Socket(_) | Object::Unix(_) => SOCKFS_MAGIC,
-        Object::Epoll(_) | Object::EventFd(_) => ANON_INODE_FS_MAGIC,
+        Object::Epoll(_)
+        | Object::EventFd(_)
+        | Object::TimerFd(_)
+        | Object::PidFd(_)
+        | Object::Inotify(_) => ANON_INODE_FS_MAGIC,
     };
     put_statfs(call, buf, magic)
 }
@@ -1571,7 +1620,7 @@ pub fn getdents64(call: &Call<'_>, fd: u64, buf: u64, count: u64) -> Result {
     let (used, full) = {
         let mut cursor = file.cursor.lock();
         with_fs(|fs| {
-            let m = mounts(fs, call.lx.root).map_err(errno_of)?;
+            let m = mounts(fs, call.lx.root, call.process.id).map_err(errno_of)?;
             let (mounted, n) = m.in_dir(file.node);
             fill_dirents(fs, file.node, &mounted[..n], &mut cursor, &mut out)
         })?
@@ -1670,7 +1719,7 @@ fn fill_dirents(
 
 /// A file-system name (UTF-16) as UTF-8 bytes (an unpaired surrogate as
 /// U+FFFD).
-fn utf8_name(
+pub fn utf8_name(
     wide: &[u16],
     out: &mut Vec<u8>,
 ) -> core::result::Result<(), crate::mm::heap::AllocError> {
@@ -1974,15 +2023,30 @@ pub fn readlinkat(call: &Call<'_>, dirfd: u64, path: u64, buf: u64, size: u64) -
         return Err(EINVAL);
     }
     let bytes = read_path(&call.process, path)?;
+    // `/proc/self` names the caller's pid (`lx::procfs`).
+    if bytes == b"/proc/self" && call.lx.root == ramfs::ROOT {
+        let pid = super::procfs::self_name(call.process.id).map_err(errno_of)?;
+        let n = pid.len().min(size as usize);
+        let mut text = [0u8; 20];
+        for (t, &c) in text.iter_mut().zip(&pid[..n]) {
+            *t = c as u8;
+        }
+        call.process.write(buf, &text[..n.min(20)]).map_err(|_| EFAULT)?;
+        return Ok(n as u64);
+    }
+    if let Some((pid, n)) = proc_fd(&bytes, call.process.id)
+        && call.lx.root == ramfs::ROOT
+    {
+        let link = fd_link(call, pid, n)?;
+        let k = link.len().min(size as usize);
+        call.process.write(buf, &link[..k]).map_err(|_| EFAULT)?;
+        return Ok(k as u64);
+    }
     if bytes == PROC_SELF_EXE {
         let exe = path_of(call.lx.root, *call.lx.exe.lock())?;
         let n = exe.len().min(size as usize);
         call.process.write(buf, &exe[..n]).map_err(|_| EFAULT)?;
         return Ok(n as u64);
-    }
-    if bytes.starts_with(b"/proc/") {
-        // Any other /proc path: no /proc yet (ENOENT from the walk).
-        ledger::record("readlinkat", "linux option missing", 0);
     }
     let n = resolve(call, dirfd, &bytes, false)?.existing()?;
     let mut target = Vec::new();
@@ -1995,6 +2059,75 @@ pub fn readlinkat(call: &Call<'_>, dirfd: u64, path: u64, buf: u64, size: u64) -
     })?;
     call.process.write(buf, &target).map_err(|_| EFAULT)?;
     Ok(target.len() as u64)
+}
+
+/// `/proc/self/fd/<n>` or `/proc/<pid>/fd/<n>` (`me`: the caller's pid):
+/// the pid and the descriptor number.
+fn proc_fd(path: &[u8], me: u64) -> Option<(u64, u64)> {
+    let rest = path.strip_prefix(b"/proc/")?;
+    let (who, rest) = rest.split_at(rest.iter().position(|&c| c == b'/')?);
+    let n = rest.strip_prefix(b"/fd/")?;
+    let number = |s: &[u8]| -> Option<u64> {
+        if s.is_empty() || s.len() > 19 || !s.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        Some(s.iter().fold(0u64, |v, &c| v * 10 + u64::from(c - b'0')))
+    };
+    let pid = if who == b"self" { me } else { number(who)? };
+    Some((pid, number(n)?))
+}
+
+/// What `/proc/<pid>/fd/<n>` links to (proc(5); procfs_test): a file's or
+/// directory's path as that process sees it, `pipe:[N]` and `socket:[N]`
+/// (N: the inode number fstat gives, 1 for every pipe and socket in
+/// gala), an anonymous inode's `anon_inode:[<kind>]`, a device's path.
+/// ENOENT for no such process or descriptor. GLib names an open file by
+/// it (glycin gets the icon files' names so).
+fn fd_link(call: &Call<'_>, pid: u64, n: u64) -> core::result::Result<Vec<u8>, u16> {
+    let lx =
+        if pid == call.process.id { None } else { Some(super::state::get(pid).ok_or(ENOENT)?) };
+    let owner = lx.as_deref().unwrap_or(&call.lx);
+    let f = owner.fd(n).ok_or(ENOENT)?;
+    let fixed: &[u8] = match &f.object {
+        Object::File(file) => return path_of(owner.root, file.node),
+        Object::PipeRead(_) | Object::PipeWrite(_) => b"pipe:[1]",
+        Object::Nt(nt) if nt.kind == super::ntio::Kind::Pipe => b"pipe:[1]",
+        Object::Socket(_) | Object::Unix(_) => b"socket:[1]",
+        Object::Epoll(_) => b"anon_inode:[eventpoll]",
+        Object::EventFd(_) => b"anon_inode:[eventfd]",
+        Object::TimerFd(_) => b"anon_inode:[timerfd]",
+        Object::PidFd(_) => b"anon_inode:[pidfd]",
+        Object::Inotify(_) => b"anon_inode:inotify",
+        Object::Device(d) => match d.kind {
+            DeviceKind::Ptmx => b"/dev/ptmx",
+            DeviceKind::Tty => b"/dev/tty",
+            kind => DEVICES.iter().find(|(_, k)| *k == kind).map_or(b"/dev/null", |(p, _)| *p),
+        },
+        Object::Pty(end) if end.master => b"/dev/ptmx",
+        Object::Pty(end) => {
+            let mut v = Vec::new();
+            v.try_extend_from_slice(b"/dev/pts/").map_err(|_| ENOMEM)?;
+            let mut d = [0u8; 10];
+            let mut k = d.len();
+            let mut x = end.pty.number;
+            loop {
+                k -= 1;
+                d[k] = b'0' + (x % 10) as u8;
+                x /= 10;
+                if x == 0 {
+                    break;
+                }
+            }
+            v.try_extend_from_slice(&d[k..]).map_err(|_| ENOMEM)?;
+            return Ok(v);
+        }
+        // The console a Linux program was started on, and an NT
+        // program's other standard handles: a terminal, as fstat says.
+        Object::Console(_) | Object::Nt(_) => b"/dev/pts/0",
+    };
+    let mut v = Vec::new();
+    v.try_extend_from_slice(fixed).map_err(|_| ENOMEM)?;
+    Ok(v)
 }
 
 /// ftruncate (`fd`) and truncate (`path`).
@@ -2242,7 +2375,7 @@ pub fn executable_at(
     }
     let parsed = parse(path)?;
     let start = if parsed.absolute { root } else { cwd };
-    let n = with_fs(|fs| walk_mounted(fs, root, start, &parsed, true))?.existing()?;
+    let n = with_fs(|fs| walk_mounted(fs, root, 0, start, &parsed, true))?.existing()?;
     let ok = with_fs(|fs| fs.node(n).is_some_and(|node| !node.is_dir() && perm(node) & 0o100 != 0));
     if !ok {
         return Err(EACCES);
@@ -2253,9 +2386,9 @@ pub fn executable_at(
 }
 
 /// The link `/proc/self/exe` (proc(5)): the program the process runs, by
-/// its path. There is no /proc on the file system yet; this one path is
-/// recognised as given, as the devices are (glibc's ld.so reads it for
-/// `$ORIGIN` in a library search path).
+/// its path, answered here for any process (one rooted in a
+/// distribution's tree too, which has no /proc: glibc's ld.so reads it
+/// for `$ORIGIN` in a library search path).
 const PROC_SELF_EXE: &[u8] = b"/proc/self/exe";
 
 /// The directory of the Linux path `path` (where a program `lxrun=`
@@ -2264,7 +2397,7 @@ const PROC_SELF_EXE: &[u8] = b"/proc/self/exe";
 pub fn directory_of(path: &str) -> NodeId {
     let dir = path.rsplit_once('/').map_or("", |(d, _)| d);
     let Ok(parsed) = parse(dir.as_bytes()) else { return ramfs::ROOT };
-    with_fs(|fs| walk_mounted(fs, ramfs::ROOT, ramfs::ROOT, &parsed, true))
+    with_fs(|fs| walk_mounted(fs, ramfs::ROOT, 0, ramfs::ROOT, &parsed, true))
         .ok()
         .and_then(|f| f.node)
         .unwrap_or(ramfs::ROOT)
@@ -2273,6 +2406,16 @@ pub fn directory_of(path: &str) -> NodeId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proc_fd_paths() {
+        assert_eq!(proc_fd(b"/proc/self/fd/7", 40), Some((40, 7)));
+        assert_eq!(proc_fd(b"/proc/52/fd/13", 40), Some((52, 13)));
+        assert_eq!(proc_fd(b"/proc/self/fd/", 40), None);
+        assert_eq!(proc_fd(b"/proc/self/fd/7/x", 40), None);
+        assert_eq!(proc_fd(b"/proc/self/ns/user", 40), None);
+        assert_eq!(proc_fd(b"/proc/x1/fd/3", 40), None);
+    }
     use crate::fs::ramfs::{ROOT, RamFs};
 
     fn w(s: &str) -> Vec<u16> {

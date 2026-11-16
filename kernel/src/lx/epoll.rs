@@ -21,8 +21,12 @@
 //! devices cannot be added (EPERM); an epoll can watch another (ELOOP for
 //! a cycle or nesting deeper than 4).
 //!
-//! epoll_wait blocks on the pipes' wait queues (`poll::wait`); sockets
-//! and nested epolls are looked at every millisecond. Ready entries come
+//! epoll_wait blocks on the wait queues of the set's objects and of the
+//! set itself (`poll::wait`); ADD and MOD wake the set's waiters, so a
+//! wait begun before them (another thread's) watches the new entry and
+//! reports it once ready, as Linux's does (epoll_test's "the set changed
+//! while a thread waits"). Inet sockets and nested epolls are looked at
+//! every millisecond. Ready entries come
 //! out in the order they were added.
 //!
 //! Observability: the calls are in the flight recorder as every call; the
@@ -108,6 +112,9 @@ struct Entry {
 /// An epoll instance.
 pub struct Epoll {
     entries: IrqMutex<Vec<Entry>>,
+    /// The threads in epoll_wait on it: woken by ADD and MOD, so that a
+    /// wait begun before them looks again and watches the new entry.
+    waiters: KArc<crate::unix::Waiters>,
 }
 
 impl Epoll {
@@ -179,6 +186,11 @@ impl Epoll {
         max: usize,
         mut watch: Option<&mut Watch>,
     ) -> core::result::Result<Vec<(u32, u64)>, u16> {
+        // The set itself first: a change to it after this look wakes the
+        // waiter.
+        if let Some(w) = watch.as_deref_mut() {
+            w.add_queue(&self.waiters);
+        }
         let objects = self.snapshot()?;
         let mut looks = Vec::new();
         for (fd, desc, object) in &objects {
@@ -223,7 +235,9 @@ impl Epoll {
 }
 
 fn new_fd(call: &Call<'_>, cloexec: bool) -> Result {
-    let epoll = KArc::try_new(Epoll { entries: IrqMutex::new(Vec::new()) }).map_err(|_| ENOMEM)?;
+    let waiters = KArc::try_new(crate::unix::Waiters::default()).map_err(|_| ENOMEM)?;
+    let epoll =
+        KArc::try_new(Epoll { entries: IrqMutex::new(Vec::new()), waiters }).map_err(|_| ENOMEM)?;
     let fd = KArc::try_new(Fd::new(Object::Epoll(epoll), false)).map_err(|_| ENOMEM)?;
     call.lx.install_from(fd, cloexec, 0)
 }
@@ -283,6 +297,9 @@ pub fn epoll_ctl(call: &Call<'_>, epfd: u64, op: u64, fd: u64, event: u64) -> Re
         | Object::Socket(_)
         | Object::Unix(_)
         | Object::EventFd(_)
+        | Object::TimerFd(_)
+        | Object::PidFd(_)
+        | Object::Inotify(_)
         | Object::Console(_)
         | Object::Pty(_)
         | Object::Nt(_) => {}
@@ -309,6 +326,7 @@ pub fn epoll_ctl(call: &Call<'_>, epfd: u64, op: u64, fd: u64, event: u64) -> Re
                 ep.entries.lock().retain(|e| !(e.fd == fd && e.desc == desc));
                 return Err(ENOMEM);
             }
+            ep.waiters.wake_all();
             Ok(0)
         }
         CTL_MOD => {
@@ -316,6 +334,8 @@ pub fn epoll_ctl(call: &Call<'_>, epfd: u64, op: u64, fd: u64, event: u64) -> Re
             let mut entries = ep.entries.lock();
             let e = entries.iter_mut().find(|e| e.fd == fd && e.desc == desc).ok_or(ENOENT)?;
             e.interest = interest;
+            drop(entries);
+            ep.waiters.wake_all();
             Ok(0)
         }
         CTL_DEL => {

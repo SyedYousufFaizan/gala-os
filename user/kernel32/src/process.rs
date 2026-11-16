@@ -1291,7 +1291,7 @@ fn pointer_cookie() -> usize {
     if c != 0 {
         return c;
     }
-    let fresh = rdtsc() as usize | 1;
+    let fresh = cycles() as usize | 1;
     match POINTER_COOKIE.compare_exchange(0, fresh, Ordering::AcqRel, Ordering::Acquire) {
         Ok(_) => fresh,
         Err(other) => other,
@@ -1329,11 +1329,20 @@ pub extern "system" fn IsDebuggerPresent() -> Bool {
     unsafe { Bool::from(*((peb() + PEB_BEING_DEBUGGED) as *const u8)) }
 }
 
-/// DebugBreak: a breakpoint exception.
+/// DebugBreak: a breakpoint exception (int3; ARM64: `brk #0xf000`, what
+/// Microsoft documents __debugbreak to emit there).
 #[unsafe(no_mangle)]
 pub extern "system" fn DebugBreak() {
     // SAFETY: raises STATUS_BREAKPOINT in this thread.
-    unsafe { core::arch::asm!("int3") };
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    unsafe {
+        core::arch::asm!("int3")
+    };
+    // SAFETY: as above.
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("brk #0xf000")
+    };
 }
 
 /// IsProcessorFeaturePresent: KUSER_SHARED_DATA.ProcessorFeatures.
@@ -1347,13 +1356,11 @@ pub extern "system" fn IsProcessorFeaturePresent(feature: u32) -> Bool {
     Bool::from(unsafe { *((0x7ffe_0274 + feature as usize) as *const u8) })
 }
 
-/// GetCurrentProcessorNumber: the processor number the kernel keeps in
-/// IA32_TSC_AUX (read with rdtscp).
+/// GetCurrentProcessorNumber: the processor running this thread, as the
+/// kernel tells it (`arch::current_processor`).
 #[unsafe(no_mangle)]
 pub extern "system" fn GetCurrentProcessorNumber() -> u32 {
-    let mut aux = 0u32;
-    rdtscp(&mut aux);
-    aux & 0xfff
+    current_processor()
 }
 
 /// FlushProcessWriteBuffers: a full fence (gala's processors are kept

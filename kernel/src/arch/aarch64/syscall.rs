@@ -166,13 +166,21 @@ impl SyscallFrame {
 
 pub type Handler = fn(&mut SyscallFrame);
 
-pub fn set_handler(_personality: Personality, _name: &'static str, _handler: Handler) {
-    unported("syscall::set_handler")
+/// The personalities' system call dispatchers (registered at boot; the
+/// SVC path from EL0 that calls them comes with user mode, ROADMAP AR).
+static DISPATCHERS: crate::personality::Dispatchers = crate::personality::Dispatchers::new();
+
+pub fn set_handler(personality: Personality, name: &'static str, handler: Handler) {
+    if DISPATCHERS.register(personality, name, handler) {
+        crate::info!("syscall: personality {personality} dispatches to {name}");
+    } else {
+        crate::warn!("syscall: personality {personality} already has a dispatcher; {name} ignored");
+    }
 }
 
-pub fn init_cpu() {
-    unported("syscall::init_cpu")
-}
+/// Nothing to set up per CPU: an SVC from EL0 arrives through the
+/// exception vectors (x86-64 programs its SYSCALL MSRs here).
+pub fn init_cpu() {}
 
 pub fn reissue(_frame: &mut SyscallFrame) -> ! {
     unported("syscall::reissue")
@@ -193,6 +201,11 @@ pub fn continue_with(regs: UserRegs) {
 
 pub type UserReturnHook = fn(&mut UserRegs, bool) -> bool;
 
-pub fn set_user_return_hook(_hook: UserReturnHook) {
-    unported("syscall::set_user_return_hook")
+/// What runs before each return to user mode (the NT layer's pending
+/// work); kept for the return path user mode will have.
+static USER_RETURN_HOOK: crate::sync::IrqMutex<Option<UserReturnHook>> =
+    crate::sync::IrqMutex::new(None);
+
+pub fn set_user_return_hook(hook: UserReturnHook) {
+    *USER_RETURN_HOOK.lock() = Some(hook);
 }

@@ -145,7 +145,12 @@ fn resolve_once(process: &Process, addr: u64, kind: AccessKind) -> Fault {
     // A data section's page is looked up first, with no lock held (making
     // a file's page may deliver change notifications, which write user
     // memory); it is used only if the view is still there below.
-    let looked_up = !process.space.lock().is_mapped(addr);
+    //
+    // A process that has exited has no address space to fault in
+    // (`process::release_space`): a copy through a handle to it ends here
+    // (`Core::with_faults`).
+    let Some(space_of) = process.space_now() else { return Fault::Denied };
+    let looked_up = !space_of.lock().is_mapped(addr);
     let section_page = if looked_up { super::section::frame_for(process, addr) } else { None };
     let views = process.views.lock();
     let mut vad = process.vad.lock();
@@ -167,13 +172,13 @@ fn resolve_once(process: &Process, addr: u64, kind: AccessKind) -> Fault {
     }
     // In the page file: read back first (`resolve_fault`), with no lock
     // held; nothing below may map over its token.
-    if process.space.lock().swapped(addr).is_some() {
+    if space_of.lock().swapped(addr).is_some() {
         return Fault::PagedOut;
     }
     if protect & vad::PAGE_GUARD != 0 {
         return guard_hit(process, &mut vad, addr, protect & !vad::PAGE_GUARD);
     }
-    let section_frame = if mapped && !process.space.lock().is_mapped(addr) {
+    let section_frame = if mapped && !space_of.lock().is_mapped(addr) {
         match &section_page {
             Some(page) if page.current(process, &views, addr) => Some(page.frame),
             // An image page always has a frame (its view maps the private
@@ -202,7 +207,7 @@ fn resolve_once(process: &Process, addr: u64, kind: AccessKind) -> Fault {
     if kind == AccessKind::Write && is_write_copy(protect) {
         return copy_on_write(process, &mut vad, addr, protect, section_frame);
     }
-    let mut space = process.space.lock();
+    let mut space = space_of.lock();
     let done = if space.is_mapped(addr) {
         // Present and allowed by the VAD: a write to a page whose frame
         // a fork shares (copy-on-write: copied now, or made writable if
@@ -260,7 +265,8 @@ fn copy_on_write(
     // The copy first, the VAD after: a page the VAD calls private is never
     // the shared frame (after a failed copy the page is still
     // copy-on-write, and the retry copies it).
-    let mut space = process.space.lock();
+    let Some(space_of) = process.space_now() else { return Fault::Denied };
+    let mut space = space_of.lock();
     let done = match space.mapping(page) {
         Some((frame, true)) => space.map_private_copy(page, frame, flags).is_ok(),
         // Its own copy already, or one a fork shares (copied now).
@@ -325,7 +331,8 @@ fn guard_hit(process: &Process, vad: &mut vad::Vad, addr: u64, protect: u32) -> 
             _ => (Fault::Raise(NtStatus::GUARD_PAGE_VIOLATION), None),
         }
     };
-    let mut space = process.space.lock();
+    let Some(space_of) = process.space_now() else { return Fault::Denied };
+    let mut space = space_of.lock();
     if space.is_mapped(page) {
         let _ = space.set_flags(page, flags_for(protect));
     }
@@ -341,8 +348,10 @@ fn guard_hit(process: &Process, vad: &mut vad::Vad, addr: u64, protect: u32) -> 
 pub fn sync_range(process: &Process, vad: &vad::Vad, start: u64, size: u64) {
     // Only mapped pages have anything to sync: they are visited, absent
     // page tables skipped (a free or protect of a large, mostly untouched
-    // range costs its mapped pages).
-    let mut space = process.space.lock();
+    // range costs its mapped pages). An exited process has no space to
+    // sync (`process::release_space`), and nothing left to sync it to.
+    let Some(space_of) = process.space_now() else { return };
+    let mut space = space_of.lock();
     let end = start + size;
     let mut next = space.next_mapped(start, end);
     while let Some(addr) = next {
@@ -369,7 +378,8 @@ pub static EAGER_COMMIT: core::sync::atomic::AtomicBool =
 /// of `[start, start + size)` (`eagercommit`). Best effort: a page left
 /// out is still mapped at its first touch.
 fn map_now(process: &Process, vad: &vad::Vad, start: u64, size: u64) {
-    let mut space = process.space.lock();
+    let Some(space_of) = process.space_now() else { return };
+    let mut space = space_of.lock();
     let mut addr = start;
     while addr < start + size {
         if let Some(PageState { committed: true, protect }) = vad.page(addr)
@@ -403,6 +413,7 @@ pub fn allocate(
     kind: u32,
     protect: u32,
 ) -> Result<(u64, u64), NtStatus> {
+    process.live_space()?;
     let mut need = 0;
     match allocate_once(process, base, size, kind, protect, &mut need) {
         Err(NtStatus::COMMITMENT_LIMIT) if need > 0 => {
@@ -482,6 +493,7 @@ pub fn free(
     size: u64,
     free_type: u32,
 ) -> Result<(u64, u64), NtStatus> {
+    process.live_space()?;
     if process
         .vad
         .lock()
@@ -510,6 +522,7 @@ pub fn protect(
     size: u64,
     new: u32,
 ) -> Result<(u32, u64, u64), NtStatus> {
+    process.live_space()?;
     let mut vad = process.vad.lock();
     let image = vad.query(base).is_ok_and(|q| q.kind == vad::MEM_IMAGE);
     let result = vad.protect(base, size, if image { image_protection(new) } else { new })?;

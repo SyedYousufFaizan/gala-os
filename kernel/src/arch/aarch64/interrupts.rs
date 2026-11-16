@@ -1,6 +1,7 @@
-//! Exceptions and interrupts (stub): the trap frame's accessors over
-//! AArch64's registers and syndrome (ESR_EL1: the exception class),
-//! nothing installed.
+//! Exceptions and interrupts: the trap frame (what the vectors save,
+//! `entry`) and its accessors over AArch64's registers and syndrome
+//! (ESR_EL1: the exception class). IRQs go to the GIC's dispatch (`gic`);
+//! other exceptions are reported and stop the kernel for now.
 
 use super::syscall::UserRegs;
 use super::unported;
@@ -11,11 +12,16 @@ const EC_UNKNOWN: u64 = 0x00;
 const EC_ILLEGAL_STATE: u64 = 0x0e;
 const EC_INSTRUCTION_ABORT_LOWER: u64 = 0x20;
 const EC_DATA_ABORT_LOWER: u64 = 0x24;
+const EC_INSTRUCTION_ABORT_SAME: u64 = 0x21;
+const EC_DATA_ABORT_SAME: u64 = 0x25;
+const EC_SVC64: u64 = 0x15;
 const EC_BRK: u64 = 0x3c;
 /// ESR_EL1.ISS's WnR bit for data aborts.
 const ISS_WNR: u64 = 1 << 6;
 
-/// The state an exception saved.
+/// The state an exception saved, as the vectors write it (`entry`): x0-x30,
+/// the interrupted SP, ELR_EL1 and SPSR_EL1 (`UserRegs`' layout), then
+/// ESR_EL1 and FAR_EL1. 36 words: SP stays 16-byte aligned.
 #[repr(C)]
 #[derive(Debug)]
 pub struct TrapFrame {
@@ -24,17 +30,20 @@ pub struct TrapFrame {
     esr: u64,
     /// FAR_EL1: the faulting address.
     far: u64,
-    /// SPSR_EL1.M: from EL0.
-    from_el0: bool,
 }
 
+/// The frame's size, which `entry`'s assembly allocates.
+pub const TRAP_FRAME_SIZE: usize = 36 * 8;
+const _: () = assert!(size_of::<TrapFrame>() == TRAP_FRAME_SIZE);
+
 impl TrapFrame {
+    /// Taken from EL0 (SPSR_EL1.M[3:0] is EL0t).
     pub fn from_user_mode(&self) -> bool {
-        self.from_el0
+        self.regs.flags() & 0xf == 0
     }
 
     pub fn mode(&self) -> CpuMode {
-        if self.from_el0 { CpuMode::User } else { CpuMode::Kernel }
+        if self.from_user_mode() { CpuMode::User } else { CpuMode::Kernel }
     }
 
     pub fn ip(&self) -> u64 {
@@ -113,16 +122,36 @@ pub fn init() {
     unported("interrupts::init")
 }
 
+/// An IRQ (the vectors' IRQ entries): to the GIC's dispatch.
+pub(super) extern "C" fn irq(frame: &mut TrapFrame) {
+    super::gic::dispatch(frame);
+}
+
 pub type Handler = fn(&mut TrapFrame);
 pub type NmiHandler = fn(&TrapFrame);
 pub type UserExceptionHandler = fn(&mut TrapFrame, Option<u64>);
 
-pub fn set_nmi_handler(_handler: NmiHandler) {
-    unported("interrupts::set_nmi_handler")
+/// The state dump's handler, for the NMI that asks for one (xtask's, at a
+/// timeout). AArch64 has no NMI as x86-64's: the GICv3's pseudo-NMI (an
+/// interrupt above the masking priority) comes with the port, so nothing
+/// calls it yet, which the log says once.
+static NMI_HANDLER: crate::sync::IrqMutex<Option<NmiHandler>> = crate::sync::IrqMutex::new(None);
+
+pub fn set_nmi_handler(handler: NmiHandler) {
+    *NMI_HANDLER.lock() = Some(handler);
+    crate::warn!(
+        "interrupts: no NMI on aarch64 yet: a state dump at a timeout is not taken (the GIC's \
+         pseudo-NMI comes with the port)"
+    );
 }
 
-pub fn set_user_exception_handler(_handler: UserExceptionHandler) {
-    unported("interrupts::set_user_exception_handler")
+/// What handles an exception from EL0 (the NT and Linux layers' fault
+/// handling); kept for the EL0 vectors user mode will have.
+static USER_EXCEPTION_HANDLER: crate::sync::IrqMutex<Option<UserExceptionHandler>> =
+    crate::sync::IrqMutex::new(None);
+
+pub fn set_user_exception_handler(handler: UserExceptionHandler) {
+    *USER_EXCEPTION_HANDLER.lock() = Some(handler);
 }
 
 pub fn set_handler(_vector: u8, _handler: Handler) {
@@ -144,11 +173,28 @@ pub fn exception_name(vector: u8) -> &'static str {
         EC_ILLEGAL_STATE => "illegal execution state",
         EC_INSTRUCTION_ABORT_LOWER => "instruction abort from EL0",
         EC_DATA_ABORT_LOWER => "data abort from EL0",
+        EC_INSTRUCTION_ABORT_SAME => "instruction abort from EL1",
+        EC_DATA_ABORT_SAME => "data abort from EL1",
+        EC_SVC64 => "SVC (system call)",
         EC_BRK => "BRK instruction",
         _ => "exception",
     }
 }
 
-pub fn provoke(_fault: Fault) -> ! {
-    unported("interrupts::provoke")
+/// Raises `fault` on purpose (the exception path's tests): an undefined
+/// instruction (`udf`, ESR class 0), a data abort reading the unmapped
+/// first page (Limine maps no lower half: TTBR0 is unspecified, so the
+/// read faults at translation or as a TTBR0 walk; ESR class 0x25). A stack
+/// overflow needs the port's guard pages.
+pub fn provoke(fault: Fault) -> ! {
+    match fault {
+        // SAFETY: `udf` raises an undefined instruction exception.
+        Fault::InvalidOpcode => unsafe { core::arch::asm!("udf #0", options(nomem, nostack)) },
+        // SAFETY: the read faults (nothing maps the first page).
+        Fault::PageFault => unsafe {
+            core::ptr::read_volatile(core::ptr::without_provenance::<u64>(0x8));
+        },
+        Fault::StackOverflow => unported("interrupts::provoke(stack overflow: no guard pages yet)"),
+    }
+    unreachable!("provoked {fault:?} did not fault")
 }

@@ -7,12 +7,13 @@
 # <name>_test-pie (a PIE), each of their lib*.c a shared library
 # lib*.so beside them (found through DT_RUNPATH $ORIGIN).
 #
-# Needs musl-gcc (Ubuntu/Debian: apt install musl-tools; musl 1.2.4 and
-# gcc 13 on Ubuntu 24.04, which CI uses) and, for GLIBC_TESTS, gcc with
-# glibc's headers (gcc 13 and glibc 2.39 on Ubuntu 24.04), and for
+# Needs musl-gcc (Ubuntu/Debian: apt install musl-tools; musl 1.2.5 and
+# gcc 15 on Ubuntu 26.04, which CI uses) and, for GLIBC_TESTS, gcc with
+# glibc's headers (gcc 15 and glibc 2.43 on Ubuntu 26.04), and for
 # gtk_test GTK 3's libraries (apt install libgtk-3-0t64). The build is reproducible
 # (stripped, no build id, no file paths), so CI rebuilds and checks the
-# result against the checked-in binaries (`cargo xtask lx-expect`).
+# result against the checked-in binaries (`cargo xtask lx-expect`) -- with
+# the plain amd64 toolchain, which is what the check below is about.
 #
 # Usage: user/lx/build.sh [out_dir]   (default user/lx/bin)
 set -eu
@@ -24,13 +25,50 @@ cc=${MUSL_GCC:-musl-gcc}
 gcc=${GLIBC_GCC:-gcc}
 # Linked against glibc, dynamically.
 GLIBC_TESTS="dyn_test gtk_test"
-# Linked against GTK 3 as well (the host's Ubuntu 24.04 libgtk-3-0t64, its
+# Linked against GTK 3 as well (the host's Ubuntu 26.04 libgtk-3-0t64, its
 # libraries by soname: no development package needed; the program
 # declares what it calls). The binary depends only on the sonames and
 # the symbols' names, so any 3.24 build gives the same bytes.
 GTK_LIBS="-l:libgtk-3.so.0 -l:libgdk-3.so.0 -l:libgobject-2.0.so.0 -l:libglib-2.0.so.0"
 flags="-O2 -fno-stack-protector -fno-asynchronous-unwind-tables -fno-ident -Wall -Wextra -Werror -Wno-unused-function -Wl,--build-id=none -s"
 cd "$here"
+# Ubuntu 26.04 publishes two builds of each package under the same version:
+# the plain amd64 one and an amd64v3 one optimised for x86-64-v3 (apt-cache
+# policy names it "resolute/main amd64v3 Packages"; an image opts in with
+# APT::Architecture-Variants, as GitHub's runner image does). The amd64v3 gcc
+# defaults to -march=x86-64-v3 and emits AVX2 where the plain one emits none,
+# and amd64v3 musl-dev's static libc is compiled that way too, so neither can
+# reproduce the checked-in binaries. Say which part of the toolchain it is,
+# rather than leave a byte diff to explain itself: the compilers here by their
+# default -march, musl's libc further down by what comes out of the first
+# program built, the only place it shows.
+plain_amd64_recipe() {
+	cat >&2 <<-'EOF'
+	  Build them in the test image instead:
+	    cargo xtask docker-test lx-expect
+	  or clear the architecture variant for every apt command, as
+	  .github/workflows/ci.yml does:
+	    printf '#clear APT::Architecture-Variants;\n' |
+	      sudo tee /etc/apt/apt.conf.d/99-plain-amd64
+	    sudo apt-get update
+	    sudo apt-get install -y --reinstall --allow-downgrades \
+	      gcc-15 cpp-15-x86-64-linux-gnu gcc-15-x86-64-linux-gnu \
+	      libgcc-15-dev binutils libc6-dev musl-tools musl-dev
+	EOF
+}
+for probe in "$gcc" "$cc"; do
+	command -v "$probe" >/dev/null 2>&1 || continue
+	march=$("$probe" -Q --help=target 2>/dev/null | awk '$1 == "-march=" { print $2; exit }')
+	if [ -z "$march" ] || [ "$march" = "x86-64" ]; then
+		continue
+	fi
+	echo "user/lx/build.sh: $probe defaults to -march=$march, not x86-64." >&2
+	echo "  $("$probe" --version 2>/dev/null | head -1)" >&2
+	echo "  This is Ubuntu's amd64v3 build; its binaries are not the" >&2
+	echo "  checked-in ones." >&2
+	plain_amd64_recipe
+	exit 1
+done
 for dir in $GLIBC_TESTS; do
 	libs=
 	[ "$dir" = gtk_test ] && libs=$GTK_LIBS
@@ -46,9 +84,29 @@ for dir in $GLIBC_TESTS; do
 	"$gcc" $flags -no-pie -o "$out/$dir" "$dir/main.c" $link
 	"$gcc" $flags -fPIE -pie -o "$out/$dir-pie" "$dir/main.c" $link
 done
+checked=
 for dir in *_test; do
 	[ -f "$dir/main.c" ] || continue
 	case " $GLIBC_TESTS " in *" $dir "*) continue ;; esac
 	"$cc" $flags -static -no-pie -o "$out/$dir" "$dir/main.c"
 	"$cc" $flags -static-pie -fPIE -o "$out/$dir-pie" "$dir/main.c"
+	# musl-dev's amd64v3 build is the second way to the wrong bytes, and the
+	# -march probe above cannot see it: the libc it links in
+	# (/usr/lib/x86_64-linux-musl/libc.a) was compiled for x86-64-v3
+	# whatever this compiler defaults to. No checked-in binary holds a
+	# VEX-encoded instruction, so the first program built says it.
+	if [ -z "$checked" ] && command -v objdump >/dev/null 2>&1; then
+		checked=yes
+		vex=$(objdump -d "$out/$dir" |
+			grep -cE '[[:space:]](vmov|vpxor|vpunpck|vzero)' || true)
+		if [ "$vex" != 0 ]; then
+			echo "user/lx/build.sh: $dir came out with $vex AVX" >&2
+			echo "  (VEX-encoded) instructions, and no checked-in binary" >&2
+			echo "  holds one. Part of this toolchain is Ubuntu's amd64v3" >&2
+			echo "  build: musl-dev's static libc, which the -march probe" >&2
+			echo "  at the top of this script cannot see." >&2
+			plain_amd64_recipe
+			exit 1
+		fi
+	fi
 done

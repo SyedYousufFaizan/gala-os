@@ -519,7 +519,7 @@ unsafe extern "system" {
 #[cfg(target_arch = "x86")]
 use ntrt as _;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[allow(dead_code)]
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "C" {
@@ -531,11 +531,11 @@ unsafe extern "C" {
     fn __chkstk();
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub static _fltused: i32 = 0;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn __CxxFrameHandler3() -> ! {
     // SAFETY: ends the process.
@@ -543,7 +543,7 @@ pub extern "C" fn __CxxFrameHandler3() -> ! {
 }
 
 /// The program's name, which its lines start with.
-#[cfg(target_arch = "x86_64")]
+#[cfg(not(target_arch = "x86"))]
 const NAME: &[u8] = b"schannel_test";
 #[cfg(target_arch = "x86")]
 const NAME: &[u8] = b"wow64_schannel_test";

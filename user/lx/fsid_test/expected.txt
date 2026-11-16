@@ -1,0 +1,8 @@
+setfsuid(-1) is geteuid() (a query) = yes
+setfsuid(geteuid()) is geteuid() = yes
+  then setfsuid(-1) is geteuid() = yes
+setfsgid(-1) is getegid() (a query) = yes
+setfsgid(getegid()) is getegid() = yes
+  then setfsgid(-1) is getegid() = yes
+fsid_test: ok
+-- exit status 0

@@ -45,8 +45,9 @@ const HEADER: usize = size_of::<Header>();
 /// SYSTEM_PROCESS_INFORMATION and SYSTEM_THREAD_INFORMATION (x64): their
 /// sizes; ImageName (Length, Buffer), BasePriority, UniqueProcessId,
 /// InheritedFromUniqueProcessId, HandleCount; a thread's ClientId
-/// (UniqueProcess, UniqueThread) and BasePriority.
-#[cfg(target_arch = "x86_64")]
+/// (UniqueProcess, UniqueThread) and BasePriority. ARM64's are the same
+/// 64-bit layouts.
+#[cfg(target_pointer_width = "64")]
 mod spi {
     pub const PROCESS_ENTRY: usize = 0x100;
     pub const THREAD_ENTRY: usize = 0x50;

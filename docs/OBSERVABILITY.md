@@ -232,7 +232,7 @@ stream (office_install's staging, half an hour in:
 
 | Category | Events |
 |---|---|
-| `syscall` | each call (pid, tid, nr, name, args, status, ns); `wait` on entry to a wait, so a thread blocked for good shows, naming the object waited on (`obj`: its type, `oid`: its identity, the same in every process; the first of several). `events_pid=a,b,..` limits system calls and waits to those processes (scenario `events_pid`; `XTASK_CMDLINE=events_pid=4` for a boot test), and `events_match=<text>` adds every process whose command line contains the text when it starts (a program's processes chosen by what they are: `events_match=network.mojom.NetworkService` for Chromium's network service; scenario `events_match`); 64 processes at most |
+| `syscall` | each call (pid, tid, nr, name, args, status, ns); a Linux process's are `lx syscall` events (pid, tid, nr, name, the six arguments as entered, `ret`: the result or a negative errno, ns), what strace shows, under the same `events_pid` and `events_match`; `wait` on entry to a wait, so a thread blocked for good shows, naming the object waited on (`obj`: its type, `oid`: its identity, the same in every process; the first of several). `events_pid=a,b,..` limits system calls and waits to those processes (scenario `events_pid`; `XTASK_CMDLINE=events_pid=4` for a boot test), and `events_match=<text>` adds every process whose command line contains the text when it starts (a program's processes chosen by what they are: `events_match=network.mojom.NetworkService` for Chromium's network service; scenario `events_match`); 64 processes at most |
 | `image` | the exe and every image view (pid, NT path, base, size) |
 | `thread` | create (start address: the Win32 start routine, TEB, `teb32`: a WOW64 thread's 32-bit TEB, else 0), name (`thread name`: SetThreadDescription's, as NtSetInformationThread ThreadNameInformation sets it), exit (status) |
 | `process` | start (command line, `"session"`, `"personality":"nt"`, `"machine"`: `"x86"` for a 32-bit process running through WOW64, `"x64"` otherwise, `"ppid"` and `"ptid"`: the parent process and the thread that created it, 0 for processes the kernel starts; `"elevated"`: its primary token is elevated (TokenElevation; the log line ends in `, elevated token`); scenario `events_process`), exit (with the process's pool and handle peaks: `paged_peak`, `nonpaged_peak` in bytes, `handles_peak`); `session` (a session made after boot: id, its BaseNamedObjects); `quota exceeded` (pid, `kind`: `paged pool`, `nonpaged pool` or `handle limit`, `usage`, `want`, `limit`, `count`: the process's refusals so far; every refusal, unlike the log line); `process terminate` (TerminateProcess of another process: `by`, pid, status; with the log line `process: pid B (x.exe) terminates pid P (y.exe) with status S`, so who ended a process is in the log); the task manager's (`nt::tasks`, ARCHITECTURE "The task manager"): `tasks query` (each GalaTasks list: `by`, `nt`, `linux` and `hung` counts; the first query of each caller also a `tasks: pid P (x.exe) lists the processes: ...` line, and each process's first "Not responding" a `tasks: pid P (x.exe) is not responding: ...` line), `tasks end` (End task of a Linux process or distribution: `by`, `what`, pid, `detail` (the signal, or the distribution and how many processes ended), status; always a `tasks: pid P (x.exe) ends ...` line), and `lx signal` for the signal itself; scenario `taskmgr` |
@@ -249,10 +249,14 @@ stream (office_install's staging, half an hour in:
 | `wayland` | the Wayland server (`wayland=on`): `wayland connect` (pid, client number), `wayland disconnect` (`why`: closed, protocol error, output full, no memory; `requests` handled), `wayland role` (surface, role, its object), `wayland map` (surface, window or -1), `wayland commit` (surface, `buffer`: whether one came, its width and height, `rows` copied into the window, window, `placed` with `x`/`y`: the outer position the window was put at for the configure this commit answers), `wayland configure` (surface, the `width` and `height` asked for, 0x0 the client's choice, `states` as bits 1 << state: maximized 2, activated 16, tiled 32-256, the xdg_surface's `serial`), `wayland error` (object, interface, code, message), `wayland popup` (surface, `what`: configure with `x`/`y` relative to the parent's window geometry, `width`, `height` and the xdg_surface's `serial`; repositioned with the token as `serial`; grab with the press's `serial`; grab denied, dismissed and orphaned with `why`: not the last press's serial, a parent dismissed already, a press outside the client's windows, its window no longer the active one, the parent unmapped, its parent popup destroyed first) and `wayland input` (`what`: enter, leave, button, axis, key, focus, unfocus, close, maximize, restore, place, or dropped for a window the client shows no surface in; surface, window, `code` the button or evdev key, `state` pressed or released, an axis's delta in WHEEL_DELTA units; motion is not evented): each with the client's pid and number. A denied grab and an orphaned popup are also log lines (`wayland: pid P: wl_surface@S's popup: grab denied (...)`). Scenarios `lx_wl`, `lx_wl_popup`, `lx_wl_input` (with `window`: the desktop's `button` and `key` say where input went before the server took it), `lx_simple_shm`, `lx_gtk`. Without the category, each connection's end is a log line with its requests, commits shown and frame callbacks done (`wayland: pid P's connection N ended (closed): ...`) |
 | `wsl` | the WSL facade (`lx::distro`, `nt::wsl_calls`): `wsl import` (`distro`, `by`: wsl.exe's pid, `count`: the nodes made), `wsl start` (`distro`, `by`, `path`, and the Linux `pid` or the `errno`), `wsl terminate` and `wsl shutdown` (`count`: processes ended), `wsl remove` (`count`: names removed). The same as `wsl:` log lines (`wsl: bb: pid 108 /bin/sh started by pid 92`); a process that does not end within 10 s of `--terminate` is a warning; wsl.exe's missing options and gala's gaps are in the ledger (`wsl.exe!<option>`, `wsl.exe!/mnt cwd`, `wsl special file`, `ntio`, `ntio ioctl`). Scenarios `wsl`, `wsl_terminal` |
 | `service` | the service control manager (nt::scm): `service` events with `op` (connected to, opened, created, marked for deletion, asked to start, sent a control to, changed configuration level of, deleted), the caller's `pid`, the service's `name`, the `access` granted or the failing `status` (0xC007xxxx: the SCM's Win32 error xxxx). The same as `scm:` log lines, the first 64 per boot (`scm: pid P (program) opened "OfficeSvc": 0xc0070424 (a Win32 error)`); a service whose key goes with its last handle is logged with the outcome; a running service's side (nt::scm_run) adds `service` events with `op` starting, status, stopped, process ended, exited (before its dispatcher connected), start timed out, cannot start (its executable), start refused, and its `state`, `exit`, `specific` and `service_pid`, and `scm:` lines (the first 96) for its start (pid, command line), its dispatcher's connection, ServiceMain's start, each state it reports and a handler's non-zero answer; a start that times out and a service process that ends while its service runs are warnings; what the SCM cannot start is in the ledger (`GalaServiceControl: start a driver`, `start as an account`, `share process: run alone`). A service's own output does not reach the serial log: its standard handles are NULL, as on Windows; what it did is read from these events, its `syscall` events (`events_pid`) and its exit codes (svcrun_test's service side reports its first failed check as its service-specific exit code). Scenarios `svc_test`, `svcrun_test` and their `wow64_` twins |
-| `window` | `create` (hwnd, parent, pid, session), `describe` (tid, class, text once user32 knows them), `destroy`, `button` and `key` (the desktop's delivery: message, window, owner; the screen point or virtual key), `input taken` (a button or key its program took from the queue: message, window, owner; `by` the taking thread), `popup grab ended` (a press outside the windows of a popup grab's owner ended it: the grab's window, owner, the screen point; the press went nowhere else), `other session` (a process asks about, sends or posts to another session's HWND), `start menu` (a tile clicked: op `start`, `install` (`gala install <id>`) or `missing`; session, name, target (the path or the package id), pid, status; scenario `start_menu`; the Linux distributions section's: op `linux install`, `linux desktop`, `linux terminal`, `linux app` with name, target, pid, status; `linux progress` with name, state, percent; `linux prefs` with hidden, collapsed, dismissed, status; scenario `linux_menu`), `tray` (a Shell_NotifyIcon message on the notification area: op, the NIM_ number, session, pid, hwnd, id, flags, status; with `desktop: notification-area icon added/deleted` log lines for adds and deletes; scenario `tray_test`); `winsta`: `connect` (a process's window station and desktop at its first window station call: pid, session, station, desktop, `from`: `logon`, `startupinfo`, `parent`, `handle`), `connect failed` (the name it asked for, the status), `made` (a logon session's station). Scenario `winsta_test`; `presenter`: `live` (a session's desktop laid out: session, presenter, w, h; a bare one, which nothing can show, `bare`: why), `attach` (GalaSession attached a presenter: session, presenter, was, w, h), `console` (a console switch: session, from (-1: none), was, kept windows, w, h). Scenarios `presenter_test`, `server_windows` (the server kernel's `live`, presenter none, `bare`), `noscreen_windows` and `server_profile_windows` (the desktop kernel's bare `live` without a screen and in the server profile) |
+| `window` | `create` (hwnd, parent, pid, session), `describe` (tid, class, text once user32 knows them), `destroy`, `button` and `key` (the desktop's delivery: message, window, owner; the screen point or virtual key), `pointer` (each change of the mouse buttons the desktop takes, wherever it goes: pressed and released bits, x, y and `to`, what got it: the shell's own targets such as `Start` or `LinuxEntry(0)`, `Client(<window>)`, `capture <window>`, `the end of a popup grab`; a screen check that finds the screen behind tells from these whether, and where, its click arrived), `input taken` (a button or key its program took from the queue: message, window, owner; `by` the taking thread), `popup grab ended` (a press outside the windows of a popup grab's owner ended it: the grab's window, owner, the screen point; the press went nowhere else), `other session` (a process asks about, sends or posts to another session's HWND), `start menu` (a tile clicked: op `start`, `install` (`gala install <id>`) or `missing`; session, name, target (the path or the package id), pid, status; scenario `start_menu`; the Linux distributions section's: op `linux install`, `linux desktop`, `linux terminal`, `linux app` with name, target, pid, status; `linux progress` with name, state, percent; `linux prefs` with hidden, collapsed, dismissed, status; scenario `linux_menu`), `tray` (a Shell_NotifyIcon message on the notification area: op, the NIM_ number, session, pid, hwnd, id, flags, status; with `desktop: notification-area icon added/deleted` log lines for adds and deletes; scenario `tray_test`); `winsta`: `connect` (a process's window station and desktop at its first window station call: pid, session, station, desktop, `from`: `logon`, `startupinfo`, `parent`, `handle`), `connect failed` (the name it asked for, the status), `made` (a logon session's station). Scenario `winsta_test`; `presenter`: `live` (a session's desktop laid out: session, presenter, w, h; a bare one, which nothing can show, `bare`: why), `attach` (GalaSession attached a presenter: session, presenter, was, w, h), `console` (a console switch: session, from (-1: none), was, kept windows, w, h). Scenarios `presenter_test`, `server_windows` (the server kernel's `live`, presenter none, `bare`), `noscreen_windows` and `server_profile_windows` (the desktop kernel's bare `live` without a screen and in the server profile) |
 
 A `record` boot's recording also goes to this port (`"ev":"rec"`,
 whatever the mask; extracted to `<iso>.rec`).
+
+A text field is written with `events::Str`, which writes its own
+quotes: the format has `"name":{}`, not `"name":"{}"` (which makes the
+line invalid JSON).
 
 `cargo xtask events <events.jsonl>` summarizes a stream: events by kind,
 system calls by total time, failing statuses by service, each thread's
@@ -363,9 +367,13 @@ opentelemetry-proto's definitions:
 
 Every STATUS_NOT_IMPLEMENTED, STATUS_INVALID_SYSTEM_SERVICE, unknown
 information class, unsupported flag or TODO path increments a counter
-keyed by (service, what, detail) in a fixed 512-entry table (hits past
-it only counted as overflow). When running a real program, this list is
-the work queue, ranked by how often it was hit (scenario `ledger_test`).
+keyed by (service, what, detail) in a fixed 512-entry table. A record
+the table has no room for is still counted under its kind, so a dump
+says what it lost: one line per kind, `?full` for a table with nothing
+free left and `?bulk` for the bulk cap below, with `?` / `ledger full`
+for the kinds past the 32 the drop table itself names. When running a
+real program, this list is the work queue, ranked by how often it was
+hit (scenario `ledger_test`).
 Names from user mode (`GalaRecordMissing`, the registry's absent keys)
 live in a second fixed table of 512 names; a name that finds no room is
 `?user`. Invariants (`nt::ledger`): each dump gives back the names no
@@ -373,7 +381,9 @@ entry uses any more, so the table holds the names of the gaps since the
 last dump, not every name of the boot; and bulk reports (the registry's
 `absent key`s, thousands in an Office install) hold at most 384 names
 and 384 entries, so a rarer gap such as a missing DLL still finds room
-for its name between two dumps.
+for its name between two dumps. Whether those caps are right is in the
+dump: `?bulk` lines are the caps working as meant, while a `?full` line
+of a rarer kind says a gap was lost and the caps need revisiting.
 
 - The dispatcher records unknown services and, generically, any
   STATUS_INVALID_INFO_CLASS (with the class argument, per
@@ -382,7 +392,16 @@ for its name between two dumps.
 - Lines `ledger: {"service":..,"what":..,"detail":..,"hits":..}` are
   dumped after each program, before `boot ok` and in a state dump.
 - gala's user-mode DLLs record through ntdll's `GalaRecordMissing`
-  (`dll!function` names, 64 characters kept). The Windows Runtime's:
+  (`dll!function` names, 64 characters kept). Its kinds: `missing
+  export`, `unsupported`, `not implemented` (a gap the caller is told
+  about and lives with), `missing dll`, `load failed` (a DLL the loader
+  found and could not load, its detail the status: what names the DLL
+  behind a process that dies STATUS_DLL_INIT_FAILED), `stub` (an export
+  that only reports itself and ends the process, `gala_stubs`) and
+  `other`. Both
+  `stub` and `not implemented` are also logged as they happen, because a
+  run cut short by a snapshot never dumps the ledger; only `stub`'s line
+  says the process ended. The Windows Runtime's:
   `ole32.dll!RoGetActivationFactory(<class>)` for a class it cannot
   activate, with a reason in the name when the registration was found
   (`(server DLL not found)`, `(no DllGetActivationFactory)`, `(the DLL
@@ -665,7 +684,8 @@ CPU) before killing the VM and waits up to 20 s for the dump:
 xtask's line says how far the dump got (`did not answer the NMI`: the
 machine is wedged or the handler is not installed yet).
 `XTASK_TIMEOUT=<s>` shortens any scenario's timeout to get a hang's dump
-quickly. In gala-um, SIGQUIT (`timeout -s QUIT`) prints part 2. Scenario
+quickly. In gala-um, SIGQUIT (xtask sends it at a run's deadline)
+prints part 2. Scenario
 `statedump_test` (a program that hangs on purpose; also in um-test).
 
 ### Crash reports (programs)
@@ -827,19 +847,22 @@ time". What it leaves behind:
 - `tsc: ... from HPET ..., 5 samples (n paused, n outliers), spread x%`,
   the phase `tsc_mhz` and a `clock_cal` event: how the TSC was
   calibrated (bracketed samples against the HPET / PM timer, median).
-- A kernel thread checks the TSC against the CMOS RTC after boot and
+- A kernel thread checks the cycle counter (the TSC; aarch64's generic
+  counter) against the RTC (the CMOS RTC; the PL031) after boot and
   recalibrates when they disagree: `clock: RTC check: agrees` or `clock:
   WRONG`, and `clock_wrong` / `clock_recalibrated` events.
 - xtask (`xtask/src/clockcheck.rs`) times every `uptime_ms=` mark against
   the host, in a thread of its own that reads the serial log every 20 ms:
   `xtask: clock: <source>: guest N ms over host A..B ms` (the mark's poll
-  window) or `xtask: clock: WRONG: ...`. The triage reports both, and a
-  failure in a boot whose clock was wrong says so in its verdict.
+  window) or `xtask: clock: WRONG: ...`; a `clock: recalibrated:` line
+  starts the marks again (the guest's time until then was known wrong).
+  The triage reports both, and a failure in a boot whose clock was wrong
+  says so in its verdict.
 - Every boot ends with `xtask: vm time: <run> run of <wall> wall (<w>
   waiting for a host CPU)`: what its time limit counted
   (`xtask/src/vmtime.rs`); a timeout says which limit it hit.
-- Scenarios `clockcal_test` (host CPUs kept busy, `calstall`) and
-  `clockcal_recal` (`calwrong`).
+- Scenarios `clockcal_test` (host CPUs kept busy, `calstall`),
+  `clockcal_recal` and `arm_clock` (`calwrong`).
 
 ### Early boot
 

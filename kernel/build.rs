@@ -1,7 +1,12 @@
 fn main() {
     // Only the bare-metal kernel binary uses the linker script; host unit-test
     // builds of the library link normally.
-    if std::env::var("TARGET").as_deref() == Ok("x86_64-unknown-none") {
+    let target = std::env::var("TARGET");
+    if target.as_deref() == Ok("aarch64-unknown-none-softfloat") {
+        let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        println!("cargo:rustc-link-arg-bins=-T{dir}/linker-aarch64.ld");
+    }
+    if target.as_deref() == Ok("x86_64-unknown-none") {
         let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         println!("cargo:rustc-link-arg-bins=-T{dir}/linker.ld");
         // What a hot swap of the kernel into a resumed snapshot diffs
@@ -37,4 +42,5 @@ fn main() {
         Ok(other) => panic!("GALA_KERNEL_VARIANT={other}: hotswap_v2 or hotswap_layout"),
     }
     println!("cargo:rerun-if-changed=linker.ld");
+    println!("cargo:rerun-if-changed=linker-aarch64.ld");
 }

@@ -161,6 +161,7 @@ pub struct MpRequest {
 }
 
 /// `struct limine_mp_response` (x86_64).
+#[cfg(not(target_arch = "aarch64"))]
 #[repr(C)]
 pub struct MpResponse {
     pub revision: u64,
@@ -170,9 +171,38 @@ pub struct MpResponse {
     pub cpus: *const *const MpInfo,
 }
 
+#[cfg(not(target_arch = "aarch64"))]
+impl MpResponse {
+    /// The bootstrap processor's hardware id (its local APIC id).
+    pub fn bsp_id(&self) -> u64 {
+        u64::from(self.bsp_lapic_id)
+    }
+}
+
+/// `struct limine_mp_response` (aarch64): the BSP's MPIDR affinity fields
+/// (Res1, U and MT masked off).
+#[cfg(target_arch = "aarch64")]
+#[repr(C)]
+pub struct MpResponse {
+    pub revision: u64,
+    pub flags: u64,
+    pub bsp_mpidr: u64,
+    pub cpu_count: u64,
+    pub cpus: *const *const MpInfo,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl MpResponse {
+    /// The bootstrap processor's hardware id (its MPIDR affinity).
+    pub fn bsp_id(&self) -> u64 {
+        self.bsp_mpidr
+    }
+}
+
 /// `struct limine_mp_info` (x86_64). An AP spins until `goto_address` is
 /// written, then jumps there with `rdi` pointing at this structure, on a
 /// bootloader stack and with the bootloader's page tables and GDT.
+#[cfg(not(target_arch = "aarch64"))]
 #[repr(C)]
 pub struct MpInfo {
     pub processor_id: u32,
@@ -182,7 +212,35 @@ pub struct MpInfo {
     pub extra_argument: core::sync::atomic::AtomicU64,
 }
 
+/// `struct limine_mp_info` (aarch64): the processor's MPIDR affinity; an AP
+/// waits until `goto_address` is written (the port starts them, ROADMAP
+/// AR).
+#[cfg(target_arch = "aarch64")]
+#[repr(C)]
+pub struct MpInfo {
+    pub processor_id: u32,
+    reserved1: u32,
+    pub mpidr: u64,
+    reserved: u64,
+    pub goto_address: core::sync::atomic::AtomicU64,
+    pub extra_argument: core::sync::atomic::AtomicU64,
+}
+
+#[cfg(target_arch = "aarch64")]
 impl MpInfo {
+    /// The processor's hardware id (its MPIDR affinity).
+    pub fn hw_id(&self) -> u64 {
+        self.mpidr
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+impl MpInfo {
+    /// The processor's hardware id (its local APIC id).
+    pub fn hw_id(&self) -> u64 {
+        u64::from(self.lapic_id)
+    }
+
     /// An entry of the kernel's own, in the same layout, for an AP the
     /// kernel starts itself (`arch::smp`: one the bootloader missed).
     pub const fn new(processor_id: u32, lapic_id: u32) -> Self {

@@ -109,7 +109,8 @@ In order, after it:
 10. **LN**: lints before every commit (the owner: quality built in
     before committing, not found later).
 11. **PT**: the portability seams for a second architecture (the owner:
-    the ARM64 port itself later): the kernel's done, user mode's next.
+    the ARM64 port itself later): the kernel's and the DLLs' done; ntrt
+    and the test programs come with AR's user mode.
 12. **On the Windows machine under KVM** (the owner): the performance
     profile and the optimization after it, in one chunk with BR's
     conformance blockers (item 0) and BR stage 1's hotspots: gala boots
@@ -158,7 +159,7 @@ has a section under "Open items".
 | U5 | gala-um: a window on the host | planned | the desktop in a host window (X11/Wayland), with its input; headless in um-test |
 | U6 | Windows applications in CI through gala-um | planned | a Windows app and its FlaUI tests headless in a stock GitHub Actions runner; needs U4 and U5 |
 | LN | Lints before every commit | in progress | `cargo xtask lint` from a committed pre-commit hook: architecture code, check-then-sleep, split atomic operations, hard-coded answers |
-| PT | Portability seams for a second architecture | in progress | the kernel's seam done (`arch`'s interface, the per-architecture ABIs `nt::abi`/`lx::machine`, an aarch64 stub CI checks); user mode's next; the ARM64 port itself is in "Later" |
+| PT | Portability seams for a second architecture | in progress | the kernel's seam done (`arch`'s interface, the per-architecture ABIs `nt::abi`/`lx::machine`, an aarch64 stub CI checks); gala's DLLs built for ARM64 in CI (stubs where the port is needed); ntrt and the test programs with AR; the ARM64 port itself is in "Later" |
 | HS | Hygiene sweeps | parked | first sweep and its four leftovers done; no further sweeps until gala runs live (the owner) |
 
 ### NT core services (done, by test)
@@ -200,9 +201,9 @@ has a section under "Open items".
 | WD | Windows divergences: the test programs on real Windows | in progress | triage in `user/windows/` (build 26200); the first fixes done; probes to come back |
 | LX | Linux personality | in progress | seams 2, 3, 6 and milestone 1 done, seam 4's Linux side (links, case-sensitive directories, modes kept); static busybox runs (milestone 2), TCP sockets, threads, futex, epoll; file mappings, glibc's dynamic programs (LD step 1); seam 5's first core object, AF_UNIX sockets, and memfd (LD step 2) |
 | CT | Linux containers: Docker Desktop and Podman over a WSL facade | planned | spec recordings first; needs LX beyond milestone 5 |
-| LD | Desktop Linux applications | in progress | step 1: dynamically linked glibc programs run through ld.so (`lx_dyn`); step 2: memfd and AF_UNIX sockets with SCM_RIGHTS (`lx_memfd`, `lx_unix`), the Wayland wire format (`wl_abi`) and the first in-kernel Wayland server (wl_compositor, wl_shm, xdg_wm_base, wl_output; toplevels as desktop windows: `lx_wl`), wl_seat input and window control (`lx_wl_input`), weston-simple-shm (`lx_simple_shm`), popups (`lx_wl_popup`); step 3: the first GTK program, its window drawn and clicked (`lx_gtk`, GTK 3 on a Linux root of Ubuntu's packages); step 5: X11 programs through rootless Xwayland, gala its window manager, xterm on a pty (`lx_xterm`), GTK under X11 (`lx_gtk_x11`); step 6's first part: a distribution's desktop in one window (`lx_xdesktop`); step 7: Linux distributions in the start menu (`linux_menu`); next after them: GIMP (step 9) |
-| AR | ARM64 port | planned | the kernel's aarch64 `arch` on QEMU `virt`, then ARM64 Windows and Linux user mode |
-| XT | 64-bit Windows programs on ARM64 | planned | dynamic binary translation of x64 code; after AR |
+| LD | Desktop Linux applications | in progress | step 1: dynamically linked glibc programs run through ld.so (`lx_dyn`); step 2: memfd and AF_UNIX sockets with SCM_RIGHTS (`lx_memfd`, `lx_unix`), the Wayland wire format (`wl_abi`) and the first in-kernel Wayland server (wl_compositor, wl_shm, xdg_wm_base, wl_output; toplevels as desktop windows: `lx_wl`), wl_seat input and window control (`lx_wl_input`), weston-simple-shm (`lx_simple_shm`), popups (`lx_wl_popup`); step 3: the first GTK program, its window drawn and clicked (`lx_gtk`, GTK 3 on a Linux root of Ubuntu's packages); step 5: X11 programs through rootless Xwayland, gala its window manager, xterm on a pty (`lx_xterm`), GTK under X11 (`lx_gtk_x11`); step 6's first part: a distribution's desktop in one window (`lx_xdesktop`); step 7: Linux distributions in the start menu (`linux_menu`); step 9: GIMP 3.2 in batch mode, its saved file Ubuntu 26.04's byte for byte (`lx_gimp_batch`; System V shared memory: `lx_shm`; sysinfo: `lx_sysinfo`), and on the desktop: its window, in.png opened, Colors > Invert and File > Export, the exported file Ubuntu 26.04's byte for byte (`lx_gimp`); next: all of GIMP's plug-ins |
+| AR | ARM64 port | in progress | the aarch64 kernel boots on QEMU `virt` through its own page tables, GIC, tick, scheduler and second CPU (`arm_boot`, `arm_sched`), its exceptions reported (`arm_fault_*`); next the drivers, then ARM64 Windows and Linux user mode |
+| XT | 64-bit Windows programs on ARM64 | planned | dynamic binary translation of x64 code, then 32-bit x86 (WOW64 on ARM; Office's x86 installer); after AR |
 | AN | Android applications | planned | binder, ART, SwiftShader graphics; x86_64 images first |
 
 ### Desktop, sessions and remote access
@@ -386,7 +387,8 @@ flagged and one that must not):
    CI's Clippy commands, read from ci.yml's Clippy step (one list), and
    the committed pre-push hook runs it.
 2. Architecture code only in `kernel/src/arch`: done, the kernel's
-   clippy for `aarch64-unknown-none` (item PT; in the pre-push run).
+   clippy for `aarch64-unknown-none-softfloat` and gala's DLLs' clippy and build
+   for `aarch64-pc-windows-msvc` (item PT; in the pre-push run).
 3. No check-then-sleep: `wait-site` (done) allows the kernel's raw
    `prepare_wait` only at the reviewed sites (each registers and tests
    its condition under the lock its waker takes); a new one needs a
@@ -418,13 +420,12 @@ in WORKFLOW "Rules for every change"):
 - The kernel (steps 2 and 3): everything architecture-specific is behind
   `arch`'s interface, x86_64 its one implementation and aarch64 a stub
   that compiles; CI's Clippy step checks the kernel for
-  `aarch64-unknown-none` (with and without `shasha`), so an x86
+  `aarch64-unknown-none-softfloat` (with and without `shasha`), so an x86
   assumption outside `arch` fails the build. The register frames
   (`UserRegs`, `SyscallFrame`, `TrapFrame`) keep their fields private to
   `arch` behind neutral accessors; the clock reads `cpu::cycles` and
   drives `arch::timer`; the boot steps, phase names, per-CPU snapshot and
-  NMIs are `arch`'s; PCI and virtio are shared over `pci_config` and
-  `port`. Windows' x64 ABI is `nt::abi::x64` (CONTEXT, argument
+  NMIs are `arch`'s; PCI and virtio are shared over `pci_config`. Windows' x64 ABI is `nt::abi::x64` (CONTEXT, argument
   registers, thread starts, exception and APC frames, the CONTEXT
   services, KUSER_SHARED_DATA's processor fields, CPUID's registry
   values, the crash report's registers); Linux's x86-64 ABI is
@@ -432,18 +433,32 @@ in WORKFLOW "Rules for every change"):
   signal frame) with the system call table `lx/syscalls.rs`; their
   aarch64 counterparts are stubs. gala-um is x86_64-only
   (`compile_error!` elsewhere).
+- User mode (step 1): gala's DLLs build for `aarch64-pc-windows-msvc`;
+  CI's Clippy step runs Clippy and a build for them (a build, because
+  Clippy does not assemble inline assembly: x86 `asm!` outside the
+  per-architecture modules then fails). kernel32, msvcrt (and ucrtbase)
+  and ntdll have an `aarch64.rs` beside `x64.rs`/`x86.rs` (kernel32's
+  64-bit layouts shared in `win64.rs`); the other DLLs reach the TEB
+  through x18 and take 64-bit layouts by pointer width. Filled in: the
+  TEB, ARM64's CONTEXT layout and a new thread's context, SLIST_HEADER
+  with an exclusive pair, the memory routines and `__chkstk`, ntdll's
+  system call stubs on the kernel stub's convention (number in x8,
+  `svc #0`). Recorded and ending the process (`unported`): the processor
+  number, FPCR and the FP status, rpcrt4's guarded calls and server
+  routine calls, the APC dispatcher (traps); not built for ARM64:
+  ntdll's exception dispatch and unwinding (`seh.rs`, x64's unwind
+  format), kernel32's CONTEXT buffers and XState functions
+  (`context.rs`), msvcrt's variadic functions, setjmp/longjmp and
+  rpcrt4's NdrClientCall2, each ARM64's own (item AR). Unverified until
+  the port records them on ARM64 Windows: GetSystemInfo's processor
+  type (0 for now) and SLIST_HEADER's header bits (x64's for now).
 
 **Next**:
-1. User mode: gala's DLLs compiled for `aarch64-pc-windows-msvc` where
-   they have no architecture-specific code, as the same guard. Their x86
-   parts: ntdll's (`user/testntdll`) and ntrt's x64/x86 modules (system
-   call stubs, context, unwinding), kernel32's `x64.rs` and `x86.rs` (a
-   new thread's context).
+1. User mode's rest: ntrt (the test programs' runtime: system call
+   stubs, context) and the test programs for ARM64, with item AR's
+   user mode. wow64 is x86 on x64 by nature and is not built for ARM64.
 2. The kernel's remaining x86-shaped parts, each named here with why it
    stays for now:
-   - `mm::paging` is x86-64's page-table format (entry bits, PAT), kept
-     outside `arch` so the mapper is host-tested; ARM64's (VMSAv8
-     descriptors, MAIR) moves it behind `arch` with the port.
    - The user thread-pointer bases keep x86-64's names in `sched`, the
      platform traits and `percpu` (`gs_base`, `fs_base`, `teb32`), as
      does the floating-point control register (`mxcsr`: NtCreateThread's
@@ -476,7 +491,10 @@ time, instead of waiting for flaky scenarios to point at each one.
   dispatcher lock; the console's `settle` reset `input_ready` after
   checking the queue in an earlier lock hold; and the out-of-order
   IrqMutex release detector was added (debug kernels panic: `lockdep:
-  releasing X turns interrupts on while Y is still held`).
+  releasing X turns interrupts on while Y is still held`, each lock with
+  the thread that took it), beside the check that catches the cause
+  itself: `sched::schedule` panics when the thread giving up its CPU
+  still holds a lock.
 - Checked and found sound: the scheduler's `prepare_wait`/`wait`/`wake`
   protocol (preemption between them included), `on_cpu`, KArc's counts,
   the heap's and frame allocator's single locks, keyed events,
@@ -1648,10 +1666,58 @@ need gala's.
 **Next**:
 1. The load list above, test first (a kernel32/ntdll test program for
    the functions, expected results from Windows), until the three
-   apps' processes start in gala with Office's files in place; a
-   scenario that boots them, with the files gala's own install put
-   there (the owner: no files from elsewhere; the native install below
-   comes first).
+   apps' processes start in gala with Office's files in place. The
+   scenarios that boot them are there: `office_word` and `office_excel`
+   (MANUAL, WORKFLOW "Word and Excel on gala's own install"), each on a
+   copy of the disk `office_install_local` installed on -- Word makes a
+   document from a template of that install, Excel opens the blank
+   workbook it put in its shell-new folder, so no file comes from
+   anywhere else (the owner). The screen checks they end in are
+   written (`OFFICE_WORD_SCREEN`, `OFFICE_EXCEL_SCREEN`): the window
+   Windows draws, checked where the program is free to put it -- at
+   least a tenth of the 1280 x 800 screen flat white (Word's page,
+   Excel's cells; the bare desktop has 0.008% of it, the wallpaper's
+   brightest) and the active window's pill on the taskbar, which the
+   bare desktop has nothing near -- then Alt+F4, and consolerun ends
+   with the app's own status, 0.
+   Both runs end the same way today: the process starts, asks the SCM
+   to start `ClickToRunSvc`, and dies 0xc0000142
+   (STATUS_DLL_INIT_FAILED) after 85 s without a window. The ledger's
+   25 missing `c2r64.dll!` exports are not the reason: they are the
+   AppV ISV shim's optional hooks (`EnsureFile`, `LoadRange`,
+   `StreamFault`, `HandleLoadIconW`, ...), and the real `C2R64.dll` the
+   ClickToRun directory holds exports none of the 25 either (101
+   exports, measured), so the same probes miss on Windows. A DLL that
+   is found and will not load is named in the ledger now (`what` "load
+   failed", its status the detail), so the next run names the DLL the
+   death is about. Two things, both next:
+   - Under the Office root Windows has 16 reparse points (`C2R32.dll`,
+     `C2R64.dll`, `AppvIsvSubsystems32.dll`, `AppvIsvSubsystems64.dll`,
+     each in `\Client`, `\Office16`,
+     `\vfs\ProgramFilesCommonX64\Microsoft Shared\Office16` and
+     `\vfs\ProgramFilesX86\Microsoft Office\Office16`) whose target is
+     the file of the same name in
+     `C:\Program Files\Common Files\Microsoft Shared\ClickToRun`.
+     Gala's install holds that directory's real DLLs, Windows' sizes to
+     the byte, but has the 16 as plain empty files: what makes them is
+     the integration step that fails (`ConfigureMSIs`, "Final
+     Extensions Publishing", 1603 and Integrator 0x643 below), which
+     waits on PK's MSI engine.
+   - 21 of the 247 user32 functions `mfc140u.dll` imports are not
+     among gala's user32 exports: CheckRadioButton, GetDlgItemInt,
+     GetMenuCheckMarkDimensions, GetMenuDefaultItem,
+     GetNextDlgGroupItem, GetTabbedTextExtentW, GrayStringW,
+     InvalidateRgn, IsCharLowerW, IsDlgButtonChecked, LoadMenuW,
+     LockWindowUpdate, RealChildWindowFromPoint, ReuseDDElParam,
+     SendDlgItemMessageA, SetDlgItemInt, SetMenuItemBitmaps,
+     SetWindowContextHelpId, TabbedTextOutW, UnpackDDElParam and
+     WinHelpW. They are static imports, so none of them binds and
+     Office's MFC DLL does not load at all;
+     `GetMenuCheckMarkDimensions` is the last gap the ledger records
+     before Word dies. Test first, with Windows' results (measured:
+     `GetMenuCheckMarkDimensions` answers 0x000f000f, the check mark's
+     15 x 15, where gala's `GetSystemMetrics` answers 0 for
+     SM_CXMENUCHECK and SM_CYMENUCHECK).
    - The UCRT (the owner's decision: gala's own; also the answer to
      PK's AIChat UCRT question): gala's own `ucrtbase.dll` (the `api-ms-win-crt-*` sets
      resolve to it), x64 and x86, msvcrt's source with the UCRT's own
@@ -2143,7 +2209,16 @@ need gala's.
      lay out from the disk because every page read walked the whole tree
      to let pages go while other uses held the memory; done: a futile
      eviction is not repeated until pages could leave (ARCHITECTURE "A
-     disk-backed C:"). Where the fast path ends now (about 1600 s):
+     disk-backed C:"). A residue of it is measured: laying out one
+     36 MiB image still spent 22.3 s inside a single NtCreateSection
+     (the flight recorder's unmatched `syscall` on CPU 1, which is what
+     the watchdog then reported -- not a livelock: the call finished and
+     the process exited 0), with 142 MiB of frames free and no cluster
+     read failing. To do: page-in drops the answer `RamFs::fill` gives
+     it, so it cannot tell a page it failed to keep from one it kept,
+     and it says nothing when it reads the same cluster again -- an
+     unbounded retry with no log of its own.
+     Where the fast path ends now (about 1600 s):
      APPLYCONFIGURATION publishes the staged files with hard links
      (`fileops::HardlinkOperation`), which fail (kernel32's CreateHardLinkW
      is unsupported, ERROR_NOT_SUPPORTED; NtSetInformationFile has no
@@ -2387,10 +2462,148 @@ need gala's.
      "wintrust: Authenticode", trust provider registration), the
      documented entries under
      `HKLM\Software\Microsoft\Cryptography\Providers\Trust`, test
-     first in `actionid_test`. Next: the install's next blocker, found
-     from a snapshot taken at integrator.exe's start. A failure there fails the install as before: the service ends with 17002 and setup.exe with
-     0x426a (17002, "C2RClient returned a failing exit code"). Seen
-     too, not fatal so far: `slc.dll` a missing DLL (loaded by name at
+     first in `actionid_test`. The run's third integrator.exe then died
+     of 0xc06d007f on `msi.dll` ordinal 92, which is MsiOpenDatabaseW
+     read from Windows' own export directory on this machine (build
+     26200; the method checked by reading back the nine ordinals msi
+     already carries, all of which matched): it opens an installer
+     database. Done: msi's MsiOpenDatabaseW, x64 and x86 -- the modes
+     that only open (READONLY, TRANSACT, DIRECT) open the file for
+     reading; ERROR_OPEN_FAILED for a path that is not there and for a
+     file that is not a database alike; ERROR_CREATE_FAILED for a create
+     mode and for a persist path, recorded in the ledger as the gap it
+     is; ERROR_INVALID_PARAMETER without a path, with an empty one or
+     without a handle; the handle set to 0 except where the NULL path
+     pointer is refused before it is touched -- test first in `msi_test`
+     and `wow64_msi_test` (every answer measured on this machine's
+     Windows 11 build 26200, both widths). Two answers are deliberately
+     not Windows'. Asked to create a database where it can, Windows
+     creates one (16 KiB, measured) and gala does not, a database engine
+     being galapkg's business (ROADMAP PK), not msi.dll's. And Windows
+     keeps bookkeeping per database file which gala does not: while one
+     is open, a second open of the same file is refused
+     (ERROR_CREATE_FAILED for another read-only one, ERROR_OPEN_FAILED
+     for a writing one, both measured) where gala opens it, so the test
+     asks the open modes with no other handle on the file.
+     A failure there fails the install as before: the
+     service ends with 17002 and setup.exe with 0x426a (17002,
+     "C2RClient returned a failing exit code") -- at 90%
+     of the scenario's progress, the uninstall-centennial, migrate and
+     fonts tasks done (the fonts task lays down Office's TTFs and TTCs
+     and succeeds), the service going quiet for the 30 s in which the
+     integrator dies and then setting its failure event. Everything
+     from APPLYCONFIGURATION on is measured with the guest's egress
+     blocked (`restrict=y`, by hand and not checked in), because
+     setup.exe with egress reaches the configuration service 3 s in and
+     reads its answer with webservices.dll. That is why webservices came
+     first of the two blockers: without it no run that behaves like a
+     real install gets as far as the integrator, and a snapshot of that
+     point cannot be taken at all. Done: gala's webservices.dll, x64 and
+     x86 (ARCHITECTURE "Other DLLs", webservices) -- the 15 functions
+     setup.exe delay-loads are the XML reader subset alone (heaps, error
+     objects, a reader over a buffer of text with its settings and its
+     position, WsReadToStartElement, WsReadStartElement,
+     WsReadEndElement and WsReadType under both element mappings; no
+     channel, no service proxy, no security binding), reading the
+     document node by node with `gala_xml`'s `Scan` so that a malformed
+     one fails at the read that reaches it, as Windows' reader does, and
+     reading one node ahead as Windows' reader does, which is what its
+     ROW and COLUMN show; test first in `webservices_test` and
+     `wow64_webservices_test`, every answer measured on this machine's
+     Windows 11 build 26200 in both widths.
+     With webservices in place, the first run from boot with egress on
+     the owner's Windows machine under KVM (Intel i9-8950HK, 2 vCPUs;
+     2558 s of VM time of the 3600 s limit, nothing waiting for a host
+     CPU) got through the download, STAGEREGISTRY,
+     UNINSTALLCENTENNIAL and APPLYCONFIGURATION's publish, Migrate and
+     Fonts, to 92% of the scenario's progress, with Office's files
+     published on disk: WINWORD.EXE and EXCEL.EXE are among the
+     10 985 files, under `%ProgramFiles%\Microsoft Office\root\Office16`
+     -- and
+     then failed in the integrator's last task, which reads the MSIs it
+     is handed: `C2RManifest::ConfigureMSIs`, "MsiAPICallFailure
+     (MsiOpenDatabase call failed. , Error:0x6e)", ErrorCode 30050, for
+     `Integrator Mode[Install] Scope[Global] Phase[Complete]
+     Scenario[C2R] Actions[Extension Msi ]
+     Msi[C2RInt.16.msi,C2RIntLoc.en-us.16.msi,*]`. 0x6e is
+     ERROR_OPEN_FAILED, which is what gala's MsiOpenDatabaseW answered
+     every database with until it could read one. integrator.exe exits
+     30050 twice, the C2R task fails, and the service and setup.exe end
+     with 17002.
+     Done: reading an installer database. What Office asks of one is
+     bounded, from the names Integrator.exe looks up at run time (it
+     imports msi.dll from no import directory): MsiOpenDatabase,
+     MsiDatabaseIsTablePersistentW, MsiDatabaseOpenViewW,
+     MsiViewExecute, MsiViewFetch and MsiRecordGetStringW, and the
+     queries in it are ``SELECT * FROM `Feature` `` and ``SELECT * FROM
+     `Property` `` -- a reader for the container and the two tables, and
+     a query that selects a whole table, not an engine. That is what
+     msi.dll's `db` is, over galapkg's MSI reader: handles, views with a
+     cursor, records, and SELECTs of a whole table or of named columns
+     (ARCHITECTURE "Other DLLs", msi). Test first in `msi_test` and
+     `wow64_msi_test` over the checked-in fixture
+     (`user/galapkg/testdata/msi/basic.msi`, so the one program runs
+     both on Windows and in gala), every answer measured on this
+     machine's Windows 11 build 26200 in both widths -- three of them
+     answers the documentation does not suggest: a field past the
+     record's last reads as empty rather than failing,
+     MsiRecordGetStringW reports the length it needs when it is given no
+     buffer, and a fetch past the last row returns ERROR_NO_MORE_ITEMS
+     and rewinds the cursor.
+     Not there yet, each recorded in the ledger where a program asks for
+     it: a query with a WHERE or an ORDER BY (Windows runs it, gala
+     refuses it as ERROR_BAD_QUERY_SYNTAX and records that the query was
+     not understood rather than wrong), the query parameters a record
+     stands in for, and any query that changes a database
+     (ERROR_FUNCTION_FAILED, which is Windows' own answer for a database
+     opened read-only).
+     With the reader in place the run's third integrator.exe got past
+     ConfigureMSIs and died of 0xc06d007f on `msi.dll` ordinal 88,
+     which is MsiInstallProductW, read from Windows' own export
+     directory on this machine as ordinal 92 was (build 26200; the
+     method checked again by reading back all nineteen ordinals msi
+     already carries, all of which matched): it installs a package.
+     Done: msi's MsiInstallProductW, x64 and x86 --
+     ERROR_INVALID_PARAMETER without a path, ERROR_PATH_NOT_FOUND for
+     an empty one, and for a path that is no package Windows' own
+     answer for why not (ERROR_FILE_NOT_FOUND for a missing file,
+     ERROR_PATH_NOT_FOUND for a missing directory,
+     ERROR_INSTALL_PACKAGE_OPEN_FAILED for a directory and for every
+     other reason an open can fail, ERROR_INSTALL_PACKAGE_INVALID for a
+     file that is not a package) -- test first in `msi_test` and
+     `wow64_msi_test` (every answer measured on this machine's Windows
+     11 build 26200, both widths). One answer is deliberately not
+     Windows': a package gala does read it cannot install, an installer
+     engine being galapkg's business (ROADMAP PK), so it answers
+     ERROR_INSTALL_FAILURE, Windows' own code for an install that
+     failed, and the ledger carries which package was asked for. The
+     export is there all the same because the import is delay-loaded:
+     an unresolved one ends the process before it can handle anything,
+     where a refusal it can see leaves it to report the failure.
+     With the export in place the run from boot (the owner's Windows
+     machine under KVM, 2 vCPUs, 1229 s of VM time) gets past the delay
+     load and the blocker moves to the install itself: the third
+     integrator.exe runs its ConfigureMSIs task for 314 s instead of
+     dying, asks MsiInstallProductW for `C:\Program Files\Microsoft
+     Office\root\Integration\C2RInt.16.msi` and
+     C2RIntLoc.en-us.16.msi, and takes ERROR_INSTALL_FAILURE for a
+     retryable error (EnsureMsiNotBusy and InstallMsi eleven times over
+     five minutes, then "Install of MSI encountered a retryable error
+     but no time remains for retry."); ConfigureMSIs then fails 1603 and
+     Integrator::Main ends 0x643, a fourth pass does the same for 302 s,
+     and the service and setup.exe end with 0x426a as before. The
+     registry holds 42 907 keys by then, against 22 291 at the
+     ordinal-88 death. Next: those two integration MSIs have to be
+     installed, which means galapkg's engine behind MsiInstallProductW
+     (ROADMAP PK) and not another answer -- Office retries 1603, so no
+     refusal gets the install further.
+     Seen too, not fatal so far: `wevtutil.exe` is absent, so the
+     integrator's InstallEtwManifest aborts (ErrorCode 2) and carries
+     on; `schtasks.exe` is absent, so PublishCustomExtension cannot
+     delete the "Office Feature Updates" task and carries on;
+     `InspectorOfficeGadget.exe` cannot start nine times (0xc0000135,
+     no .NET Framework); `OfficeC2RClient.exe` exits 1. And: `slc.dll`
+     a missing DLL (loaded by name at
      run time), Office's product key not decoded by gala's sppc
      (SLInstallProofOfPurchase answers SL_E_INVALID_PRODUCT_KEY; no
      run has called it yet), and osppcext.dll!SLActivateProduct
@@ -2514,8 +2727,9 @@ need gala's.
      TRUE and STATUS_SUCCESS;
      then the other DLLs
      setup.exe imports that gala has no i686 build of (xmllite,
-     webservices, cabinet, credui, and osppc.dll, which is the system's
-     sppc.dll, gala's being x64 only so far) and the functions its imports lack (shell32's
+     cabinet, credui, and osppc.dll, which is the system's sppc.dll,
+     gala's being x64 only so far) and the
+     functions its imports lack (shell32's
      SHGetSettings, user32's CheckRadioButton,
      iphlpapi's CreateSortedAddressPairs); BITS (the
      BackgroundCopyManager it asks for: absent, survived); WinINet's
@@ -3353,9 +3567,10 @@ milestone, test first against real Linux (CLEAN_ROOM "Linux").
 
 **Next**:
 1. Milestone 2's rest: the rest of signal_test and fork_test
-   (rt_sigqueueinfo, sigaltstack, faults as SIGSEGV/SIGBUS/SIGFPE
-   through the exception path, delivery to a thread running user code,
-   stop/continue, process groups and sessions, waitid, rusage), vfork
+   (rt_sigqueueinfo, faults as SIGSEGV/SIGBUS/SIGFPE through the
+   exception path, delivery to a thread running user code,
+   stop/continue, process groups and sessions, waitid's stopped and
+   continued children, rusage), vfork
    sharing memory;
    execve ending the other threads first; per-thread CPU time
    for clock_test's CPU clocks; wait queues on sockets instead of their
@@ -3793,7 +4008,8 @@ the next breakthroughs).
 5. X11 programs through Xwayland: rootless Xwayland, xterm and a GTK
    program under X11 are done (above); next, a distribution's GTK
    application under X11. Open, each test first: SysV and
-   POSIX shared memory (MIT-SHM; nothing has reached it yet),
+   POSIX shared memory (System V's done for GIMP: `lx_shm`; MIT-SHM's
+   use of it and `/dev/shm` not reached yet),
    `/proc/<pid>/cmdline` (Xwayland names its clients by it), the X
    selections and the clipboard bridged to the desktop's,
    `_NET_WM_STATE` (maximize, full screen) for X windows,
@@ -3849,16 +4065,69 @@ the next breakthroughs).
    (user namespaces, seccomp-bpf; shares CT's namespace work) so
    `--no-sandbox` goes, and the clipboard between the two browsers
    (`wl_data_device` bridged to the Windows clipboard).
-9. GIMP on Linux (the owner): a distribution's GIMP (Ubuntu 24.04's
-   GTK 3 build, its packages as a `LINUX_ROOTS` root) started on the
-   desktop, opening an image, applying a filter and saving it, in a
-   boot scenario with a screen check, the saved file compared with the
-   one GIMP writes on real Linux. Expected blockers, each a Linux test
-   program recorded on real Linux first: its plug-ins as separate
-   processes talking over pipes (fork/exec, `pipe2`, `poll`), GEGL's
-   and babl's worker threads and their caches under `~/.cache`,
-   fontconfig and fonts, GSettings schemas and the icon theme (step
-   4's), D-Bus optional.
+9. GIMP on Linux (the owner): a distribution's GIMP (Ubuntu 26.04 LTS's
+   3.2.2, a GTK 3 program: its window over gala's Wayland server)
+   started on the desktop, opening an image, applying a filter and
+   saving it, in a boot scenario with a screen check, the saved file
+   compared with the one GIMP writes on real Linux. Done: GIMP in batch mode (`lx_gimp_batch`, the Linux root "gimp"
+   beside "gtk3" and "x11"; WORKFLOW "GIMP"): the console GIMP 3.2 loads
+   its data and a PNG through its file-png plug-in, blurs and inverts it
+   with GEGL from script-fu (each plug-in a process, tiles handed over in
+   a System V segment) and saves a PNG whose SHA-256 is the one GIMP
+   writes on Ubuntu 26.04, its whole transcript Ubuntu's. Its window
+   (`lx_gimp`, `user/lx/gimp/gui.sh`): GIMP 3.2 over gala's Wayland
+   server, its window and its welcome dialog shown, the dialog closed with
+   Escape, in.png opened (the title names it: `desktop: window titled`)
+   and painted on the canvas (its orange rectangle checked), Colors >
+   Invert (GIMP's action search; the rectangle blue), File > Export As
+   out.ppm, Ctrl+Q and Discard Changes: the exported file's SHA-256 is the
+   one the same keys give on Ubuntu 26.04 (the transcript); what it
+   needed:
+   `/proc/<pid>/fd` links (GLib names an icon file by its link for
+   glycin), the GSettings schemas compiled at assembly, GIMP's whole icon
+   theme (GTK aborts on a missing icon), the file-pnm plug-in and the
+   file chooser. Next: all of its plug-ins (about 130 processes queried
+   at a first start); its welcome dialog stays white (not drawn yet).
+   The Linux roots moved to Ubuntu
+   26.04 LTS with it (WORKFLOW "Linux roots from Ubuntu 26.04"): glibc
+   2.43, libffi, libwayland-client, weston and the "gtk3", "x11" and
+   "gimp" roots are resolute's (traced on 26.04), and the scenarios on
+   them pass, `lx_gtk` among them (GTK 3's images through glycin:
+   bubblewrap fails as on an unprivileged Linux without user namespaces
+   and glycin runs its loaders unsandboxed, its warning in the
+   scenarios' own transcripts, recorded on 26.04), `lx_xdesktop` and
+   `linux_menu` (termios2; and on 26.04 twm gives the keys to the xterm
+   only with the pointer on it, so their screen checks point first). What
+   26.04 needed that gala lacked, each test first: the ioctls every descriptor
+   answers (`lx_fdioctl`), capget and capset (`lx_caps`), timerfd
+   (`lx_timerfd`), descriptor arguments' upper halves ignored
+   (`lx_fdbits`: glycin's int fds), PR_SET_NO_NEW_PRIVS, PR_GET_AUXV and
+   PR_SET_PDEATHSIG (`lx_prctl`: bubblewrap, uutils' `sleep`, glycin's
+   loaders), /proc's first part and unshare, a namespace refused as Linux
+   refuses it at max_user_namespaces 0 (`lx_procfs`), sigaltstack
+   (`lx_altstack`: Rust's runtime), and an epoll_wait seeing what another
+   thread ADDs or MODs meanwhile (`lx_epoll`: glycin's loader connection,
+   armed from one thread while another waits), termios2 (`lx_pty`:
+   glibc 2.43's isatty asks with TCGETS2), pidfds and waitid (`lx_pidfd`: GLib 2.88 watches each child with a
+   pidfd and reaps it with waitid(P_PIDFD)), /proc/mounts (`lx_procfs`:
+   GIO's mount monitor), inotify (`lx_inotify`: GIO's file monitors),
+   setfsuid and setfsgid (`lx_fsid`), a process's name after execve in
+   the log (`lx_gimp_batch`: `process gimp-console-3.2`), seccomp: strict
+   mode, filters enforced, the probes (`lx_seccomp`). Open: once, in a
+   full parallel run of the `lx_` scenarios, `lx_gimp_batch`'s file-png
+   plug-in (the load of in.png, its result right) printed "gimp_flush():
+   error: Broken pipe" at its end: it wrote after GIMP had closed its
+   pipe. Not seen again in 7 runs (5 beside `lx_gimp`, `linux_menu` and
+   `lx_gtk_x11` with `XTASK_EVENTS=syscall`); the cause is not found yet.
+10. Inkscape (the owner): Ubuntu 26.04's Inkscape 1.4.3 (LINUX_ROOTS
+   "inkscape"), first in batch mode (`lx_inkscape_batch`: in.svg rendered
+   to a PNG Ubuntu's byte for byte; WORKFLOW "Inkscape") and its window
+   (`lx_inkscape`: in.svg drawn on the canvas, Ctrl+Q, exit status 0).
+   It asks to be maximized before its first commit (as weston grants:
+   `lx_wl_maximize`). Next: an edit and an export compared with
+   Ubuntu's. Linux system calls
+   are traced with `events=syscall` (`lx syscall`). Open: rseq is ENOSYS
+   (glibc carries on without it).
 
 **Done when** (each step): its test and scenario pass, and the Linux
 programs' transcripts match real Linux's.
@@ -3913,13 +4182,60 @@ rather than at R2's rate-limited development URL.
 on the seams item PT prepared: native ARM64 Windows programs
 (`aarch64-pc-windows-msvc` PE images) and ARM64 Linux programs.
 
+**Done so far** (design: ARCHITECTURE "The aarch64 port"):
+- The tooling: `cargo xtask qemu` builds the aarch64 emulator beside
+  x86-64's (QEMU's own edk2 firmware with it); `AARCH64_SCENARIOS` boot
+  the aarch64 kernel from the same kind of ISO on `virt`
+  (`Boot::UefiAarch64`), their verdicts as x86-64's (exit through
+  semihosting with the same statuses).
+- The kernel boots to its frame allocator (`arm_boot`, with
+  `stop_after=frames`): the entry (FP/SIMD on, the boot stack on SP_EL1),
+  the exception vectors (`arm_fault_ud`, `arm_fault_pagefault` with
+  `early_fault=`), the PL011 console through a device page added to the
+  bootloader's tables, the processors by MPIDR from Limine's MP response.
+- Its own page tables (`arm_boot` now to `stop_after=paging`):
+  `mm::paging`'s entry encoding is a `Format` (x86-64's `X86`, VMSAv8's
+  `Vmsa`, host-tested bit for bit), one mapper for both; TTBR1 and MAIR
+  switched to the kernel's tables, the device pages carried over.
+- Interrupts and time (`arm_boot` to `stop_after=timer`, the tick seen
+  running): the kernel is soft-float (no FP/SIMD state to save at an
+  interrupt, as x86-64's), the IRQ vectors save and restore a
+  `TrapFrame`, the GICv3 (distributor, this CPU's redistributor, the
+  system-register CPU interface), the generic timer's virtual channel
+  at CNTFRQ_EL0's architected rate, periodic by compare value.
+- Threads (`arm_boot` to `stop_after=sched`; `arm_sched`, and x86-64's
+  `sched_selftest`, with `schedtest`: two threads switched on yields,
+  woken by the tick, joined): kernel stacks, the context switch (with
+  the FP/SIMD state user mode will have), the per-CPU block (TPIDR_EL1).
+- The other CPUs (`arm_boot` to `stop_after=smp_done`: both online, the
+  MADT's GICC entries agreeing): the APs Limine started sent to the
+  kernel's AP entry (stack, tables, per-CPU block, vectors, GIC part,
+  tick), IPIs as SGIs, TLB flushes by broadcast; hardware ids are
+  MPIDR's affinity everywhere.
+- The NT layer's start (`arm_boot` to `stop_after=drivers`): the system
+  call dispatchers and the user-mode hooks kept, KUSER_SHARED_DATA.
+- PCI (`arm_boot`, with a disk and a card attached): configuration space
+  through segment 0's ECAM window from the MCFG (host-tested parser), the
+  virtio-blk and virtio-net drivers set up on their devices through
+  virtio's modern interface (on both architectures).
+- The rest of the boot, to `gala: boot ok` with no program (`arm_boot`
+  to `stop_after=manifest`: the manifest verified): the card's frames
+  both ways (`arm_net_echo`: the kernel's echo server and xtask's
+  client), the disk's requests both ways (`arm_persist`: C: formatted on
+  the disk by a first boot, its area and rollback floor read back by the
+  second).
+- The clock checked against the wall clock (`arm_clock`, with
+  `calwrong`): the PL031 RTC, the check's verdict and the recalibration
+  (CNTFRQ_EL0's rate read again; the RTC's measurement wins over it when
+  they disagree), the log naming the architecture's counter and timer.
+
 **Next**:
-1. The kernel's `arch` for aarch64: boot through Limine's aarch64
-   protocol on UEFI, the exception vectors, the GIC, the generic timer,
-   VMSAv8 page tables behind `arch` (`mm::paging`'s format moves there),
-   the context switch, PSCI for the other CPUs, the PL011 UART. Test
-   first: the boot scenario `hello` reaching its kernel line under
-   `qemu-system-aarch64`.
+1. The rest of the kernel's `arch` for aarch64: the GIC's pseudo-NMI
+   (state dumps, `stop_others`), PSCI CPU_ON for CPUs the bootloader did
+   not start; the UART's and the GIC's addresses from the firmware (SPCR,
+   MADT or the device tree, and the PL031's). Then
+   `hello` reaching its kernel line, which needs step 2's ntdll and the
+   ABI.
 2. User mode: Windows' ARM64 ABI (`nt::abi::arm64`: CONTEXT, the system
    call convention, unwinding) and gala's DLLs built for ARM64; Linux's
    aarch64 ABI (`lx::machine::aarch64`, its system call table).
@@ -3948,6 +4264,15 @@ when it first runs, and cached. After AR runs native programs.
    and the system call boundary translated (the NT layer stays native),
    or gala's system DLLs native with translated code calling into them
    (Windows' documented ARM64EC/ARM64X design).
+4. 32-bit x86 programs on ARM64 (WOW64 on ARM): the same translator
+   with a 32-bit x86 front end (its encoding, a 32-bit address space,
+   x87 as the main FPU). On x86-64 gala WOW64 enters 32-bit code
+   natively (compatibility mode); ARM64 has no such mode, so only the
+   CPU layer changes: WOW64's NT part (`nt/wow64.rs`, already built for
+   every architecture) and the 32-bit system DLLs (x86 code, translated
+   like the program) stay as they are. The end-to-end target: Office's
+   installer, whose `setup.exe` is 32-bit x86 (Microsoft ships that
+   bootstrapper as x86 for ARM64 Windows too).
 
 Open-source translators (FEX-Emu, Box64; MIT) may be read, and anything
 borrowed is recorded in THIRD_PARTY; the clean-room rule is about
@@ -5326,7 +5651,45 @@ Each entry: what, why it matters, the structural fix, the owning item.
   fix: PK stages 4 and 5 (MSIX, MSI), then gala installs winget's
   choice and the fallback goes. Item PK.
 
+- **AFD serves a socket request with the endpoint's lock held**
+  (`nt::afd::try_complete`, `submit`, `cancel`): serving a request copies
+  the program's memory -- `attempt` its buffers, `finish` its
+  IO_STATUS_BLOCK -- while the endpoint's `pending` lock is held, and a
+  copy makes a page that is not there, which reads the file or the disk
+  and waits. That is a lock held across a wait: a kernel panic in a run
+  where the page has been dropped under memory pressure (the state dump
+  held `thread.name` the same way, which is how this came up). The lock
+  is also what keeps a socket's receives, sends, accepts and connects in
+  order, so the copies cannot simply move out of it; the three places
+  carry a `sync::lockdep::UserMemoryUnchecked` guard, which turns off
+  lockdep's check at every copy for them (a copy that does wait still
+  panics, in `none_held_at_switch`). Structural fix: serve one request
+  with the lock let go -- its entry stays in the list with its operation
+  taken out, so the requests of its kind still wait behind it, a cancel
+  that comes meanwhile is answered when the serve ends, and the handover
+  carries no half-served request; then the guards go and the check covers
+  the whole kernel. Item R1 (invariants).
+
 ### Defects known, not yet fixed
+
+- **A lock can be marked held by a thread that is not running**
+  (`sync::lockdep`): a held-lock slot belongs to the CPU and carries the
+  thread that took it, and `none_held_at_switch` panics if a thread
+  gives up its CPU with one held, so a slot's holder should be the thread
+  the CPU runs. Twice it was not, both found by the user-memory check
+  while it still looked at every slot: `memload_test` panicked with the
+  disk's lock (`Option<VirtioBlk>`) marked held by a thread that was
+  running on neither CPU, and `postgres` with a handle table's lock
+  marked held by a thread that was running on the other CPU. Either a
+  take lands in one CPU's slots and its release in another's, or a
+  thread leaves its CPU without the switch check seeing it -- and the
+  second is a real lock held across a wait. Until it is understood the
+  user-memory check only looks at the copying thread's own locks (a copy
+  is not where this is diagnosed), so neither sighting is reported any
+  more; `none_held`'s message already allows for a foreign holder. Where
+  to start: every slot checked at every lock taken, and the flight
+  recorder on the virtio-blk and handle-table paths. Item R1
+  (invariants).
 
 - **An NT delete through a hard link's second name removes the first
   name**: hard links exist (Linux link/linkat, seam 4), but NT's delete

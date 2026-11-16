@@ -826,8 +826,10 @@ impl Host for KernelHost {
         let step = PLACED.fetch_add(1, Ordering::Relaxed) % 8;
         let (x, y) = (64 + 32 * step as i32, 48 + 32 * step as i32);
         let owner = self.pid;
+        let (program, k) = crate::nt::desktop::program_name(owner);
         self.desktop(|d| {
             let id = d.create(owner, x, y, w, h, &text[..n], style)?;
+            d.set_program(id, owner, &program[..k])?;
             let shown = d.show(id, owner, true)?;
             Ok((id, Some(shown)))
         })

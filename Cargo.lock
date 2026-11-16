@@ -1445,6 +1445,8 @@ dependencies = [
 name = "msi"
 version = "0.1.0"
 dependencies = [
+ "gala_heap",
+ "galapkg",
  "ntrt",
 ]
 
@@ -2935,7 +2937,17 @@ checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 name = "webservices"
 version = "0.1.0"
 dependencies = [
+ "gala_heap",
  "gala_stubs",
+ "gala_xml",
+ "ntrt",
+]
+
+[[package]]
+name = "webservices_test"
+version = "0.1.0"
+dependencies = [
+ "ntrt",
 ]
 
 [[package]]
@@ -3339,6 +3351,13 @@ dependencies = [
 
 [[package]]
 name = "wow64_uisettings_test"
+version = "0.1.0"
+dependencies = [
+ "ntrt",
+]
+
+[[package]]
+name = "wow64_webservices_test"
 version = "0.1.0"
 dependencies = [
  "ntrt",

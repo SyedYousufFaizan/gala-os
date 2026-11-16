@@ -58,6 +58,9 @@ const WAIT_SITES: &[(&str, &str)] = &[
     ("lx/fork.rs", "wait_for_exec"),
     // The net thread: KICKED tested after prepare_wait.
     ("net/tcp.rs", "net_thread"),
+    // The timerfd thread: KICKED set by every arming before its wake,
+    // tested after prepare_wait.
+    ("lx/timerfd.rs", "worker"),
     // The Wayland server's thread: it is on every socket's waiters (each
     // change wakes it) and looks at their readiness again after
     // prepare_wait.
@@ -343,6 +346,9 @@ mod tests {
         let c = ci_clippy(&yml);
         assert!(c.len() > 10, "{c:?}");
         assert!(c.iter().any(|l| l.contains("aarch64-unknown-none")));
+        assert!(
+            c.iter().any(|l| l.starts_with("cargo build") && l.contains("aarch64-pc-windows-msvc"))
+        );
     }
 
     #[test]

@@ -304,7 +304,7 @@ pub fn allocate_teb32(
         vad.commit(addr, teb32::SIZE, vad::PAGE_READWRITE)?;
         let flags = super::process::user_rw_flags();
         let mapped =
-            process.space.lock().map_zeroed(addr, teb32::SIZE / platform::PAGE_SIZE, flags);
+            process.live_space()?.lock().map_zeroed(addr, teb32::SIZE / platform::PAGE_SIZE, flags);
         mapped.map_err(|_| NtStatus::NO_MEMORY)?;
         addr
     };

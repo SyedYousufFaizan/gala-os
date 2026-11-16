@@ -240,7 +240,15 @@ struct Cache {
     shared: bool,
 }
 
+/// The caches: none known on ARM64 yet (its cache registers, CLIDR_EL1
+/// and CCSIDR_EL1, are the kernel's to read; the port's, ROADMAP AR).
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn caches(_out: &mut [Cache; 8], _processors: u32) -> usize {
+    0
+}
+
 /// The caches CPUID leaf 4 describes (up to 8).
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn caches(out: &mut [Cache; 8], processors: u32) -> usize {
     let max = super::arch::cpuid(0).eax;
     if max < 4 {

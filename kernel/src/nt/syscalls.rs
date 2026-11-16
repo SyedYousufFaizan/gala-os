@@ -817,6 +817,9 @@ pub fn set_trace(on: bool) {
     TRACE.store(on, Ordering::Relaxed);
 }
 
+/// The most arguments a service in `TABLE` takes.
+const MAX_ARGS: usize = 14;
+
 /// The `syscall` event for a finished call (unreadable arguments: null).
 fn syscall_event(
     call: &Call<'_>,
@@ -826,46 +829,55 @@ fn syscall_event(
     started: u64,
     event: &str,
 ) {
-    struct Args<'a>(&'a Call<'a>, usize);
-    impl fmt::Display for Args<'_> {
+    let (name, argc) = service.unwrap_or(("?", 0));
+    // What the event takes from the program's memory is read here, before
+    // the event is written: writing one holds the debug console's lock,
+    // and a read whose page is not there waits for the disk
+    // (`sync::lockdep::none_held_at_user_memory`).
+    let mut args = [None; MAX_ARGS];
+    for (i, slot) in args.iter_mut().enumerate().take(argc.min(MAX_ARGS)) {
+        *slot = call.arg(i).ok();
+    }
+    struct Args([Option<u64>; MAX_ARGS], usize);
+    impl fmt::Display for Args {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             for i in 0..self.1 {
                 if i > 0 {
                     f.write_str(",")?;
                 }
-                match self.0.arg(i) {
-                    Ok(v) => write!(f, "{v}")?,
-                    Err(_) => f.write_str("null")?,
+                match self.0.get(i).copied().flatten() {
+                    Some(v) => write!(f, "{v}")?,
+                    None => f.write_str("null")?,
                 }
             }
             Ok(())
         }
     }
-    let (name, argc) = service.unwrap_or(("?", 0));
     // The calling thread (kept per CPU: no search of the thread table).
     let tid = crate::events::current_client();
     // A wait names the object it waits on (the first, for several): its
     // type and identity (its address, the same in every process), so
-    // waits on one object can be told apart and matched.
-    struct On<'a>(&'a Call<'a>, &'a str, bool);
-    impl fmt::Display for On<'_> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            if !self.2 {
-                return Ok(());
-            }
-            let handle = match self.1 {
+    // waits on one object can be told apart and matched. Looked up here
+    // for the same reason: a multiple wait's handle comes from the
+    // program's memory, and the handle table has a lock of its own.
+    let on = (event == "wait")
+        .then(|| {
+            let handle = match name {
                 "NtWaitForMultipleObjects" | "NtWaitForMultipleObjects32" => {
-                    self.0.arg(1).and_then(|a| self.0.read_u64(a)).ok()
+                    call.arg(1).and_then(|a| call.read_u64(a)).ok()
                 }
-                "NtSignalAndWaitForSingleObject" => self.0.arg(1).ok(),
-                _ => self.0.arg(0).ok(),
-            };
-            let Some(h) = handle else { return Ok(()) };
-            let Some(e) = self.0.process.handles.lock().get(super::object::Handle(h)) else {
-                return Ok(());
-            };
-            let oid = &*e.object as *const _ as usize;
-            write!(f, r#","obj":"{}","oid":{oid}"#, e.object.type_name())
+                "NtSignalAndWaitForSingleObject" => call.arg(1).ok(),
+                _ => call.arg(0).ok(),
+            }?;
+            let e = call.process.handles.lock().get(super::object::Handle(handle))?;
+            Some((e.object.type_name(), &*e.object as *const _ as usize))
+        })
+        .flatten();
+    struct On(Option<(&'static str, usize)>);
+    impl fmt::Display for On {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let Some((type_name, oid)) = self.0 else { return Ok(()) };
+            write!(f, r#","obj":"{type_name}","oid":{oid}"#)
         }
     }
     crate::events::emit(
@@ -875,10 +887,10 @@ fn syscall_event(
             r#""pid":{},"tid":{tid},"nr":{number},"name":{},"args":[{}],"status":{},"ns":{}{}"#,
             call.process.id,
             crate::events::Str(name),
-            Args(call, argc),
+            Args(args, argc),
             status.0,
             platform::monotonic_ns().saturating_sub(started),
-            On(call, name, event == "wait")
+            On(on)
         ),
     );
 }
@@ -1312,8 +1324,15 @@ fn copy_virtual_memory(call: &mut Call<'_>, write: bool) -> NtStatus {
         (arg!(call, 1), arg!(call, 2), arg!(call, 3), arg!(call, 4));
     let mut chunk = [0u8; 4096];
     let mut done = 0u64;
-    let mut status = NtStatus::SUCCESS;
-    while done < size {
+    // A process that has exited has given its address space up
+    // (process::release_space), so nothing can be copied: Windows'
+    // ReadProcessMemory through a handle held past the exit fails with
+    // ERROR_PARTIAL_COPY having copied nothing (measured on 11 26100),
+    // which is this status, not the STATUS_ACCESS_VIOLATION of an
+    // unreadable address in a process that is still there.
+    let gone = target.space_now().is_none();
+    let mut status = if gone { NtStatus::PARTIAL_COPY } else { NtStatus::SUCCESS };
+    while !gone && done < size {
         let n = (size - done).min(4096) as usize;
         let ok = if write {
             call.process.read(buffer + done, &mut chunk[..n]).is_ok()
@@ -1440,6 +1459,10 @@ const MBI_SIZE: usize = 48;
 fn nt_query_virtual_memory(call: &mut Call<'_>) -> NtStatus {
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     let target = tri!(call.dup_process(arg!(call, 0), PROCESS_QUERY_LIMITED_INFORMATION));
+    // Nothing to describe once the exit has released the address space
+    // (process::release_space): Windows' VirtualQueryEx through such a
+    // handle fails with ERROR_ACCESS_DENIED, which this status is.
+    tri!(target.live_space());
     let (addr, class, buffer, length, ret_ptr) =
         (arg!(call, 1), arg!(call, 2), arg!(call, 3), arg!(call, 4), arg!(call, 5));
     // The class is a ULONG: only the low 32 bits are defined.
@@ -1700,10 +1723,12 @@ fn gala_window_create(call: &mut Call<'_>) -> NtStatus {
         *t = u16::from_le_bytes([bytes[2 * i], bytes[2 * i + 1]]);
     }
     let owner = call.process.id;
-    let id = tri!(super::desktop::with(&call.process.desk.shell, |d| Ok((
-        d.create(owner, x, y, w, h, &title[..title_len], style)?,
-        None
-    ))));
+    let (program, k) = super::desktop::program_name(owner);
+    let id = tri!(super::desktop::with(&call.process.desk.shell, |d| {
+        let id = d.create(owner, x, y, w, h, &title[..title_len], style)?;
+        d.set_program(id, owner, &program[..k])?;
+        Ok((id, None))
+    }));
     tri!(call.write_u32(out, id));
     NtStatus::SUCCESS
 }
@@ -3654,26 +3679,35 @@ fn nt_query_information_thread(call: &mut Call<'_>) -> NtStatus {
         THREAD_NAME_INFORMATION => {
             // THREAD_NAME_INFORMATION { UNICODE_STRING ThreadName }, the
             // characters right after it (Buffer points there).
-            let name = t.name.lock();
-            let bytes = name.len() * 2;
-            let need = 16 + bytes as u64;
+            //
+            // The whole answer is built while the name is locked and the
+            // lock let go before any of it reaches the program's memory:
+            // a copy waits for a page that is not there, and no lock may
+            // be held across a wait.
+            let mut out = Vec::new();
+            {
+                let name = t.name.lock();
+                let bytes = name.len() * 2;
+                if out.try_reserve_exact(16 + bytes).is_err() {
+                    return NtStatus::NO_MEMORY;
+                }
+                out.resize(16 + bytes, 0);
+                out[0..2].copy_from_slice(&(bytes as u16).to_le_bytes());
+                out[2..4].copy_from_slice(&(bytes as u16).to_le_bytes());
+                out[8..16].copy_from_slice(&(buffer + 16).to_le_bytes());
+                for (i, ch) in name.iter().enumerate() {
+                    out[16 + 2 * i..18 + 2 * i].copy_from_slice(&ch.to_le_bytes());
+                }
+            }
+            let need = out.len() as u64;
             if ret_ptr != 0 {
                 tri!(call.write_u32(ret_ptr, need as u32));
             }
             if length < need {
                 return NtStatus::BUFFER_TOO_SMALL;
             }
-            let mut head = [0u8; 16];
-            head[0..2].copy_from_slice(&(bytes as u16).to_le_bytes());
-            head[2..4].copy_from_slice(&(bytes as u16).to_le_bytes());
-            head[8..16].copy_from_slice(&(buffer + 16).to_le_bytes());
-            if call.process.write(buffer, &head).is_err() {
+            if call.process.write(buffer, &out).is_err() {
                 return NtStatus::ACCESS_VIOLATION;
-            }
-            for (i, ch) in name.iter().enumerate() {
-                if call.process.write(buffer + 16 + 2 * i as u64, &ch.to_le_bytes()).is_err() {
-                    return NtStatus::ACCESS_VIOLATION;
-                }
             }
             return NtStatus::SUCCESS;
         }
@@ -3861,11 +3895,23 @@ fn gala_record_missing(call: &mut Call<'_>) -> NtStatus {
         return NtStatus::ACCESS_VIOLATION;
     }
     let what = super::ledger::user_what(arg!(call, 2) as u32);
-    if what == "not implemented" {
-        // A stub about to end its process: say so now (the ledger is
-        // dumped when the `run=` program ends, which may be never).
+    if what == "stub" || what == "not implemented" {
+        // Say it now, with the number it was handed, because the ledger
+        // is dumped when the `run=` program ends -- which may be never,
+        // and is never in a run cut short by a snapshot. Only a stub
+        // ends its process; a gap the caller lives with says so without
+        // that clause, or the log would name a death that never
+        // happened. The detail goes last so triage still recognizes the
+        // line (xtask/src/triage.rs).
         let text = core::str::from_utf8(&name[..len]).unwrap_or("?");
-        warn!("{}: {} not implemented, ending the process", call.process.name, text);
+        let ending = if what == "stub" { ", ending the process" } else { "" };
+        warn!(
+            "{}: {} not implemented{} (detail {:#x})",
+            call.process.name,
+            text,
+            ending,
+            arg!(call, 3)
+        );
     }
     super::ledger::record_user(&name[..len], what, arg!(call, 3));
     NtStatus::SUCCESS
@@ -6678,7 +6724,12 @@ fn nt_remove_io_completion(call: &mut Call<'_>) -> NtStatus {
         tri!(call.write_u64(key_ptr, 0));
         tri!(call.write_u64(context_ptr, 0));
         tri!(call.write_iosb(iosb, NtStatus::SUCCESS, 0));
-        if let Some(p) = c.queue.lock().take() {
+        // The packet leaves the queue on this line (`take` moves it out
+        // of the queue): the writes below copy the program's memory,
+        // which waits for a page that is not there, and no lock may be
+        // held across a wait.
+        let taken = c.queue.lock().take();
+        if let Some(p) = taken {
             tri!(call.write_u64(key_ptr, p.key));
             tri!(call.write_u64(context_ptr, p.context));
             tri!(call.write_iosb(iosb, NtStatus(p.status), p.information));

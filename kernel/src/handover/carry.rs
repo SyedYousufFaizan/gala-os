@@ -679,7 +679,8 @@ fn collect_process(p: &mut Programs, process: &KArc<Process>) -> Result<ProcessS
         .map_err(|_| refuse("pages in the page file that do not fit in memory"))?;
     let mut raw: Vec<(u64, Frame, crate::mm::paging::PageFlags)> = Vec::new();
     let mut full = false;
-    process.space.lock().for_each_page(|va, frame, flags| {
+    let space_of = process.space_now().ok_or(refuse("no address space (it has exited)"))?;
+    space_of.lock().for_each_page(|va, frame, flags| {
         if raw.try_push((va, frame, flags)).is_err() {
             full = true;
         }

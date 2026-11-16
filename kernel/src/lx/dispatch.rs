@@ -91,7 +91,7 @@ pub struct Call<'a> {
 impl Call<'_> {
     /// System call argument `i` (where the architecture's Linux ABI has
     /// it: `machine::syscall_arg`).
-    fn arg(&self, i: usize) -> u64 {
+    pub fn arg(&self, i: usize) -> u64 {
         super::machine::syscall_arg(self.frame, i)
     }
 }
@@ -121,11 +121,41 @@ fn dispatch(frame: &mut SyscallFrame) {
         return;
     };
     let call = Call { process, lx, frame, tid, resume: Cell::new(None) };
-    let result = handle(&call, number);
+    let traced = crate::events::enabled(crate::events::Category::Syscall)
+        && crate::events::syscall_pid_wanted(call.process.id);
+    let args = if traced { core::array::from_fn(|i| call.arg(i)) } else { [0; 6] };
+    let started = if traced { platform::monotonic_ns() } else { 0 };
+    // A thread's seccomp filters (or strict mode) answer first.
+    let result = match super::seccomp::check(&call, number) {
+        None => handle(&call, number),
+        Some(answer) => answer,
+    };
     let rax = match result {
         Ok(v) => v,
         Err(e) => errno::to_return(e),
     };
+    if traced {
+        // What strace would show: the call, its arguments (as entered) and
+        // its result (a negative errno for a failure).
+        crate::events::emit(
+            crate::events::Category::Syscall,
+            "lx syscall",
+            format_args!(
+                r#""pid":{},"tid":{},"nr":{number},"name":"{}","args":["{:#x}","{:#x}","{:#x}","{:#x}","{:#x}","{:#x}"],"ret":{},"ns":{}"#,
+                call.process.id,
+                tid,
+                super::syscalls::name(number).unwrap_or("?"),
+                args[0],
+                args[1],
+                args[2],
+                args[3],
+                args[4],
+                args[5],
+                rax as i64,
+                platform::monotonic_ns().saturating_sub(started)
+            ),
+        );
+    }
     // An expired timer's SIGALRM is delivered with the others below.
     super::timer::fire(&call);
     crate::flight::record(crate::flight::Kind::SyscallDone, number, rax);
@@ -179,8 +209,32 @@ fn handle(call: &Call<'_>, number: u64) -> Result {
         nr::SETRLIMIT => super::resource::setrlimit(call, a(0), a(1)),
         nr::GETRANDOM => super::resource::getrandom(call, a(0), a(1), a(2)),
         nr::WAIT4 => super::fork::wait4(call, a(0), a(1), a(2), a(3)),
+        nr::SECCOMP => super::seccomp::seccomp(call, a(0), a(1), a(2)),
+        nr::WAITID => super::fork::waitid(call, a(0), a(1), a(2), a(3), a(4)),
+        nr::INOTIFY_INIT => super::inotify::init1(call, 0),
+        nr::INOTIFY_INIT1 => super::inotify::init1(call, a(0)),
+        nr::INOTIFY_ADD_WATCH => super::inotify::add_watch(call, a(0), a(1), a(2)),
+        nr::INOTIFY_RM_WATCH => super::inotify::rm_watch(call, a(0), a(1)),
+        nr::PIDFD_OPEN => super::pidfd::pidfd_open(call, a(0), a(1)),
+        nr::PIDFD_SEND_SIGNAL => super::pidfd::pidfd_send_signal(call, a(0), a(1), a(2), a(3)),
         nr::IOCTL => match call.lx.fd(a(0)) {
+            // What every descriptor answers first (Linux's do_vfs_ioctl).
+            Some(f) if matches!(a(1) as u32, FIOCLEX | FIONCLEX | FIONBIO) => {
+                generic_ioctl(call, &f, a(0), a(1) as u32, a(2))
+            }
+            Some(f) if a(1) as u32 == FIONREAD && matches!(&f.object, Object::PipeRead(_)) => {
+                let Object::PipeRead(pipe) = &f.object else { return Err(ENOTTY) };
+                let n = pipe.state.lock().data.len() as i32;
+                call.process.write(a(2), &n.to_le_bytes()).map_err(|_| EFAULT)?;
+                Ok(0)
+            }
             None => Err(EBADF),
+            Some(f) if a(1) as u32 == FIONREAD && matches!(&f.object, Object::Inotify(_)) => {
+                let Object::Inotify(i) = &f.object else { return Err(ENOTTY) };
+                let n = i.queued() as i32;
+                call.process.write(a(2), &n.to_le_bytes()).map_err(|_| EFAULT)?;
+                Ok(0)
+            }
             Some(f) if matches!(&f.object, Object::Pty(_)) => {
                 let Object::Pty(end) = &f.object else { return Err(ENOTTY) };
                 super::pty::ioctl(call, &f, end, a(1) as u32, a(2))
@@ -194,7 +248,12 @@ fn handle(call: &Call<'_>, number: u64) -> Result {
                 )
             }
             Some(_) => {
-                ledger::record("ioctl", "linux syscall stub", a(1));
+                // A terminal request ('T') on what is not a terminal:
+                // ENOTTY is Linux's answer too (isatty's). Others are not
+                // done (ledgered).
+                if (a(1) >> 8) & 0xff != 0x54 {
+                    ledger::record("ioctl", "linux syscall stub", a(1));
+                }
                 Err(ENOTTY)
             }
         },
@@ -216,7 +275,7 @@ fn handle(call: &Call<'_>, number: u64) -> Result {
         nr::GETUID | nr::GETEUID => Ok(u64::from(super::identity::of_process(&call.process).uid)),
         nr::GETRESUID => super::prctl::getres(call, [a(0), a(1), a(2)], false),
         nr::GETRESGID => super::prctl::getres(call, [a(0), a(1), a(2)], true),
-        nr::PRCTL => super::prctl::prctl(call, a(0), a(1)),
+        nr::PRCTL => super::prctl::prctl(call, a(0), [a(1), a(2), a(3), a(4)]),
         nr::STATFS => file::statfs(call, a(0), a(1)),
         nr::FSTATFS => file::fstatfs(call, a(0), a(1)),
         nr::GETGID | nr::GETEGID => Ok(u64::from(super::identity::of_process(&call.process).gid)),
@@ -297,9 +356,31 @@ fn handle(call: &Call<'_>, number: u64) -> Result {
         nr::EXECVE => super::exec::execve(call, a(0), a(1), a(2)),
         nr::GETPPID => Ok(call.lx.parent),
         nr::UNAME => uname(call, a(0)),
+        nr::SHMGET => super::shm::shmget(call, a(0), a(1), a(2)),
+        nr::SHMAT => super::shm::shmat(call, a(0), a(1), a(2)),
+        nr::SHMDT => super::shm::shmdt(call, a(0)),
+        nr::SHMCTL => super::shm::shmctl(call, a(0), a(1), a(2)),
+        nr::TIMERFD_CREATE => super::timerfd::timerfd_create(call, a(0), a(1)),
+        nr::TIMERFD_SETTIME => super::timerfd::timerfd_settime(call, a(0), a(1), a(2), a(3)),
+        nr::TIMERFD_GETTIME => super::timerfd::timerfd_gettime(call, a(0), a(1)),
+        nr::UNSHARE => super::fork::unshare(call, a(0)),
+        nr::SIGALTSTACK => sigcalls::sigaltstack(call, a(0), a(1)),
+        nr::CAPGET => super::caps::capget(call, a(0), a(1)),
+        nr::CAPSET => super::caps::capset(call, a(0), a(1)),
+        nr::SYSINFO => super::sysinfo::sysinfo(call, a(0)),
+        nr::SCHED_GETAFFINITY => super::sysinfo::sched_getaffinity(call, a(0), a(1), a(2)),
         // The one user: setting the ids it has is allowed, anything else
         // is EPERM (an unprivileged process).
         nr::SETUID => same_id(a(0), super::identity::of_process(&call.process).uid),
+        // setfsuid/setfsgid(id): the filesystem id is the process's own
+        // (fsid_test): returned, and kept (another id is not taken
+        // without the capability; uid 0's would be: ledgered).
+        nr::SETFSUID => {
+            Ok(u64::from(fs_id("setfsuid", a(0), super::identity::of_process(&call.process).uid)))
+        }
+        nr::SETFSGID => {
+            Ok(u64::from(fs_id("setfsgid", a(0), super::identity::of_process(&call.process).gid)))
+        }
         nr::SETGID => same_id(a(0), super::identity::of_process(&call.process).gid),
         // setresuid/setresgid(r, e, s): each -1 (unchanged) or the
         // process's own id (it has no other: no saved set-user-id yet).
@@ -388,7 +469,7 @@ fn missing(call: &Call<'_>, number: u64) -> Result {
     crate::warn!(
         "{}",
         Missing {
-            program: call.process.name,
+            program: call.process.name_now(),
             pid: call.process.id,
             number,
             personality: call.process.personality
@@ -400,7 +481,7 @@ fn missing(call: &Call<'_>, number: u64) -> Result {
 /// The log line of an unimplemented system call: the program, the call
 /// by its Linux name and number, the dispatcher and the personality.
 struct Missing {
-    program: &'static str,
+    program: crate::nt::process::CurrentName,
     pid: u64,
     number: u64,
     personality: Personality,
@@ -458,6 +539,9 @@ fn fcntl(call: &Call<'_>, fd: u64, cmd: u64, arg: u64) -> Result {
         | Object::Unix(_)
         | Object::Epoll(_)
         | Object::EventFd(_)
+        | Object::TimerFd(_)
+        | Object::PidFd(_)
+        | Object::Inotify(_)
         | Object::Pty(_)
         | Object::Nt(_) => None,
     };
@@ -484,7 +568,10 @@ fn fcntl(call: &Call<'_>, fd: u64, cmd: u64, arg: u64) -> Result {
                 | Object::Unix(_)
                 | Object::Epoll(_)
                 | Object::EventFd(_)
+                | Object::PidFd(_)
                 | Object::Pty(_) => file::O_RDWR,
+                // O_RDONLY.
+                Object::TimerFd(_) | Object::Inotify(_) => 0,
                 Object::Device(d) => match (d.readable, d.writable) {
                     (true, true) => file::O_RDWR,
                     (false, true) => file::O_WRONLY,
@@ -534,6 +621,16 @@ fn fcntl(call: &Call<'_>, fd: u64, cmd: u64, arg: u64) -> Result {
     }
 }
 
+/// setfsuid/setfsgid: the previous filesystem id (`own`, the only one);
+/// a change to another id, which uid 0 would make, is ledgered.
+fn fs_id(name: &'static str, id: u64, own: u32) -> u32 {
+    let id = id as u32;
+    if own == 0 && id != u32::MAX && id != own {
+        ledger::record(name, "linux option missing", u64::from(id));
+    }
+    own
+}
+
 fn same_id(id: u64, own: u32) -> Result {
     if id as u32 == own { Ok(0) } else { Err(EPERM) }
 }
@@ -580,6 +677,9 @@ fn close_range(call: &Call<'_>, first: u64, last: u64, flags: u64) -> Result {
 
 /// dup2 (`flags` None) and dup3 (O_CLOEXEC or nothing).
 fn dup_to(call: &Call<'_>, old: u64, new: u64, flags: Option<u64>) -> Result {
+    // unsigned int oldfd, newfd and int flags: the low 32 bits.
+    let (old, new) = (state::slot(old), state::slot(new));
+    let flags = flags.map(|f| u64::from(f as u32));
     if let Some(flags) = flags
         && (flags & !O_CLOEXEC != 0 || old == new)
     {
@@ -604,6 +704,9 @@ fn lseek(call: &Call<'_>, fd: u64, offset: u64, whence: u64) -> Result {
         | Object::PipeWrite(_)
         | Object::Console(_)
         | Object::EventFd(_)
+        | Object::TimerFd(_)
+        | Object::PidFd(_)
+        | Object::Inotify(_)
         | Object::Socket(_)
         | Object::Unix(_)
         | Object::Epoll(_)
@@ -667,6 +770,9 @@ fn read(call: &Call<'_>, fd: u64, buf: u64, count: u64) -> Result {
         Object::Pty(end) => super::pty::read(call, &f, end, buf, count),
         Object::Unix(u) => unix::recv(call, fd, &f, u, buf, count, 0),
         Object::EventFd(e) => super::eventfd::read(call, &f, e, buf, count),
+        Object::TimerFd(t) => super::timerfd::read(call, &f, t, buf, count),
+        Object::PidFd(_) => Err(EINVAL),
+        Object::Inotify(i) => super::inotify::read(call, &f, i, buf, count),
         Object::Nt(n) => {
             let mut data = Vec::new();
             let want = (count as usize).min(super::ntio::CHUNK);
@@ -729,6 +835,8 @@ fn write(call: &Call<'_>, fd: u64, buf: u64, count: u64) -> Result {
         }),
         Object::Unix(u) => unix::send(call, &f, u, buf, count, 0, 0),
         Object::EventFd(e) => super::eventfd::write(call, &f, e, buf, count),
+        // A timerfd has no write.
+        Object::TimerFd(_) | Object::PidFd(_) | Object::Inotify(_) => Err(EINVAL),
         Object::Nt(n) => {
             // A piece at a time, as the console's below.
             let mut done = 0u64;
@@ -974,6 +1082,29 @@ fn sendfile(call: &Call<'_>, out_fd: u64, in_fd: u64, offset: u64, count: u64) -
 }
 
 /// Writes kernel bytes to `fd` (writev's gathered pieces).
+/// ioctl's requests every descriptor answers (fs/ioctl.c), before a
+/// device's own: close-on-exec on the descriptor, O_NONBLOCK on its open
+/// file description (a dup shares it, as F_SETFL's).
+const FIONREAD: u32 = 0x541b;
+const FIONBIO: u32 = 0x5421;
+const FIONCLEX: u32 = 0x5450;
+const FIOCLEX: u32 = 0x5451;
+
+fn generic_ioctl(call: &Call<'_>, f: &Fd, fd: u64, request: u32, arg: u64) -> Result {
+    match request {
+        FIOCLEX | FIONCLEX => {
+            call.lx.set_cloexec(fd, request == FIOCLEX);
+            Ok(0)
+        }
+        _ => {
+            let mut on = [0u8; 4];
+            call.process.read(arg, &mut on).map_err(|_| EFAULT)?;
+            f.nonblock.store(on != [0; 4], core::sync::atomic::Ordering::Relaxed);
+            Ok(0)
+        }
+    }
+}
+
 fn write_bytes(call: &Call<'_>, fd: u64, data: &[u8]) -> Result {
     let f = call.lx.fd(fd).ok_or(EBADF)?;
     match &f.object {
@@ -987,6 +1118,7 @@ fn write_bytes(call: &Call<'_>, fd: u64, data: &[u8]) -> Result {
         }),
         Object::Unix(u) => unix::send_bytes(call, &f, u, data),
         Object::EventFd(e) => super::eventfd::write_bytes(call, &f, e, data),
+        Object::TimerFd(_) | Object::PidFd(_) | Object::Inotify(_) => Err(EINVAL),
         Object::Nt(n) => match n.write(call.process.id, data) {
             Ok(w) => Ok(w as u64),
             Err(EPIPE) => {
@@ -1013,7 +1145,12 @@ mod tests {
     #[test]
     fn a_missing_call_is_named_from_the_table() {
         let line = |number| {
-            let m = Missing { program: "a", pid: 4, number, personality: Personality::Linux };
+            let m = Missing {
+                program: crate::nt::process::CurrentName::of_path(b"a"),
+                pid: 4,
+                number,
+                personality: Personality::Linux,
+            };
             alloc::format!("{m}")
         };
         assert_eq!(

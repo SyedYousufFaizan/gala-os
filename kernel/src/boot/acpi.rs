@@ -1,5 +1,7 @@
-//! The firmware's processor list: the ACPI MADT's local APIC entries
-//! (ACPI specification, "Multiple APIC Description Table"), so the kernel
+//! The firmware's processor list: the ACPI MADT's processor entries
+//! (ACPI specification, "Multiple APIC Description Table": x86-64's local
+//! APIC and x2APIC entries, aarch64's GIC CPU interface (GICC) entries,
+//! whichever the table has), so the kernel
 //! knows how many CPUs the machine has even when the bootloader started
 //! fewer (ARCHITECTURE "Processors": an AP that does not answer Limine in
 //! time is left out of its MP response).
@@ -8,16 +10,21 @@
 //! "Interrupts and time"): the HPET table's base address and the FADT's
 //! ACPI PM timer port.
 //!
+//! And PCI's configuration space: the MCFG's ECAM window ("PCI Firmware
+//! Specification", MCFG), how aarch64 reaches it.
+//!
 //! Parsing works on byte slices (host-tested); `read_madt` maps the tables
 //! through the HHDM, where Limine (base revision >= 4) guarantees them.
 
 /// At most this many processors are listed (as `arch::smp::MAX_CPUS`).
 pub const MAX_FIRMWARE_CPUS: usize = 64;
 
-/// The local APIC ids of the processors the MADT lists as enabled.
+/// The hardware ids of the processors the MADT lists as enabled (as
+/// `boot::MpInfo::hw_id`: x86-64's local APIC ids, aarch64's MPIDR
+/// affinity).
 #[derive(Clone, Copy, Debug)]
 pub struct FirmwareCpus {
-    ids: [u32; MAX_FIRMWARE_CPUS],
+    ids: [u64; MAX_FIRMWARE_CPUS],
     count: usize,
 }
 
@@ -34,11 +41,11 @@ impl FirmwareCpus {
         self.count == 0
     }
 
-    pub fn ids(&self) -> &[u32] {
+    pub fn ids(&self) -> &[u64] {
         &self.ids[..self.count]
     }
 
-    fn push(&mut self, id: u32) {
+    fn push(&mut self, id: u64) {
         if self.count < MAX_FIRMWARE_CPUS && !self.ids().contains(&id) {
             self.ids[self.count] = id;
             self.count += 1;
@@ -60,6 +67,10 @@ const MADT_ENTRIES: usize = SDT_HEADER_LEN + 8;
 /// MADT local APIC flags: bit 0 enabled (bit 1, online capable, is a CPU
 /// that may be hot-added later: not one that runs now).
 const LAPIC_ENABLED: u32 = 1;
+/// MADT GICC flags: bit 0 enabled.
+const GICC_ENABLED: u32 = 1;
+/// MPIDR_EL1's affinity fields (Aff3 at 32, Aff2-Aff0 at 16, 8, 0).
+const MPIDR_AFFINITY: u64 = 0xff_00ff_ffff;
 
 fn u32_at(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
@@ -107,8 +118,8 @@ pub fn root_entries(root: &[u8], xsdt: bool) -> Result<impl Iterator<Item = u64>
     }))
 }
 
-/// The enabled processors of a MADT (types 0, local APIC, and 9, local
-/// x2APIC).
+/// The enabled processors of a MADT (types 0, local APIC, 9, local
+/// x2APIC, and 0x0b, GIC CPU interface).
 pub fn parse_madt(madt: &[u8]) -> Result<FirmwareCpus, AcpiError> {
     if madt.get(..4) != Some(b"APIC") || !checksum_ok(madt) {
         return Err(AcpiError::BadTable("MADT"));
@@ -125,7 +136,7 @@ pub fn parse_madt(madt: &[u8]) -> Result<FirmwareCpus, AcpiError> {
             // Processor UID (1), APIC id (1), flags (4).
             0 if len >= 8 => {
                 if u32_at(entry, 4).is_some_and(|f| f & LAPIC_ENABLED != 0) {
-                    cpus.push(u32::from(entry[3]));
+                    cpus.push(u64::from(entry[3]));
                 }
             }
             // Reserved (2), x2APIC id (4), flags (4), UID (4).
@@ -133,7 +144,16 @@ pub fn parse_madt(madt: &[u8]) -> Result<FirmwareCpus, AcpiError> {
                 if let (Some(id), Some(flags)) = (u32_at(entry, 4), u32_at(entry, 8))
                     && flags & LAPIC_ENABLED != 0
                 {
-                    cpus.push(id);
+                    cpus.push(u64::from(id));
+                }
+            }
+            // Reserved (2), CPU interface number (4), UID (4), flags (4:
+            // bit 0 enabled), ..., MPIDR (8) at 68: its affinity fields.
+            0x0b if len >= 76 => {
+                if let (Some(flags), Some(mpidr)) = (u32_at(entry, 12), u64_at(entry, 68))
+                    && flags & GICC_ENABLED != 0
+                {
+                    cpus.push(mpidr & MPIDR_AFFINITY);
                 }
             }
             _ => {}
@@ -183,6 +203,36 @@ pub fn parse_fadt(t: &[u8]) -> Option<PmTimer> {
     Some(PmTimer { port: u16::try_from(port).ok()?, bits32 })
 }
 
+/// A PCI segment's ECAM window: function `bus:device.function`'s 4 KiB of
+/// configuration space at `base + ((bus - start_bus) << 20 | device << 15
+/// | function << 12)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ecam {
+    /// Physical address of `start_bus`'s configuration space.
+    pub base: u64,
+    pub segment: u16,
+    pub start_bus: u8,
+    pub end_bus: u8,
+}
+
+/// The MCFG's window for segment 0 (the only one `arch::pci` enumerates):
+/// its 16-byte allocations start at 44 (after 8 reserved bytes), each the
+/// base (u64), the segment (u16), the start and end bus, 4 reserved.
+pub fn parse_mcfg(t: &[u8]) -> Option<Ecam> {
+    if t.get(..4) != Some(b"MCFG") || !checksum_ok(t) {
+        return None;
+    }
+    t.get(SDT_HEADER_LEN + 8..)?.chunks_exact(16).find_map(|e| {
+        let ecam = Ecam {
+            base: u64_at(e, 0)?,
+            segment: u16::from_le_bytes([e[8], e[9]]),
+            start_bus: e[10],
+            end_bus: e[11],
+        };
+        (ecam.segment == 0 && ecam.base != 0 && ecam.start_bus <= ecam.end_bus).then_some(ecam)
+    })
+}
+
 /// Reads `len` bytes at physical `phys` (HHDM-mapped).
 ///
 /// # Safety
@@ -205,6 +255,12 @@ pub fn read_clock_tables(hhdm_offset: u64, rsdp_virt: u64) -> ClockTables {
         hpet: table(b"HPET").and_then(parse_hpet),
         pm_timer: table(b"FACP").and_then(parse_fadt),
     }
+}
+
+/// The MCFG's segment-0 ECAM window, from the RSDP at virtual `rsdp`
+/// (HHDM); none without the table (or without a readable one).
+pub fn read_mcfg(hhdm_offset: u64, rsdp_virt: u64) -> Option<Ecam> {
+    read_table(hhdm_offset, rsdp_virt, b"MCFG").ok().flatten().and_then(parse_mcfg)
 }
 
 /// The first table with signature `sig` the root table lists.
@@ -288,6 +344,25 @@ mod tests {
         assert_eq!(parse_madt(&madt).unwrap().ids(), &[0]);
     }
 
+    /// GICC entries (aarch64): enabled ones' MPIDR affinity.
+    #[test]
+    fn madt_lists_enabled_gic_cpu_interfaces() {
+        let gicc = |mpidr: u64, flags: u32| {
+            let mut e = vec![0u8; 80];
+            e[0] = 0x0b;
+            e[1] = 80;
+            e[12..16].copy_from_slice(&flags.to_le_bytes());
+            e[68..76].copy_from_slice(&mpidr.to_le_bytes());
+            e
+        };
+        let mut body = vec![0u8; 8];
+        body.extend(gicc(0, 1));
+        body.extend(gicc(0x1_0000_0101, 1)); // Aff3 1, Aff1 1, Aff0 1
+        body.extend(gicc(2, 0)); // disabled
+        let madt = table(b"APIC", &body);
+        assert_eq!(parse_madt(&madt).unwrap().ids(), &[0, 0x1_0000_0101]);
+    }
+
     #[test]
     fn clock_tables() {
         // HPET: event timer block id (4), base address GAS (12), ...
@@ -316,6 +391,34 @@ mod tests {
         assert_eq!(parse_fadt(&table(b"FACP", &long)), Some(PmTimer { port: 0x408, bits32: true }));
         // No timer.
         assert_eq!(parse_fadt(&table(b"FACP", &[0u8; 80])), None);
+    }
+
+    #[test]
+    fn mcfg_segment_zero() {
+        fn alloc(base: u64, segment: u16, start: u8, end: u8) -> Vec<u8> {
+            let mut e = base.to_le_bytes().to_vec();
+            e.extend_from_slice(&segment.to_le_bytes());
+            e.extend_from_slice(&[start, end, 0, 0, 0, 0]);
+            e
+        }
+        let mut body = vec![0u8; 8]; // reserved
+        body.extend(alloc(0x80_0000_0000, 1, 0, 15)); // another segment
+        body.extend(alloc(0x40_1000_0000, 0, 0, 255));
+        let mcfg = table(b"MCFG", &body);
+        let want = Ecam { base: 0x40_1000_0000, segment: 0, start_bus: 0, end_bus: 255 };
+        assert_eq!(parse_mcfg(&mcfg), Some(want));
+        // A truncated last entry is not read; a bad checksum, none.
+        let mut cut = body.clone();
+        cut.truncate(8 + 16 + 10);
+        assert_eq!(parse_mcfg(&table(b"MCFG", &cut)), None);
+        let mut bad = mcfg.clone();
+        bad[50] ^= 1;
+        assert_eq!(parse_mcfg(&bad), None);
+        // No allocations; an inverted bus range.
+        assert_eq!(parse_mcfg(&table(b"MCFG", &[0u8; 8])), None);
+        let mut inverted = vec![0u8; 8];
+        inverted.extend(alloc(0x3000_0000, 0, 5, 4));
+        assert_eq!(parse_mcfg(&table(b"MCFG", &inverted)), None);
     }
 
     #[test]

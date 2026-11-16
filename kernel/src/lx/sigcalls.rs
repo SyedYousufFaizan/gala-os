@@ -13,8 +13,16 @@
 //! that cannot be written, or a bad one given to rt_sigreturn, logs why
 //! and kills the process with SIGSEGV as Linux does. Actions not
 //! implemented go to the ledger: a Stop default action (`"what":"linux
-//! signal action missing"`), SA_ONSTACK (`"linux signal option
-//! missing"`).
+//! signal action missing"`).
+//!
+//! The alternate signal stack (sigaltstack(2); altstack_test): each
+//! thread's (`LxThread::altstack`), disabled at first and after execve,
+//! a fork's child's its creator's. A handler with SA_ONSTACK gets its
+//! frame at the top of it unless the thread is on it already; the
+//! frame's uc_stack records it as Linux's does (SS_ONSTACK when the
+//! interrupted code was on it), SS_AUTODISARM disarms it while the
+//! handler runs, and rt_sigreturn sets it back from uc_stack (as Linux,
+//! ignoring what it refuses).
 
 use lx_abi::signal::{
     self as abi, KSIGACTION_SIZE, KSigaction, SA_ONSTACK, SA_RESTART, SA_RESTORER, SIGSET_SIZE,
@@ -109,11 +117,6 @@ pub fn rt_sigaction(call: &Call<'_>, sig: u64, act: u64, oact: u64, size: u64) -
     } else {
         None
     };
-    if let Some(a) = &new
-        && a.flags & SA_ONSTACK != 0
-    {
-        ledger::record("rt_sigaction", "linux signal option missing", SA_ONSTACK);
-    }
     let old = {
         let mut s = call.lx.signals.lock();
         match new {
@@ -231,6 +234,60 @@ pub fn rt_sigtimedwait(call: &Call<'_>, set: u64, info: u64, timeout: u64, size:
 /// or blocked; other signals reach a thread running user code only at its
 /// next system call: delivery happens on the way back from one). Process
 /// groups (pid 0 or negative) are not kept yet: ledgered, ESRCH.
+/// Sends `sig` to Linux process `pid` from the kernel (SI_KERNEL: a
+/// parent-death signal); SIGKILL ends it at once, as kill(2)'s does.
+pub fn send_from_kernel(pid: u64, sig: u32) {
+    let Some(target) = super::state::get(pid) else { return };
+    let info = Siginfo::zeroed(sig as i32, abi::SI_KERNEL);
+    if sig == abi::SIGKILL {
+        if let Some(p) = process::by_id(pid) {
+            kill(&p, 0, sig, &info);
+        }
+        return;
+    }
+    raise_for(&target, pid, 0, info, Target::Process);
+}
+
+/// Ends the calling process with signal `sig` from the kernel (a seccomp
+/// kill, strict mode's SIGKILL), whatever its handlers.
+pub fn kill_self(call: &Call<'_>, sig: u32) {
+    let info = Siginfo::zeroed(sig as i32, abi::SI_KERNEL);
+    kill(&call.process, call.tid, sig, &info);
+}
+
+/// Ends the calling thread with `sig` (SECCOMP_RET_KILL_THREAD): the
+/// process if it is its only thread, as Linux's.
+pub fn kill_thread_self(call: &Call<'_>, sig: u32) {
+    if call.lx.threads.lock().len() <= 1 {
+        kill_self(call, sig);
+        return;
+    }
+    crate::info!(
+        "lx: pid {} (thread {}): killed by signal {sig} (seccomp)",
+        call.process.id,
+        call.tid
+    );
+    if let Some(me) = crate::nt::thread::current() {
+        crate::nt::thread::request_termination(&me, signal::killed_status(sig));
+    }
+}
+
+/// A seccomp trap of the calling thread: SIGSYS to it with the trap's
+/// siginfo, forced to its default action (an end) if blocked or ignored,
+/// as Linux's force_sig_seccomp.
+pub fn seccomp_trap(call: &Call<'_>, nr: i32, data: i32, ip: u64) {
+    let info = super::seccomp::trap_info(nr, data, ip);
+    let (blocked, handler) = {
+        let s = call.lx.signals.lock();
+        (s.mask(call.tid).contains(abi::SIGSYS), s.action(abi::SIGSYS).handler)
+    };
+    if blocked || handler == abi::SIG_DFL || handler == abi::SIG_IGN {
+        kill(&call.process, call.tid, abi::SIGSYS, &info);
+        return;
+    }
+    raise_for(&call.lx, call.process.id, call.tid, info, Target::Thread(call.tid));
+}
+
 pub fn kill_call(call: &Call<'_>, pid: u64, sig: u64) -> Result {
     let pid = pid as i32;
     if sig > u64::from(abi::NSIG) {
@@ -256,7 +313,11 @@ pub fn kill_call(call: &Call<'_>, pid: u64, sig: u64) -> Result {
         }
         return Ok(0);
     }
-    let target = super::state::get(pid as u64).ok_or(errno::ESRCH)?;
+    let Some(target) = super::state::get(pid as u64) else {
+        // A zombie (ended, not reaped) takes a signal as Linux's does:
+        // nothing happens, 0.
+        return if super::state::is_zombie(pid as u64) { Ok(0) } else { Err(errno::ESRCH) };
+    };
     if sig == 0 {
         return Ok(0);
     }
@@ -364,8 +425,86 @@ pub fn pause(call: &Call<'_>) -> Result {
 /// stack pointer saved (the handler returned to sa_restorer, which
 /// popped the return address: rsp is the ucontext). The call returns
 /// with every register of the saved context (`Call::resume`).
+/// SS_AUTODISARM: the alternate stack disarmed while a handler runs on it.
+const SS_AUTODISARM: i32 = 1 << 31;
+
+/// Whether `sp` is on alternate stack `s` (Linux's on_sig_stack: never
+/// for a disabled one, nor for an SS_AUTODISARM one, which is disarmed
+/// while a handler runs on it).
+fn on_stack(s: &abi::Stack, sp: u64) -> bool {
+    s.ss_flags & (abi::SS_DISABLE | SS_AUTODISARM) == 0 && sp > s.ss_sp && sp - s.ss_sp <= s.ss_size
+}
+
+/// Sets thread `tid`'s alternate stack to `new` (the caller's stack
+/// pointer `sp`), checked as Linux's do_sigaltstack checks it.
+fn set_altstack(
+    lx: &LxProcess,
+    tid: u64,
+    sp: u64,
+    new: abi::Stack,
+) -> core::result::Result<(), u16> {
+    let cur = lx.altstack(tid);
+    if on_stack(&cur, sp) {
+        return Err(errno::EPERM);
+    }
+    let mode = new.ss_flags & !SS_AUTODISARM;
+    if mode != 0 && mode != abi::SS_ONSTACK && mode != abi::SS_DISABLE {
+        return Err(EINVAL);
+    }
+    if mode == abi::SS_DISABLE {
+        lx.set_altstack(tid, super::state::DISABLED_STACK);
+        return Ok(());
+    }
+    if new.ss_size < abi::MINSIGSTKSZ {
+        return Err(errno::ENOMEM);
+    }
+    lx.set_altstack(tid, abi::Stack { ss_flags: new.ss_flags & SS_AUTODISARM, ..new });
+    Ok(())
+}
+
+fn read_stack(call: &Call<'_>, at: u64) -> core::result::Result<abi::Stack, u16> {
+    let mut b = [0u8; 24];
+    call.process.read(at, &mut b).map_err(|_| EFAULT)?;
+    let word = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap_or([0; 8]));
+    Ok(abi::Stack { ss_sp: word(0), ss_flags: word(8) as u32 as i32, ss_size: word(16) })
+}
+
+/// sigaltstack(ss, old_ss).
+pub fn sigaltstack(call: &Call<'_>, ss: u64, old: u64) -> Result {
+    let sp = call.frame.sp();
+    let cur = call.lx.altstack(call.tid);
+    let reported = abi::Stack {
+        ss_flags: if cur.ss_flags & abi::SS_DISABLE != 0 {
+            abi::SS_DISABLE
+        } else if on_stack(&cur, sp) {
+            abi::SS_ONSTACK
+        } else {
+            cur.ss_flags
+        },
+        ..cur
+    };
+    if ss != 0 {
+        let new = read_stack(call, ss)?;
+        set_altstack(&call.lx, call.tid, sp, new)?;
+    }
+    if old != 0 {
+        let mut b = [0u8; 24];
+        b[0..8].copy_from_slice(&reported.ss_sp.to_le_bytes());
+        b[8..12].copy_from_slice(&reported.ss_flags.to_le_bytes());
+        b[16..24].copy_from_slice(&reported.ss_size.to_le_bytes());
+        call.process.write(old, &b).map_err(|_| EFAULT)?;
+    }
+    Ok(0)
+}
+
 pub fn rt_sigreturn(call: &Call<'_>) -> Result {
     let sp = call.frame.sp();
+    // The alternate stack the frame's uc_stack holds (the ucontext is at
+    // sp, its uc_stack 16 bytes in), set back as Linux's restore_altstack
+    // does, what it refuses ignored.
+    if let Ok(saved) = read_stack(call, sp + 16) {
+        let _ = set_altstack(&call.lx, call.tid, sp, saved);
+    }
     let (regs, fp, mask) = match machine::read_sigframe(&call.process, sp) {
         Ok(saved) => saved,
         Err(why) => return bad_frame(call, sp, why),
@@ -500,7 +639,7 @@ pub fn deliver(
                 {
                     restart(regs, number);
                 }
-                match push_frame(process, regs, sig, &info, &action, old) {
+                match push_frame(process, lx, tid, regs, sig, &info, &action, old) {
                     Ok(handler) => {
                         event(process.id, tid, &info, "handler");
                         *regs = handler;
@@ -527,8 +666,11 @@ pub fn deliver(
 
 /// Writes the handler's frame (and the x87/SSE/AVX state) below `regs`'
 /// stack pointer; returns the handler's entry registers.
+#[allow(clippy::too_many_arguments)]
 fn push_frame(
     process: &Process,
+    lx: &LxProcess,
+    tid: u64,
     regs: &UserRegs,
     sig: u32,
     info: &Siginfo,
@@ -540,13 +682,33 @@ fn push_frame(
         // stub); without it the handler has nowhere to return.
         return Err("no SA_RESTORER");
     }
-    if action.flags & SA_ONSTACK != 0 {
-        // No sigaltstack yet: the current stack.
-        ledger::record(signal::name(sig), "linux signal option missing", SA_ONSTACK);
-    }
+    // The alternate stack, as the interrupted code had it (uc_stack), and
+    // where the frame goes.
+    let alt = lx.altstack(tid);
+    let enabled = alt.ss_flags & abi::SS_DISABLE == 0;
+    let on_alt = enabled && on_stack(&alt, regs.sp());
+    let saved = abi::Stack {
+        ss_sp: alt.ss_sp,
+        ss_flags: if !enabled {
+            abi::SS_DISABLE
+        } else if on_alt {
+            abi::SS_ONSTACK
+        } else {
+            alt.ss_flags & SS_AUTODISARM
+        },
+        ss_size: alt.ss_size,
+    };
+    let sp = if action.flags & SA_ONSTACK != 0 && enabled && !on_alt {
+        if alt.ss_flags & SS_AUTODISARM != 0 {
+            lx.set_altstack(tid, super::state::DISABLED_STACK);
+        }
+        alt.ss_sp.saturating_add(alt.ss_size)
+    } else {
+        regs.sp()
+    };
     let fx = platform::xsave();
     let fp_len = xstate::size();
-    let frame = machine::build_frame(regs, sig, info, action, old_mask, fp_len as u64)
+    let frame = machine::build_frame(regs, sp, saved, sig, info, action, old_mask, fp_len as u64)
         .ok_or("no room below the stack pointer")?;
     process.write(frame.fpstate, &fx.bytes()[..fp_len]).map_err(|_| "the stack is not writable")?;
     process.write(frame.addr, &frame.bytes).map_err(|_| "the stack is not writable")?;

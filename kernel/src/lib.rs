@@ -107,11 +107,23 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     // Lock-order checking (debug builds) needs to know the CPU: from here.
     sync::lockdep::enable();
     arch::init_boot_traps();
+    // `early_fault=<ud|pagefault|stackoverflow>`: the exception path's test
+    // before anything else is up (the architecture's vectors; `fault=` is
+    // the same on a scheduler thread, later).
+    if let Some(name) = cmdline.value("early_fault") {
+        match Fault::from_name(name) {
+            Some(fault) => {
+                info!("provoking fault {fault:?} (early)");
+                arch::interrupts::provoke(fault);
+            }
+            None => panic!("unknown fault {name:?}"),
+        }
+    }
 
     log_boot_info(&info);
     handover::report(&info);
     let summary = log_memory_map(&info);
-    arch::bootphase::mark("memory_map");
+    phase(&cmdline, "memory_map");
     // `noscreen`: serial only (boot tests read the serial log; drawing text
     // is slow under emulation).
     if let Some(fb) = info.framebuffer.take().filter(|_| !cmdline.flag("noscreen")) {
@@ -133,7 +145,7 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     if let Err(e) = mm::init(&info) {
         panic!("frame allocator: {e:?}");
     }
-    arch::bootphase::mark("frames");
+    phase(&cmdline, "frames");
     let (free, total) = mm::frame_stats();
     info!(
         "frames: {} free of {} tracked ({} MiB free)",
@@ -142,23 +154,29 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
         free * mm::PAGE_SIZE / (1024 * 1024)
     );
     init_paging(&info);
-    arch::bootphase::mark("paging");
+    phase(&cmdline, "paging");
     init_timer(&info, cmdline.flag("calstall"), cmdline.flag("calwrong"));
-    arch::bootphase::mark(arch::bootphase::TIMER);
+    phase(&cmdline, arch::bootphase::TIMER);
     // A state dump on an NMI (xtask asks for one when a boot test times out).
     statedump::init();
     handover::check_marker(&info);
     if let Err(e) = sched::init() {
         panic!("scheduler: {e:?}");
     }
-    arch::bootphase::mark("sched");
     // The frames' owner counts (a fork's copy-on-write pages), from the heap.
     mm::init_sharing();
     info!("sched: boot thread {} running, idle thread started", sched::current());
+    if cmdline.flag("schedtest") {
+        sched_selftest();
+    }
+    phase(&cmdline, "sched");
     arch::smp::init_bsp();
-    arch::bootphase::mark("smp_start");
+    phase(&cmdline, "smp_start");
     start_cpus(&info, &cmdline);
-    arch::bootphase::mark("smp_done");
+    phase(&cmdline, "smp_done");
+    // PCI configuration space (aarch64: the MCFG's ECAM mapped), before
+    // the drivers enumerate.
+    arch::pci_config::init(&info);
     disk::init();
     // `display=virtio`: the screen is virtio-gpu (default `fb`: the
     // bootloader's framebuffer); `gputrace` logs every command and
@@ -177,10 +195,10 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     }
     nt::init();
     net::init();
-    arch::bootphase::mark("drivers");
+    phase(&cmdline, "drivers");
     // R8: the signed manifest, checked before anything else is loaded.
     trust::boot(&info);
-    arch::bootphase::mark("manifest");
+    phase(&cmdline, "manifest");
     if handover::wanted(&cmdline)
         && let Some(file) = handover::next_image(&info, &cmdline)
     {
@@ -601,6 +619,125 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
 /// thread that halted in a loop instead stayed "in the kernel without
 /// blocking" forever: the flight recorder's watchdog reported it every
 /// 20 s and its reports pushed every real event out of the ring.)
+/// `schedtest`: the scheduler's own check, early (the aarch64 port's
+/// `arm_sched`, before anything else starts threads, on the boot CPU
+/// alone): two kernel threads yield to each other 100 rounds each; then
+/// each spins without yielding until the other has arrived, then again
+/// until the other has left: on one CPU only the tick's preemption moves
+/// them on, and the second spin needs a tick on the thread a tick switched
+/// to (an interrupt not yet ended at a switch from inside its handler
+/// would hold every further tick back); then each sleeps 10 ms (woken by
+/// the tick) and both are joined. Logged `schedtest: ok` only if they took
+/// turns (each round's runner differed from the last's almost every
+/// time), both got through both spins (within 2 s of the counter each),
+/// each slept at least its 10 ms in ticks (one clock: the tick's) and both
+/// ended; else what was seen, as an error.
+fn sched_selftest() {
+    use core::sync::atomic::AtomicUsize;
+    const ROUNDS: usize = 100;
+    static LAST: AtomicUsize = AtomicUsize::new(usize::MAX);
+    static TURNS: AtomicUsize = AtomicUsize::new(0);
+    static DONE: AtomicUsize = AtomicUsize::new(0);
+    /// The shortest sleep seen, in ticks.
+    static SLEPT: AtomicUsize = AtomicUsize::new(usize::MAX);
+    const SLEEP_TICKS: usize = (10 * time::TICK_HZ / 1000) as usize;
+    /// Each thread's arrival at the spins and leaving them; how many
+    /// threads got through both.
+    static ARRIVED: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
+    static LEFT: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
+    static PREEMPTED: AtomicUsize = AtomicUsize::new(0);
+    /// Spins until `flag` is set, at most 2 s of the counter: whether it
+    /// was set.
+    fn spin_until(flag: &AtomicUsize) -> bool {
+        let until = time::raw_monotonic_ns() + 2_000_000_000;
+        while flag.load(Ordering::Acquire) == 0 && time::raw_monotonic_ns() < until {
+            core::hint::spin_loop();
+        }
+        flag.load(Ordering::Acquire) != 0
+    }
+    fn worker(me: usize) {
+        for _ in 0..ROUNDS {
+            if LAST.swap(me, Ordering::Relaxed) != me {
+                TURNS.fetch_add(1, Ordering::Relaxed);
+            }
+            sched::yield_now();
+        }
+        ARRIVED[me].store(1, Ordering::Release);
+        let arrived = spin_until(&ARRIVED[1 - me]);
+        LEFT[me].store(1, Ordering::Release);
+        if arrived && spin_until(&LEFT[1 - me]) {
+            PREEMPTED.fetch_add(1, Ordering::Relaxed);
+        }
+        let before = time::raw_ticks();
+        sched::sleep_ms(10);
+        SLEPT.fetch_min((time::raw_ticks() - before) as usize, Ordering::Relaxed);
+        DONE.fetch_add(1, Ordering::Relaxed);
+    }
+    let start = time::raw_monotonic_ns();
+    let spawned = [sched::spawn("schedtest0", worker, 0), sched::spawn("schedtest1", worker, 1)];
+    for id in spawned.iter().flatten() {
+        let _ = sched::join(*id);
+    }
+    let ms = (time::raw_monotonic_ns() - start) / 1_000_000;
+    let (turns, done) = (TURNS.load(Ordering::Relaxed), DONE.load(Ordering::Relaxed));
+    let slept = SLEPT.load(Ordering::Relaxed);
+    let preempted = PREEMPTED.load(Ordering::Relaxed);
+    if spawned.iter().all(Result::is_ok)
+        && done == 2
+        && turns >= ROUNDS
+        && preempted == 2
+        && slept >= SLEEP_TICKS
+    {
+        info!(
+            "schedtest: ok: 2 threads took {turns} turns in {ROUNDS} rounds each, both through spins \
+             only preemption ends, slept {slept} ticks (asked {SLEEP_TICKS}), joined ({ms} ms)"
+        );
+    } else {
+        error!(
+            "schedtest: failed: spawned {:?}, {done} of 2 ended, {turns} turns in {ROUNDS} rounds \
+             each, {preempted} of 2 through the spins, shortest sleep {slept} ticks of {SLEEP_TICKS} \
+             asked, {ms} ms",
+            spawned.map(|r| r.is_ok())
+        );
+    }
+}
+
+/// Marks boot phase `name` (`arch::bootphase`). With `stop_after=<name>`
+/// on the command line the boot ends there: logged, then QEMU exits with
+/// success under `qemu_exit` (else the CPU halts). For scenarios that
+/// check a boot up to one phase (the aarch64 port's `arm_boot`, while the
+/// phases after it are not ported) and for quick checks of early boot.
+/// Not `stop`: nothing it flushes or ends exists this early.
+fn phase(cmdline: &Cmdline, name: &str) {
+    arch::bootphase::mark(name);
+    if cmdline.value("stop_after") == Some(name) {
+        // With interrupts on, the line says whether the tick runs: three
+        // ticks waited for (2 s of the counter at most).
+        if arch::cpu::interrupts_enabled() {
+            let until = time::raw_monotonic_ns() + 2_000_000_000;
+            while time::ticks() < 3 && time::raw_monotonic_ns() < until {
+                core::hint::spin_loop();
+            }
+            let ticks = time::ticks();
+            if ticks >= 3 {
+                info!(
+                    "boot: stopping after boot phase {name} (stop_after), the tick running ({ticks} ticks)"
+                );
+            } else {
+                warn!(
+                    "boot: stopping after boot phase {name} (stop_after), {ticks} ticks in 2 s: the tick does not run"
+                );
+            }
+        } else {
+            info!("boot: stopping after boot phase {name} (stop_after)");
+        }
+        if QEMU_EXIT.load(Ordering::Relaxed) {
+            qemu::exit(QemuExitCode::Success);
+        }
+        arch::cpu::halt_forever();
+    }
+}
+
 fn stop(code: QemuExitCode) -> ! {
     // What C: has pending goes to the disk before the machine stops.
     nt::persist::flush(nt::persist::Cause::Shutdown);
@@ -717,8 +854,8 @@ fn log_boot_info(info: &BootInfo) {
         info!("bootloader: {name} {version}");
     }
     match info.firmware {
-        Some(FirmwareType::Efi64) => info!("firmware: UEFI x86_64"),
-        Some(other) => warn!("firmware: {other:?} (only UEFI x86_64 is supported)"),
+        Some(FirmwareType::Efi64) => info!("firmware: UEFI {}", arch::NAME),
+        Some(other) => warn!("firmware: {other:?} (only UEFI {} is supported)", arch::NAME),
         None => warn!("firmware: unknown"),
     }
     info!("cmdline: {:?}", info.cmdline);
@@ -853,8 +990,9 @@ fn start_cpus(info: &BootInfo, cmdline: &Cmdline) {
     }
     if let Some(id) = report.first_failed {
         error!(
-            "smp: {} CPU(s) of the MADT's did not start (first: APIC id {id}); running on {n}",
-            report.failed
+            "smp: {} CPU(s) of the MADT's did not start (first: {} {id}); running on {n}",
+            report.failed,
+            arch::smp::HW_ID_NAME
         );
     }
     handover::report_cpus(info, n);
@@ -866,13 +1004,14 @@ fn log_processors(info: &BootInfo) {
     let mut line = heapless_line();
     let _ = write!(
         line,
-        "smp: {}: {} CPU(s), BSP APIC id {}:",
+        "smp: {}: {} CPU(s), BSP {} {}:",
         if info.handover.is_some() { "parked by the previous kernel" } else { "bootloader" },
         info.processors.len(),
-        info.processors.bsp_lapic_id
+        arch::smp::HW_ID_NAME,
+        info.processors.bsp_id
     );
     for p in info.processors.iter() {
-        let _ = write!(line, " {}", p.lapic_id);
+        let _ = write!(line, " {}", p.hw_id());
     }
     info!("{}", line.as_str());
     match arch::smp::shelter_state() {
@@ -898,14 +1037,16 @@ fn log_processors(info: &BootInfo) {
                 let _ = write!(line, " {id}");
             }
             let missing =
-                fw.ids().iter().filter(|id| !info.processors.iter().any(|p| p.lapic_id == **id));
+                fw.ids().iter().filter(|id| !info.processors.iter().any(|p| p.hw_id() == **id));
             let mut first = true;
             for id in missing {
-                let _ = write!(
-                    line,
-                    "{} {id}",
-                    if first { "; not started by the bootloader: APIC id" } else { "," }
-                );
+                if first {
+                    let _ =
+                        write!(line, "; not started by the bootloader: {}", arch::smp::HW_ID_NAME);
+                } else {
+                    let _ = write!(line, ",");
+                }
+                let _ = write!(line, " {id}");
                 first = false;
             }
             info!("{}", line.as_str());
@@ -1520,7 +1661,14 @@ fn await_program(
     handover_requests: Option<&nt::object::ObjectRef>,
     free_before: u64,
 ) {
-    let space = {
+    // The address space, held from here: the process gives its own
+    // reference up at its exit (`nt::process::finish`), so this is the
+    // one the teardown check below watches go.
+    let Some(space) = process.space_now() else {
+        warn!("run: {} has no address space", process.name);
+        return;
+    };
+    {
         // Wait for the whole process (all threads) to end.
         match nt::object::KObject::new(nt::object::ObjectBody::Process(process.clone())) {
             Ok(object) => {
@@ -1586,8 +1734,7 @@ fn await_program(
         if wait_all {
             wait_for_the_rest();
         }
-        process.space.clone()
-    };
+    }
     // Only `space` may hold the address space now.
     drop(process);
     // Teardown check: once the exiting threads are reaped, ours must be the

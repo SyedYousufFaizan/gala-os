@@ -255,6 +255,16 @@ impl Siginfo {
         s.set_u32(SI_STATUS_OFFSET, status as u32);
         s
     }
+    /// SIGSYS of a seccomp trap: si_errno the filter's data, then
+    /// _sigsys's si_call_addr, si_syscall and si_arch.
+    pub fn sys(code: i32, errno: i32, call_addr: u64, syscall: i32, arch: u32) -> Siginfo {
+        let mut s = Siginfo::zeroed(SIGSYS as i32, code);
+        s.errno = errno;
+        s.set_u64(16, call_addr);
+        s.set_u32(24, syscall as u32);
+        s.set_u32(28, arch);
+        s
+    }
     /// A fault (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP): the address.
     pub fn fault(signo: i32, code: i32, addr: u64) -> Siginfo {
         let mut s = Siginfo::zeroed(signo, code);

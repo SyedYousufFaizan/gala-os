@@ -2,7 +2,7 @@
 //! architecture lives here, behind one interface that each architecture
 //! implements in its own module (x86_64, the one gala runs on; aarch64, a
 //! stub that only compiles, so that `cargo check --target
-//! aarch64-unknown-none` fails on any x86 assumption outside this
+//! aarch64-unknown-none-softfloat` fails on any x86 assumption outside this
 //! directory). ARCHITECTURE.md "The architecture seam" lists what an
 //! architecture provides.
 //!

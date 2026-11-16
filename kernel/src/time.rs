@@ -743,7 +743,8 @@ const MAX_RECALIBRATIONS: u32 = 2;
 fn clock_check(_: usize) {
     let mut recalibrations = 0;
     crate::info!(
-        "clock: checking the TSC ({}) against the RTC (uptime_ms={})",
+        "clock: checking the {} ({}) against the RTC (uptime_ms={})",
+        timer::COUNTER_NAME,
         Mhz(rate().0),
         uptime_ms()
     );
@@ -760,8 +761,9 @@ fn clock_check(_: usize) {
             }
             Some((seconds, clockcal::RtcVerdict::Agrees { measured_hz, off_ppm })) => {
                 crate::info!(
-                    "clock: RTC check: agrees: TSC {} calibrated, the RTC measured {} over {seconds} s \
+                    "clock: RTC check: agrees: {} {} calibrated, the RTC measured {} over {seconds} s \
                      ({}) (uptime_ms={})",
+                    timer::COUNTER_NAME,
                     Mhz(calibrated),
                     Mhz(measured_hz),
                     Ppm(off_ppm),
@@ -778,9 +780,10 @@ fn clock_check(_: usize) {
             }
             Some((seconds, clockcal::RtcVerdict::Wrong { measured_hz, off_ppm })) => {
                 crate::error!(
-                    "clock: WRONG: the TSC was calibrated at {} but the RTC measured {} over \
+                    "clock: WRONG: the {} was calibrated at {} but the RTC measured {} over \
                      {seconds} s ({}): guest time ran {}.{:02}x the real rate; recalibrating \
                      (uptime_ms={})",
+                    timer::COUNTER_NAME,
                     Mhz(calibrated),
                     Mhz(measured_hz),
                     Ppm(off_ppm),
@@ -912,10 +915,12 @@ fn recalibrate(rtc_hz: u64) {
     }
     crate::sched::set_affinity(me, u64::MAX);
     crate::warn!(
-        "clock: recalibrated: TSC {} (was {}), APIC timer {} kHz (was {}), from {from}; {} \
+        "clock: recalibrated: {} {} (was {}), {} {} kHz (was {}), from {from}; {} \
          (uptime_ms={})",
+        timer::COUNTER_NAME,
         Mhz(new.counter_hz()),
         Mhz(old.counter_hz()),
+        timer::TIMER_NAME,
         new.timer_hz() / 1000,
         old.timer_hz() / 1000,
         new.describe(),

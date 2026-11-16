@@ -118,7 +118,7 @@ const A_SIZES: [usize; 4] = [
     size_of::<DataA>(),
 ];
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(
     W_SIZES[0] == 168
         && W_SIZES[1] == 952

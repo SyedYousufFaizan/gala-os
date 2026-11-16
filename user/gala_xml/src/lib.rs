@@ -1,7 +1,8 @@
 //! A small XML 1.0 reader with namespaces (W3C XML 1.0 and Namespaces
 //! in XML 1.0), shared by galapkg (MSIX's AppxManifest.xml,
 //! AppxBlockMap.xml, AppxBundleManifest.xml and OPC's
-//! [Content_Types].xml) and msxml6.dll's DOM: elements, attributes, text,
+//! [Content_Types].xml), msxml6.dll's DOM and webservices.dll's
+//! WS_XML_READER: elements, attributes, text,
 //! CDATA, comments, processing instructions (the XML declaration among
 //! them), the five predefined entities and character references; UTF-8
 //! (with or without a byte order mark) and UTF-16 with a byte order mark.
@@ -18,6 +19,14 @@
 //! elements and its content in document order ([`Content`]); namespace
 //! declarations are attributes in [`XMLNS_NS`], as the DOM has them.
 //! [`parse_document`] also gives what comes before and after the root.
+//!
+//! [`Scan`] is the same reader with the other face: it hands out one
+//! [`Event`] at a time for a caller that pulls, over the same
+//! character-level rules, so it refuses what [`parse`] refuses -- at
+//! the node that is wrong, which is where a reader whose caller pulls
+//! has to fail. The document is passed to each [`Scan::next_event`]
+//! call and not held, so a scan is an offset into it and borrows
+//! nothing.
 //!
 //! Allocation is infallible (`alloc`'s String and Vec): a document is
 //! read whole into memory, its size the caller's to bound.
@@ -218,6 +227,7 @@ pub fn parse_text(text: &str) -> Result<Document, Error> {
 }
 
 /// An element being read, with the namespace bindings its tag made.
+#[derive(Debug)]
 struct Open {
     el: Element,
     /// (prefix, uri); the empty prefix is the default namespace.
@@ -361,9 +371,10 @@ impl<'t> Parser<'t> {
         loop {
             self.skip_space();
             if self.starts("<!--") {
-                out.push(self.comment()?);
+                out.push(Content::Comment(self.comment()?));
             } else if self.starts("<?") {
-                out.push(self.pi()?);
+                let (target, data) = self.pi()?;
+                out.push(Content::Pi { target, data });
             } else if self.starts("<!DOCTYPE") {
                 return self.err("a document type declaration (DTDs are not allowed)");
             } else {
@@ -372,15 +383,15 @@ impl<'t> Parser<'t> {
         }
     }
 
-    /// A comment (at `<!--`).
-    fn comment(&mut self) -> Result<Content, Error> {
+    /// A comment's text (at `<!--`).
+    fn comment(&mut self) -> Result<String, Error> {
         self.advance(4);
-        let text = self.skip_past("-->", "a comment")?;
-        Ok(Content::Comment(text.into()))
+        Ok(self.skip_past("-->", "a comment")?.into())
     }
 
-    /// A processing instruction (at `<?`).
-    fn pi(&mut self) -> Result<Content, Error> {
+    /// A processing instruction's target and data (at `<?`), its
+    /// leading white space dropped.
+    fn pi(&mut self) -> Result<(String, String), Error> {
         self.advance(2);
         let target = self.name()?;
         let body = self.skip_past("?>", "a processing instruction")?;
@@ -388,14 +399,15 @@ impl<'t> Parser<'t> {
             return self.err(alloc::format!("white space expected after <?{target}"));
         }
         let data = body.trim_start_matches([' ', '\t', '\n']);
-        Ok(Content::Pi { target: target.into(), data: data.into() })
+        Ok((target.into(), data.into()))
     }
 
     fn document(mut self) -> Result<Document, Error> {
         let mut prolog = Vec::new();
         // The XML declaration may only come first.
         if self.starts("<?xml") && !self.starts("<?xml-") {
-            prolog.push(self.pi()?);
+            let (target, data) = self.pi()?;
+            prolog.push(Content::Pi { target, data });
         }
         self.misc(&mut prolog)?;
         if !self.starts("<") || self.starts("</") {
@@ -472,9 +484,9 @@ impl<'t> Parser<'t> {
                     None => return Ok(open.el),
                 }
             } else if self.starts("<!--") {
-                let c = self.comment()?;
+                let text = self.comment()?;
                 if let Some(o) = stack.last_mut() {
-                    o.el.content.push(c);
+                    o.el.content.push(Content::Comment(text));
                 }
             } else if self.starts("<![CDATA[") {
                 self.advance(9);
@@ -487,12 +499,12 @@ impl<'t> Parser<'t> {
                     None => return self.err("CDATA outside the root"),
                 }
             } else if self.starts("<?") {
-                let pi = self.pi()?;
-                if matches!(&pi, Content::Pi { target, .. } if target.eq_ignore_ascii_case("xml")) {
+                let (target, data) = self.pi()?;
+                if target.eq_ignore_ascii_case("xml") {
                     return self.err("an XML declaration not at the start");
                 }
                 if let Some(o) = stack.last_mut() {
-                    o.el.content.push(pi);
+                    o.el.content.push(Content::Pi { target, data });
                 }
             } else if self.starts("<!") {
                 return self.err("markup declarations are not allowed");
@@ -638,10 +650,291 @@ impl<'t> Parser<'t> {
     }
 }
 
+/// What a scan sees, in document order ([`Scan`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// A start tag, its namespace and its attributes' resolved as
+    /// [`Element`]'s are. An empty element is a start followed at once
+    /// by an [`Event::EndElement`].
+    StartElement {
+        /// Namespace URI (empty when in no namespace).
+        ns: String,
+        /// Local name.
+        name: String,
+        /// The name as written (with its prefix).
+        qname: String,
+        attrs: Vec<Attr>,
+        /// The line the start tag is on.
+        line: u32,
+    },
+    /// The end of the element the scan was in (an end tag, or the
+    /// second half of an empty element).
+    EndElement,
+    /// Character data or a CDATA section, references replaced: one run
+    /// between markup.
+    Text(String),
+    Comment(String),
+    /// A processing instruction (the XML declaration is one, target
+    /// `xml`): its target and its data, leading white space dropped.
+    Pi {
+        target: String,
+        data: String,
+    },
+    /// Past the root element, nothing left: every later call gives this
+    /// again.
+    End,
+}
+
+/// A document read node by node: [`Event`]s in document order, with the
+/// errors [`parse`] gives and at the point where reading meets them --
+/// which is what a program that is handed one node at a time needs
+/// (webservices.dll's WS_XML_READER, ARCHITECTURE "Other DLLs"), and
+/// what a tree cannot say, since it is built or refused whole.
+///
+/// The text is passed to each [`Scan::next_event`] instead of held, so
+/// a scan is a position and a stack of open elements and borrows
+/// nothing: the document stays the caller's, to own as it likes.
+///
+/// Both faces of this crate are dispatch loops over the same character
+/// rules: [`parse`] builds elements out of them, a scan hands each node
+/// out.
+#[derive(Debug)]
+pub struct Scan {
+    pos: usize,
+    line: u32,
+    line_start: usize,
+    /// The elements the scan is inside, innermost last: their names (to
+    /// match end tags against) and their namespace bindings.
+    stack: Vec<Open>,
+    /// The root element has been closed.
+    root_done: bool,
+    /// More than one root element is allowed: the text is a fragment,
+    /// not a document (webservices.dll's
+    /// WS_XML_READER_PROPERTY_ALLOW_FRAGMENT, ARCHITECTURE "Other
+    /// DLLs"). Everything else holds: each root is well-formed, and
+    /// nothing but white space, comments and processing instructions
+    /// may stand between them.
+    fragment: bool,
+    /// An empty element's tag was handed out as a start, so its end is
+    /// the next event.
+    pending_end: bool,
+    /// An event has been handed out, so an XML declaration is no longer
+    /// at the start of the document.
+    started: bool,
+}
+
+impl Default for Scan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Scan {
+    /// A scan at the start of a document.
+    pub fn new() -> Self {
+        Self {
+            pos: 0,
+            line: 1,
+            line_start: 0,
+            stack: Vec::new(),
+            root_done: false,
+            fragment: false,
+            pending_end: false,
+            started: false,
+        }
+    }
+
+    /// A scan over a fragment: more than one root element, with the
+    /// same rules otherwise (each root well-formed, and nothing but
+    /// white space, comments and processing instructions between them).
+    pub fn allow_fragment(mut self) -> Self {
+        self.fragment = true;
+        self
+    }
+
+    /// How many elements the scan is inside: 0 outside the root, 1 on
+    /// the root's content.
+    pub fn depth(&self) -> usize {
+        self.stack.len()
+    }
+
+    /// Where the scan has got to: the line, counted from 1, and how
+    /// many bytes into it, counted from 0. It is the end of the node
+    /// last handed out, which is where the next one starts.
+    pub fn position(&self) -> (u32, usize) {
+        (self.line, self.pos - self.line_start)
+    }
+
+    /// The local name of the element the scan is inside, innermost
+    /// first, or None outside the root.
+    pub fn open_name(&self) -> Option<&str> {
+        self.stack.last().map(|o| o.el.name.as_str())
+    }
+
+    /// The next node of `text`, which is the same document every call
+    /// (the scan holds a byte offset into it, not the text).
+    pub fn next_event(&mut self, text: &str) -> Result<Event, Error> {
+        let mut p = Parser {
+            s: text.as_bytes(),
+            text,
+            pos: self.pos,
+            line: self.line,
+            line_start: self.line_start,
+        };
+        let event = self.step(&mut p);
+        self.pos = p.pos;
+        self.line = p.line;
+        self.line_start = p.line_start;
+        if event.is_ok() {
+            self.started = true;
+        }
+        event
+    }
+
+    /// Leaves the innermost open element; the root's end ends the
+    /// document's content.
+    fn close(&mut self) {
+        self.stack.pop();
+        if self.stack.is_empty() {
+            self.root_done = true;
+        }
+    }
+
+    fn step(&mut self, p: &mut Parser<'_>) -> Result<Event, Error> {
+        if self.pending_end {
+            self.pending_end = false;
+            self.close();
+            return Ok(Event::EndElement);
+        }
+        // Outside the root: white space, comments and processing
+        // instructions, of which the XML declaration may only be the
+        // document's first node.
+        if self.stack.is_empty() {
+            let at_start = !self.started && p.pos == 0;
+            p.skip_space();
+            if p.starts("<!--") {
+                return Ok(Event::Comment(p.comment()?));
+            }
+            if p.starts("<?") {
+                let (target, data) = p.pi()?;
+                if target.eq_ignore_ascii_case("xml") && !at_start {
+                    return p.err("an XML declaration not at the start");
+                }
+                return Ok(Event::Pi { target, data });
+            }
+            if p.starts("<!DOCTYPE") {
+                return p.err("a document type declaration (DTDs are not allowed)");
+            }
+            if self.root_done {
+                if p.pos == p.s.len() {
+                    return Ok(Event::End);
+                }
+                if !self.fragment {
+                    return p.err("content after the root element");
+                }
+                // A fragment's next root element, read like the first.
+                self.root_done = false;
+            }
+            if !p.starts("<") || p.starts("</") {
+                return p.err("no root element");
+            }
+        }
+        // Inside the root, or on its start tag.
+        if p.starts("</") {
+            let line = p.line;
+            p.advance(2);
+            let name = p.name()?;
+            p.skip_space();
+            if !p.starts(">") {
+                return p.err("'>' expected");
+            }
+            p.advance(1);
+            let open = &self.stack.last().expect("inside an element").el;
+            if open.qname != name {
+                let (qname, oline) = (open.qname.clone(), open.line);
+                return Err(
+                    p.error_at(line, alloc::format!("</{name}> closes <{qname}> (line {oline})"))
+                );
+            }
+            self.close();
+            return Ok(Event::EndElement);
+        }
+        if p.starts("<!--") {
+            return Ok(Event::Comment(p.comment()?));
+        }
+        if p.starts("<![CDATA[") {
+            p.advance(9);
+            return Ok(Event::Text(p.skip_past("]]>", "a CDATA section")?.into()));
+        }
+        if p.starts("<?") {
+            let (target, data) = p.pi()?;
+            if target.eq_ignore_ascii_case("xml") {
+                return p.err("an XML declaration not at the start");
+            }
+            return Ok(Event::Pi { target, data });
+        }
+        if p.starts("<!") {
+            return p.err("markup declarations are not allowed");
+        }
+        if p.starts("<") {
+            if self.stack.len() >= MAX_DEPTH {
+                return p.err("elements nested too deeply");
+            }
+            let (open, empty) = p.start_tag(&self.stack)?;
+            let event = Event::StartElement {
+                ns: open.el.ns.clone(),
+                name: open.el.name.clone(),
+                qname: open.el.qname.clone(),
+                attrs: open.el.attrs.clone(),
+                line: open.el.line,
+            };
+            self.stack.push(open);
+            self.pending_end = empty;
+            return Ok(event);
+        }
+        if p.pos >= p.s.len() {
+            let (qname, line) =
+                self.stack.last().map_or(("?".into(), 0), |o| (o.el.qname.clone(), o.el.line));
+            return p.err(alloc::format!("<{qname}> (line {line}) is not closed"));
+        }
+        let mut text = String::new();
+        p.chars_until(b"<", &mut text)?;
+        Ok(Event::Text(text))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloc::vec;
+
+    /// A second root element is content after the root element, unless
+    /// the scan was told the text is a fragment.
+    #[test]
+    fn fragments_need_the_flag() {
+        let text = "<a>1</a>\n<b>2</b>";
+        let names = |scan: &mut Scan| -> Result<Vec<String>, Error> {
+            let mut names = Vec::new();
+            loop {
+                match scan.next_event(text)? {
+                    Event::StartElement { name, .. } => names.push(name),
+                    Event::End => return Ok(names),
+                    _ => {}
+                }
+            }
+        };
+
+        let whole = alloc::format!("{}", names(&mut Scan::new()).unwrap_err());
+        assert!(whole.contains("content after the root element"), "{whole}");
+        assert_eq!(names(&mut Scan::new().allow_fragment()).unwrap(), vec!["a", "b"]);
+
+        // What a fragment does not allow: text between its roots.
+        let mut scan = Scan::new().allow_fragment();
+        assert!(matches!(scan.next_event("<a/>x<b/>"), Ok(Event::StartElement { .. })));
+        assert!(matches!(scan.next_event("<a/>x<b/>"), Ok(Event::EndElement)));
+        let loose = alloc::format!("{}", scan.next_event("<a/>x<b/>").unwrap_err());
+        assert!(loose.contains("no root element"), "{loose}");
+    }
 
     #[test]
     fn namespaces_resolve() {
@@ -735,5 +1028,109 @@ mod tests {
         assert!(err("<a/><?xml version='1.0'?>").msg.contains("XML declaration"));
         let e = err("<a>\n  <b></c></a>");
         assert_eq!((e.line, e.column), (2, 10));
+    }
+
+    /// Every node of a document, in order, as a scan hands them out.
+    #[test]
+    fn scan_events_in_order() {
+        let text = "<?xml version='1.0'?><!--before-->\n\
+                    <r xmlns='u' a='1'><b/>hi<![CDATA[<raw>]]><?p d?></r>";
+        let mut scan = Scan::new();
+        let mut events = Vec::new();
+        loop {
+            let event = scan.next_event(text).expect("a well-formed document");
+            let done = event == Event::End;
+            events.push(event);
+            if done {
+                break;
+            }
+        }
+        assert_eq!(
+            events,
+            vec![
+                Event::Pi { target: "xml".into(), data: "version='1.0'".into() },
+                Event::Comment("before".into()),
+                Event::StartElement {
+                    ns: "u".into(),
+                    name: "r".into(),
+                    qname: "r".into(),
+                    attrs: vec![
+                        Attr {
+                            ns: XMLNS_NS.into(),
+                            name: "xmlns".into(),
+                            qname: "xmlns".into(),
+                            value: "u".into(),
+                        },
+                        Attr {
+                            ns: String::new(),
+                            name: "a".into(),
+                            qname: "a".into(),
+                            value: "1".into(),
+                        },
+                    ],
+                    line: 2,
+                },
+                // The empty element is a start and an end.
+                Event::StartElement {
+                    ns: "u".into(),
+                    name: "b".into(),
+                    qname: "b".into(),
+                    attrs: Vec::new(),
+                    line: 2,
+                },
+                Event::EndElement,
+                Event::Text("hi".into()),
+                Event::Text("<raw>".into()),
+                Event::Pi { target: "p".into(), data: "d".into() },
+                Event::EndElement,
+                Event::End,
+            ]
+        );
+        // Past the end, every call says so again.
+        assert_eq!(scan.next_event(text), Ok(Event::End));
+    }
+
+    /// What a tree cannot do: the nodes before a malformed one are
+    /// handed out, and the error comes at the node that is wrong.
+    #[test]
+    fn scan_fails_where_reading_meets_it() {
+        let text = "<r><a></r>";
+        let mut scan = Scan::new();
+        assert!(
+            matches!(scan.next_event(text), Ok(Event::StartElement { ref name, .. }) if name == "r")
+        );
+        assert!(
+            matches!(scan.next_event(text), Ok(Event::StartElement { ref name, .. }) if name == "a")
+        );
+        assert_eq!(scan.depth(), 2);
+        assert_eq!(scan.open_name(), Some("a"));
+        let err = scan.next_event(text).expect_err("</r> closes <a>");
+        assert_eq!(err.msg, "</r> closes <a> (line 1)");
+        // The whole document is refused by `parse`, which cannot say
+        // which nodes were good.
+        assert!(parse(text.as_bytes()).is_err());
+    }
+
+    /// A scan refuses what `parse` refuses, where it meets it.
+    #[test]
+    fn scan_refuses_what_parse_refuses() {
+        for (doc, msg) in [
+            ("<!DOCTYPE r><r/>", "a document type declaration (DTDs are not allowed)"),
+            ("text", "no root element"),
+            ("<r/>junk", "content after the root element"),
+            ("<r>", "<r> (line 1) is not closed"),
+            ("<r><p:a/></r>", "undeclared namespace prefix 'p'"),
+            ("<r><?xml v?></r>", "an XML declaration not at the start"),
+        ] {
+            let mut scan = Scan::new();
+            let err = loop {
+                match scan.next_event(doc) {
+                    Ok(Event::End) => panic!("{doc} was read whole"),
+                    Ok(_) => {}
+                    Err(e) => break e,
+                }
+            };
+            assert_eq!(err.msg, msg, "{doc}");
+        }
     }
 }

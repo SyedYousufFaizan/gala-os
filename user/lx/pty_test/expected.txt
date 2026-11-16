@@ -14,6 +14,17 @@ slave: iflag 0x500, oflag 0x5, cflag 0xbf, lflag 0x8a3b, line 0
 slave: c_cc 3 28 127 21 4 0 1 0 17 19 26 0 18 15 23 22 0 0 0
 master: iflag 0x500, oflag 0x5, cflag 0xbf, lflag 0x8a3b, line 0
 master: c_cc 3 28 127 21 4 0 1 0 17 19 26 0 18 15 23 22 0 0 0
+-- termios2
+TCGETS2 writes bytes = 44
+  its first 36 are TCGETS's = yes
+  c_ispeed = 38400
+  c_ospeed = 38400
+TCSETS2(no ECHO) = 0
+  TCGETS sees it = yes
+TCSETSW2(back) = 0
+TCSETSF2(back) = 0
+  as fresh = yes
+TCGETS2 on a pipe = -25 (ENOTTY)
 TIOCGWINSZ = 0
   rows = 0
   cols = 0

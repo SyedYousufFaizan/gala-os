@@ -53,7 +53,7 @@ pub const ENV: &[(&str, &str)] = &[("A", "1"), ("EMPTY", ""), ("LONGER_NAME", "s
 /// lx-expect starts weston's headless backend for them on a socket of
 /// their own and adds `XDG_RUNTIME_DIR` (its directory) and
 /// `WAYLAND_DISPLAY` (this name) to [`ENV`].
-const WAYLAND_TESTS: &[&str] = &["wl_test", "wl_popup_test", "gtk_test"];
+const WAYLAND_TESTS: &[&str] = &["wl_test", "wl_popup_test", "wl_maximize_test", "gtk_test"];
 const WAYLAND_DISPLAY: &str = "wayland-gala";
 
 /// The Wayland programs that need a seat (GTK 3 asks for the keyboard of
@@ -463,22 +463,42 @@ fn transcript(stdout: &str, stderr: &str, code: Option<i32>, signal: Option<i32>
     out
 }
 
+/// The pid of the Linux program a boot ran: the first process started
+/// with the Linux personality (`process <name> (pid <p>, ...): starting
+/// at ..., personality linux`), else the first `lx: pid <p>` line's.
+fn run_pid(serial: &str) -> Option<&str> {
+    let started = serial.lines().find_map(|line| {
+        if !line.contains("): starting at ") || !line.ends_with("personality linux") {
+            return None;
+        }
+        let rest = line.split_once("(pid ")?.1;
+        Some(rest.split_once(',')?.0)
+    });
+    started.or_else(|| {
+        serial.lines().find_map(|line| Some(line.split_once("lx: pid ")?.1.split_once(' ')?.0))
+    })
+}
+
 /// The transcript of the Linux program a boot ran (`lxrun=`), from the
 /// kernel's `lx: pid <p> stdout: <line>`, `.. stderr: ..` and `lx: pid <p>
 /// -- exit status <n>` lines (kernel/src/lx/state.rs), in expected.txt's
-/// format; None if the log has no end line.
+/// format: every process's output (as on a terminal they share) and the
+/// program's own ending (its shell's view: a child it leaves behind, such
+/// as one its death kills, is not it); None if the log has no end line
+/// for it.
 pub fn transcript_from_log(serial: &str) -> Option<String> {
+    let run = run_pid(serial)?;
     let (mut stdout, mut stderr, mut end) = (String::new(), String::new(), None);
     for line in serial.lines() {
         let Some((_, rest)) = line.split_once("lx: pid ") else { continue };
-        let Some((_pid, rest)) = rest.split_once(' ') else { continue };
+        let Some((pid, rest)) = rest.split_once(' ') else { continue };
         if let Some(text) = rest.strip_prefix("stdout: ") {
             stdout += text;
             stdout.push('\n');
         } else if let Some(text) = rest.strip_prefix("stderr: ") {
             stderr += text;
             stderr.push('\n');
-        } else if rest.starts_with("-- ") {
+        } else if rest.starts_with("-- ") && pid == run {
             end = Some(rest.to_string());
         }
     }
@@ -574,6 +594,23 @@ mod tests {
             "hello\n\n-- stderr:\noops\n-- exit status 44\n"
         );
         assert_eq!(transcript_from_log("[info ] lx: pid 4 stdout: x\n"), None);
+    }
+
+    /// A child left behind ends after the program (its parent-death
+    /// signal): the transcript has its output, not its ending.
+    #[test]
+    fn transcript_ends_with_the_programs_ending() {
+        let log = "[info ] process gtk_test (pid 4, session 1): starting at 0x7ffe, personality linux\n\
+                   [info ] lx: pid 4 fork: child pid 52 (1 pages shared)\n\
+                   [info ] process gtk_test (pid 52, session 1): starting at 0x7ffd, personality linux\n\
+                   [info ] lx: pid 52 stderr: from the child\n\
+                   [info ] lx: pid 4 stdout: ok\n\
+                   [info ] lx: pid 4 -- exit status 0\n\
+                   [info ] lx: pid 52 -- killed by signal 9\n";
+        assert_eq!(
+            transcript_from_log(log).unwrap(),
+            "ok\n-- stderr:\nfrom the child\n-- exit status 0\n"
+        );
     }
 
     #[test]

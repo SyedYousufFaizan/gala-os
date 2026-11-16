@@ -1,0 +1,58 @@
+timerfd_create(CLOCK_MONOTONIC) >= 0 = yes
+  F_GETFD = 0
+  O_NONBLOCK = no
+timerfd_gettime(unarmed) = 0
+  all zero = yes
+-- a one-shot timer, a blocking read
+timerfd_settime(60 ms) = 0
+  remaining in (0, 60 ms] = yes
+  no interval = yes
+read = 8
+  expirations = 1
+  not before 60 ms = yes
+expired: disarmed = yes
+-- non-blocking, poll and epoll
+  F_GETFD = 1
+  O_NONBLOCK = yes
+read(unarmed, non-blocking) = -11 (EAGAIN)
+read before it expires = -11 (EAGAIN)
+poll(10 s) = 1
+  revents = 1
+  not before 30 ms = yes
+read = 8
+  expirations = 1
+epoll_ctl(ADD) = 0
+epoll_wait(disarmed, 50 ms) = 0
+epoll_wait(armed, 10 s) = 1
+  events = 1
+  data = 7
+epoll_wait after the read (50 ms) = 0
+-- an interval timer
+its interval = yes
+a read: at least one expiry = yes
+another read: at least one more = yes
+still armed = yes
+disarmed (0, 0) = 0
+  the old setting's interval = yes
+  read = -11 (EAGAIN)
+-- absolute times
+TFD_TIMER_ABSTIME, the time just read = 0
+  read = 8
+  expirations = 1
+CLOCK_REALTIME, TFD_TIMER_ABSTIME, a second ago = 0
+  expirations = 1
+timerfd_create(CLOCK_BOOTTIME) >= 0 = yes
+-- errors
+timerfd_create(clock 99) = -22 (EINVAL)
+timerfd_create(bad flags) = -22 (EINVAL)
+settime(nsec 1e9) = -22 (EINVAL)
+settime(a negative second) = -22 (EINVAL)
+settime(flags 4) = -22 (EINVAL)
+settime(bad value pointer) = -14 (EFAULT)
+gettime(bad pointer) = -14 (EFAULT)
+settime(not a timerfd) = -22 (EINVAL)
+gettime(no descriptor) = -9 (EBADF)
+read(4 bytes) = -22 (EINVAL)
+write = -22 (EINVAL)
+timerfd_test: ok
+-- exit status 0
