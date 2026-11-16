@@ -20157,8 +20157,7 @@ fn run_vm_once(
                 let why = format!("stopped: the screen check failed ({e})");
                 dump_note =
                     Some(ask_for_state_dump(&socket, &log, &mut child, &mut vm_clock, &why));
-                let _ = child.kill();
-                let _ = child.wait();
+                end_qemu(&mut child);
                 break None;
             }
         }
@@ -20243,8 +20242,7 @@ fn run_vm_once(
             };
             let why = format!("timed out after {what}; {}", now.describe());
             dump_note = Some(ask_for_state_dump(&socket, &log, &mut child, &mut vm_clock, &why));
-            let _ = child.kill();
-            let _ = child.wait();
+            end_qemu(&mut child);
             break None;
         }
         thread::sleep(Duration::from_millis(50));
@@ -20544,13 +20542,37 @@ fn cpu_registers(socket: &Path) -> String {
     cpu_register_lines(&String::from_utf8_lossy(&text))
 }
 
+/// Ends a QEMU that will not end itself (a timeout, a failed screen
+/// check): SIGTERM first, which QEMU takes as a shutdown and so writes out
+/// what its `-d` log still buffers (a SIGKILL loses the log's last lines:
+/// the events just before a hang), then SIGKILL if it has not ended
+/// within 3 s.
+fn end_qemu(child: &mut std::process::Child) {
+    let _ = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let until = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < until {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// `XTASK_QEMU_GDB=1`: QEMU's own record of each vCPU (halted, PC and the
 /// registers that say how it got there, the exception registers, the
 /// power state) and every QEMU thread's stack, read by attaching gdb to
 /// the QEMU process of a timed-out boot (WORKFLOW "A boot that hangs"):
 /// what tells a guest that stopped (a halted vCPU, where) from QEMU
 /// stuck in itself (a thread in exit(), a lock), which the monitor's
-/// registers cannot. The gdb script goes beside `log`.
+/// registers cannot. It also flushes QEMU's buffered `-d` log
+/// (XTASK_QEMU_LOG), whose last lines a killed QEMU would lose. The gdb
+/// script goes beside `log`.
 fn qemu_gdb_state(pid: u32, log: &Path) -> String {
     let exe = fs::read_link(format!("/proc/{pid}/exe")).unwrap_or_default();
     let arm = exe.to_string_lossy().contains("aarch64");
@@ -20577,7 +20599,8 @@ fn qemu_gdb_state(pid: u32, log: &Path) -> String {
     let script = format!(
         "set pagination off\nset $c = cpus_queue.tqh_first\nwhile $c\n\
          p $c->cpu_index\np $c->halted\np $c->stopped\np $c->exception_index\n{cpu}\
-         set $c = $c->node.tqe_next\nend\nthread apply all bt 20\n"
+         set $c = $c->node.tqe_next\nend\nthread apply all bt 20\n\
+         call (int)fflush(0)\n"
     );
     let script_path = log.with_extension("gdb");
     if let Err(e) = fs::write(&script_path, script) {
