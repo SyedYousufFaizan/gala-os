@@ -97,6 +97,29 @@ pub fn to_bytes(regs: &Regs, fp: Option<&[u8; FP_STATE_BYTES]>) -> [u8; SIZE] {
     b
 }
 
+/// Writes into `ctx` the parts `flags` names (NtGetContextThread): the
+/// control part from `regs`, the integer part, the floating-point part
+/// from the save area `fp`; the rest of `ctx` (its flags among them) as
+/// it was.
+pub fn fill(ctx: &mut [u8], flags: u32, regs: &Regs, fp: &[u8; FP_STATE_BYTES]) {
+    let full = to_bytes(regs, Some(fp));
+    let mut copy = |from: usize, to: usize| {
+        if let (Some(dst), Some(src)) = (ctx.get_mut(from..to), full.get(from..to)) {
+            dst.copy_from_slice(src);
+        }
+    };
+    if has(flags, CONTEXT_CONTROL) {
+        copy(CPSR, CPSR + 4);
+        copy(FP, PC + 8);
+    }
+    if has(flags, CONTEXT_INTEGER) {
+        copy(X0, FP);
+    }
+    if has(flags, CONTEXT_FLOATING_POINT) {
+        copy(V0, FPSR + 4);
+    }
+}
+
 /// The parts of `ctx` its `flags` name, applied to `regs`: the control
 /// part (Fp, Lr, Sp, Pc, Cpsr) and the integer part (X0-X28). The
 /// floating-point part is `float_state`'s.
@@ -183,6 +206,30 @@ mod tests {
         let mut other = Regs::default();
         apply(&mut other, &b, CONTEXT_INTEGER);
         assert_eq!((other.x[28], other.x[29], other.pc), (regs.x[28], 0, 0));
+    }
+
+    #[test]
+    fn fill_writes_the_named_parts_only() {
+        let regs = sample();
+        let mut fp = [0u8; FP_STATE_BYTES];
+        fp[0] = 0xab;
+        // The integer part only: X0-X28 written, the control part and V0
+        // untouched (0xee).
+        let mut b = [0xeeu8; SIZE];
+        fill(&mut b, CONTEXT_INTEGER, &regs, &fp);
+        assert_eq!(u64_at(&b, 8), 0x1000);
+        assert_eq!(u64_at(&b, 8 + 8 * 28), 0x1000 + 28);
+        assert_eq!(u64_at(&b, 0x108), 0xeeee_eeee_eeee_eeee);
+        assert_eq!(b[0x110], 0xee);
+        assert_eq!(u32_at(&b, 0), 0xeeee_eeee); // the flags are the caller's
+        // The control part: Fp, Lr, Sp, Pc and Cpsr.
+        fill(&mut b, CONTEXT_CONTROL, &regs, &fp);
+        assert_eq!((u64_at(&b, 0x100), u64_at(&b, 0x108)), (regs.sp, regs.pc));
+        assert_eq!((u64_at(&b, 0xf0), u64_at(&b, 0xf8)), (regs.x[29], regs.x[30]));
+        assert_eq!(u32_at(&b, 4), regs.cpsr);
+        // The floating-point part.
+        fill(&mut b, CONTEXT_FLOATING_POINT, &regs, &fp);
+        assert_eq!(b[0x110], 0xab);
     }
 
     #[test]
