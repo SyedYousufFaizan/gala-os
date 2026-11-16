@@ -1,6 +1,7 @@
 //! PCI functions: their configuration space (read and written through
-//! the architecture's `pci_config`: x86-64's legacy I/O mechanism), BARs,
-//! capabilities, and a brute-force enumeration of bus 0-255.
+//! the architecture's `pci_config`: x86-64's legacy I/O mechanism,
+//! aarch64's ECAM window from the MCFG), BARs, capabilities, and a
+//! brute-force enumeration of bus 0-255.
 
 use super::pci_config::{read_u32, write_u16};
 
@@ -114,6 +115,22 @@ fn probe(address: Address) -> Option<Function> {
     })
 }
 
+/// The offset of `at`'s configuration register `offset` (dword aligned)
+/// in ECAM window `ecam` (PCI Express's enhanced configuration access:
+/// 1 MiB per bus from `start_bus`, 32 KiB per device, 4 KiB per
+/// function), or None for a bus outside it.
+pub fn ecam_offset(ecam: crate::boot::acpi::Ecam, at: Address, offset: u8) -> Option<u64> {
+    if at.bus < ecam.start_bus || at.bus > ecam.end_bus {
+        return None;
+    }
+    Some(
+        u64::from(at.bus - ecam.start_bus) << 20
+            | u64::from(at.device & 0x1f) << 15
+            | u64::from(at.function & 7) << 12
+            | u64::from(offset & 0xfc),
+    )
+}
+
 /// Calls `f` for every function on every bus.
 pub fn for_each(mut f: impl FnMut(&Function)) {
     for bus in 0..=255u8 {
@@ -134,7 +151,20 @@ pub fn for_each(mut f: impl FnMut(&Function)) {
 
 #[cfg(test)]
 mod tests {
-    use super::{capabilities, memory_bar};
+    use super::{Address, capabilities, ecam_offset, memory_bar};
+    use crate::boot::acpi::Ecam;
+
+    #[test]
+    fn ecam_offsets() {
+        let ecam = Ecam { base: 0, segment: 0, start_bus: 0, end_bus: 255 };
+        let at = Address { bus: 1, device: 2, function: 3 };
+        assert_eq!(ecam_offset(ecam, at, 0x2e), Some(0x11_302c));
+        let late = Ecam { start_bus: 4, end_bus: 7, ..ecam };
+        let first = Address { bus: 5, device: 0, function: 0 };
+        assert_eq!(ecam_offset(late, first, 4), Some(0x10_0004));
+        assert_eq!(ecam_offset(late, at, 0), None);
+        assert_eq!(ecam_offset(late, Address { bus: 8, device: 0, function: 0 }, 0), None);
+    }
 
     /// A configuration space as dwords.
     fn space(dwords: &[(u8, u32)]) -> impl Fn(u8) -> u32 + '_ {

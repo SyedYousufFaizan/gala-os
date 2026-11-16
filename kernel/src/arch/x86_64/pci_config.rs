@@ -14,6 +14,20 @@ static CONFIG: IrqMutex<()> = IrqMutex::named("pci.config", ());
 
 const COMMAND: u8 = 0x04;
 
+/// Nothing to set up: says which mechanism configuration space is reached
+/// by. The ports, not the MCFG's ECAM (which q35 also has): a handover
+/// boot gets no ACPI tables from the previous kernel, and the ports need
+/// none.
+pub fn init(info: &crate::boot::BootInfo) {
+    match info.pci_ecam {
+        Some(e) => crate::info!(
+            "pci: configuration space through I/O ports 0xcf8/0xcfc (the MCFG's ECAM at {:#x} not used)",
+            e.base
+        ),
+        None => crate::info!("pci: configuration space through I/O ports 0xcf8/0xcfc (no MCFG)"),
+    }
+}
+
 fn config_address(at: Address, offset: u8) -> u32 {
     0x8000_0000
         | u32::from(at.bus) << 16

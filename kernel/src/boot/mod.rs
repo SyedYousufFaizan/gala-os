@@ -270,6 +270,9 @@ pub struct BootInfo {
     /// The HPET and ACPI PM timer the firmware's tables list (Limine boots
     /// only): references for the TSC's calibration.
     pub clock_tables: acpi::ClockTables,
+    /// PCI segment 0's ECAM window, from the MCFG (Limine boots only):
+    /// aarch64's way to PCI configuration space (`arch::pci_config`).
+    pub pci_ecam: Option<acpi::Ecam>,
     pub framebuffer_facts: Option<FramebufferFacts>,
     /// The kernel's own executable file (ELF), to hand over to next time.
     pub kernel_file: Option<&'static [u8]>,
@@ -421,6 +424,7 @@ fn collect_handover(entry: HandoverEntry) -> Result<BootInfo, BootError> {
         },
         firmware_cpus: None,
         clock_tables: acpi::ClockTables::default(),
+        pci_ecam: None,
         framebuffer_facts,
         kernel_file,
         handover: Some(Received {
@@ -558,6 +562,7 @@ pub fn collect(handover: Option<HandoverEntry>) -> Result<BootInfo, BootError> {
             hhdm_offset,
             REQUESTS.rsdp.response().map_or(0, |r| r.address),
         ),
+        pci_ecam: acpi::read_mcfg(hhdm_offset, REQUESTS.rsdp.response().map_or(0, |r| r.address)),
         framebuffer_facts,
         kernel_file,
         handover: None,

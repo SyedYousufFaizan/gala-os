@@ -174,6 +174,9 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     phase(&cmdline, "smp_start");
     start_cpus(&info, &cmdline);
     phase(&cmdline, "smp_done");
+    // PCI configuration space (aarch64: the MCFG's ECAM mapped), before
+    // the drivers enumerate.
+    arch::pci_config::init(&info);
     disk::init();
     // `display=virtio`: the screen is virtio-gpu (default `fb`: the
     // bootloader's framebuffer); `gputrace` logs every command and

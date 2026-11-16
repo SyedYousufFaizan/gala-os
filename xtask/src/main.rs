@@ -12285,8 +12285,10 @@ const SCENARIOS: &[Scenario] = &[
         // frame allocator, its own page tables (the console still writing
         // after the switch), the GIC and the generic timer's tick (IRQs
         // taken and returned from), the second CPU, the NT layer's start,
-        // then the boot ends where the port has got to (`stop_after`) and
-        // the kernel exits through semihosting.
+        // PCI through the MCFG's ECAM with the disk and network drivers
+        // on their devices (DISK_SCENARIOS and CARD_SCENARIOS attach
+        // them), then the boot ends where the port has got to
+        // (`stop_after`) and the kernel exits through semihosting.
         name: "arm_boot",
         cmdline: "qemu_exit stop_after=drivers",
         exit_status: QEMU_EXIT_SUCCESS,
@@ -12304,7 +12306,10 @@ const SCENARIOS: &[Scenario] = &[
             "gic: CPU 1: GICv3",
             "smp: 2 CPUs online (2 reported by the bootloader, 2 in the MADT",
             "syscall: personality nt dispatches to nt::syscalls",
-            "pci: no configuration space on aarch64 yet",
+            "pci: configuration space through the MCFG's ECAM at 0x4010000000 (segment 0, buses 0-255)",
+            "disk: virtio-blk at 00:",
+            "net: virtio-net at 00:",
+            "net: link up, ",
             "boot: stopping after boot phase drivers (stop_after), the tick running",
         ],
     },
@@ -19862,6 +19867,8 @@ fn run_vm_once(
     } else if HOST_PAGE_SCENARIOS.contains(&iso_scenario(iso)) {
         let _ = fs::remove_file(iso.with_extension("serve.log"));
         add_host_page_net(&mut cmd, &iso.with_extension("serve.log"))?;
+    } else if CARD_SCENARIOS.contains(&iso_scenario(iso)) {
+        add_card(&mut cmd);
     }
     if let Some(disk) = disk {
         add_disk(&mut cmd, disk);
@@ -23094,8 +23101,17 @@ fn add_net_with(cmd: &mut Command, port: u16, guest: u16, extra: &str) {
         .arg(format!(
             "user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:{guest},hostfwd=udp:127.0.0.1:{port}-:{guest}{extra}"
         ))
-        // The legacy (0.9.5) interface: one I/O BAR (see docs/ARCHITECTURE.md).
         .args(["-device", "virtio-net-pci,netdev=n0"]);
+}
+
+/// Scenarios that get a virtio-net card on QEMU's user network and no
+/// client: the card is found and set up, nothing connects
+/// (`add_card`).
+const CARD_SCENARIOS: &[&str] = &["arm_boot"];
+
+/// A virtio-net card on QEMU's user network, nothing forwarded to it.
+fn add_card(cmd: &mut Command) {
+    cmd.args(["-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]);
 }
 
 /// Scenarios whose guest fetches `http://10.0.2.100/` from the host
@@ -23218,8 +23234,7 @@ fn add_gpu(cmd: &mut Command) {
     cmd.args(["-vga", "none", "-device", "virtio-gpu-pci,xres=1280,yres=800,edid=on"]);
 }
 
-/// A virtio-blk disk backed by the raw image `path` (the legacy
-/// interface, as for the network card).
+/// A virtio-blk disk backed by the raw image `path`.
 fn add_disk(cmd: &mut Command, path: &Path) {
     // A run resumed from a machine snapshot has a qcow2 layer of its own
     // over the snapshot's disk (snapshot.rs); the rest are raw images.
@@ -23257,6 +23272,17 @@ struct DiskScenario {
 }
 
 const DISK_SCENARIOS: &[DiskScenario] = &[
+    DiskScenario {
+        // The aarch64 kernel's disk driver finds its device through the
+        // ECAM (nothing is read or written).
+        name: "arm_boot",
+        size: 1 << 20,
+        host_mib: None,
+        setup: |_| {},
+        check: |_| Ok(()),
+        earlier_boots: &[],
+        earlier_fail: false,
+    },
     DiskScenario {
         name: "disk_test",
         size: 16 << 20,
