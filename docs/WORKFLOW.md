@@ -2216,14 +2216,18 @@ source).
   default `-march`, musl's libc by what comes out of the first program
   it builds -- and CI's `linux` job clears the variant for its whole
   job, before it installs anything, by writing `#clear
-  APT::Architecture-Variants;` into `/etc/apt/apt.conf.d/99-plain-amd64`
-  (a name that sorts after the image's). A file of one's own that clears
-  the option, rather than the deletion of the image's file that sets it:
-  one runner image keeps that file in
-  `/etc/apt/apt.conf.d/90arch-variant` and another does not, while
-  `#clear` -- or `-o APT::Architecture-Variants=` on a single command --
-  outranks any file whatever its name. `apt-config dump | grep -i
-  variant` then shows it empty. Check what came of it in the code, not
+  APT::Architecture-Variants;` into `/etc/apt/apt.conf.d/zz-plain-amd64`
+  and dropping any line setting it from `/etc/apt/apt.conf`. apt reads
+  its configuration in order (`apt.conf.d` by name, then `apt.conf`),
+  and a `#clear` clears only what was read before it: a later file
+  selects the variant again (one runner image's dump still said amd64v3
+  right after a clear written to `99-plain-amd64`). A file of one's own
+  read last, rather than the deletion of the image's file that sets it:
+  one runner image keeps that file in `/etc/apt/apt.conf.d/90arch-variant`
+  and another elsewhere. The step lists the files that set the option
+  and fails if `apt-config dump` still selects a variant (`-o
+  APT::Architecture-Variants=` on a single command also outranks every
+  file). Check what came of it in the code, not
   in `-march=` alone, which says nothing about musl-dev: no `__AVX2__`
   from `gcc -dM -E -`, and no VEX-encoded instruction in
   `/usr/lib/x86_64-linux-musl/libc.a` or in a binary the build produced.
