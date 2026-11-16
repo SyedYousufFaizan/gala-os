@@ -49,6 +49,12 @@ fn unported(what: &str) -> ! {
 /// The architecture's name in logs ("firmware: UEFI aarch64").
 pub const NAME: &str = "aarch64";
 
+/// Whether a process of PE machine `machine` runs here: ARM64 (x64 and
+/// x86 programs wait for ROADMAP XT's translator).
+pub fn runs_machine(machine: u16) -> bool {
+    machine == crate::nt::pe::IMAGE_FILE_MACHINE_ARM64
+}
+
 /// The boot CPU's own state: its per-CPU block (TPIDR_EL1) and its
 /// exception vectors (`entry`).
 pub fn init_boot_cpu() {

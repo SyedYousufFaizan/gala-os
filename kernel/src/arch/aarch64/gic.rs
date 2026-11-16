@@ -277,8 +277,10 @@ pub fn enable_private(intid: u32, handler: Handler) {
 
 /// Handles one IRQ (the IRQ vector's): acknowledged, ended, then the NMI
 /// or its handler run with the interrupted state. An interrupt without a
-/// handler is logged once per INTID.
-pub fn dispatch(frame: &mut TrapFrame) {
+/// handler is logged once per INTID. What it took: the caller ends an
+/// ordinary IRQ (`cpu::irq_exit`, after the user-return hook for one from
+/// EL0); an NMI or a spurious interrupt leaves the mask as it found it.
+pub fn dispatch(frame: &mut TrapFrame) -> Taken {
     let iar: u64;
     // SAFETY: ICC_IAR1_EL1: acknowledges the highest pending group 1 IRQ.
     unsafe {
@@ -286,7 +288,7 @@ pub fn dispatch(frame: &mut TrapFrame) {
     };
     let intid = iar & 0xff_ffff;
     if intid >= SPURIOUS {
-        return;
+        return Taken::Nothing;
     }
     // Ended before its handler runs: a handler may switch threads (the
     // tick's preemption), and until the EOI the CPU's running priority
@@ -302,7 +304,7 @@ pub fn dispatch(frame: &mut TrapFrame) {
     if intid == u64::from(NMI_SGI) {
         // PSTATE.I stays set (the vector's): no NMI within an NMI.
         super::interrupts::nmi(frame);
-        return;
+        return Taken::Nmi;
     }
     // An ordinary IRQ is taken only with interrupts on; its handler runs
     // with them off by priority, the NMI let through.
@@ -318,5 +320,17 @@ pub fn dispatch(frame: &mut TrapFrame) {
             }
         }
     }
-    super::cpu::irq_exit();
+    Taken::Irq
+}
+
+/// What `dispatch` took.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Taken {
+    /// None (spurious): nothing changed.
+    Nothing,
+    /// The NMI: run with PSTATE.I set, the mask untouched.
+    Nmi,
+    /// An ordinary IRQ: its handler ran with the mask "off" and PSTATE.I
+    /// clear; the caller exits it.
+    Irq,
 }

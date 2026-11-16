@@ -183,7 +183,9 @@ read back by the second), `arm_clock` (the counter's rate made wrong by
 `calwrong`, caught by the RTC check against the PL031, taken again),
 `arm_sched` (`schedtest`: kernel threads
 switched, woken, joined), `arm_fault_ud` and `arm_fault_pagefault` (the
-vectors' report). User mode is the next step: no program runs yet.
+vectors' report). The first program runs: `arm_hello` (hello.exe built
+for ARM64: its NtWriteFile through `svc #8`, its stack's demand-paging
+faults, its exit).
 
 - **Soft-float**: the kernel is built for
   `aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE: it
@@ -214,6 +216,27 @@ vectors' report). User mode is the next step: no program runs yet.
   the CPU's running priority holds back every interrupt of that priority:
   the thread switched to would run without ticks (`schedtest`'s second
   spin caught it). Private interrupts (SGIs, PPIs) have handlers.
+- **User mode** (`entry.rs`, `syscall.rs`, `interrupts.rs`;
+  `arch::user_space`): a user space is a TTBR0 root of its own (the
+  kernel's half is TTBR1's, in no user root), its pages tagged ASID 0
+  and not global; loading one drops this CPU's ASID-0 entries (`tlbi
+  aside1`) and a kernel thread loads an empty root, so the walker never
+  reaches a freed space's tables; a changed page is dropped on every CPU
+  by a broadcast `tlbi vale1is` under the space's lock (no shootdown at
+  its release). The synchronous vector from EL0 saves the same
+  `TrapFrame` as the IRQ's, at the top of the thread's kernel stack:
+  SP_EL1 is set there before every return to EL0, by
+  `syscall::enter_user_regs`, which builds that frame and takes the
+  vectors' `eret` tail. An SVC's number is the personality's: NT's in
+  the instruction's immediate (ESR's ISS: Windows ARM64's ntdll makes
+  `svc #N`, the numbers the pinned build's, the same as x64's), Linux's
+  in x8; it runs with interrupts on, then the pending `NtContinue` and
+  the user-return hook, as x86-64's. Aborts and other exceptions from
+  EL0 go to the user-exception handler (an abort's address from FAR),
+  then the hook; an IRQ from EL0 runs the hook too. An NT thread's x18
+  is its TEB (`percpu::user_gs_base`), a Linux thread's TPIDR_EL0 its
+  TLS base. A process's image must be the architecture's machine
+  (`arch::runs_machine`: ARM64 here; x64 and x86 wait for XT).
 - **Interrupt masking and the pseudo-NMI** (`cpu.rs`, `gic.rs`):
   interrupts are masked by priority (ICC_PMR_EL1), not PSTATE.I: "off"
   (`PMR_OFF`, 0xa0) lets only the NMI's priority (0x80) through, "on"
@@ -310,7 +333,11 @@ vectors' report). User mode is the next step: no program runs yet.
   Aff0 below 16 only; xtask cannot ask for a state dump at a timeout
   (QEMU `virt` has no NMI for its monitor's `nmi`: "machine does not
   provide NMIs"); no `stop_others` (its one user, the hot swap, is
-  x86-64's); no user mode; entered at EL2 with VHE the timer would
+  x86-64's); in user mode no NT DLL is loaded yet (the processes of
+  `arm_hello` start at the image's entry: no ntdll, no LdrInitializeThunk,
+  no CONTEXT services, no unwinding); the page file's aging is not safe
+  here (it relies on hardware-set accessed and dirty bits: FEAT_HAFDBS
+  is not turned on); entered at EL2 with VHE the timer would
   be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
   enrollment is BOOTX64.EFI's).
 

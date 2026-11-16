@@ -70,6 +70,16 @@ impl TrapFrame {
         self.regs
     }
 
+    /// Replaces the user registers (a return to EL0 takes them).
+    pub(super) fn set_user_regs(&mut self, regs: UserRegs) {
+        self.regs = regs;
+    }
+
+    /// A frame that returns to EL0 with `regs` (`syscall::enter_user_regs`).
+    pub(super) fn to_user(regs: UserRegs) -> Self {
+        TrapFrame { regs, esr: 0, far: 0 }
+    }
+
     /// The exception class (ESR_EL1.EC).
     pub fn vector(&self) -> u8 {
         (self.esr >> 26) as u8 & 0x3f
@@ -123,8 +133,56 @@ pub fn init() {
 }
 
 /// An IRQ (the vectors' IRQ entries): to the GIC's dispatch.
+/// An IRQ (the IRQ vectors'): the GIC's dispatch, then, back to EL0, the
+/// user-return hook; an ordinary one's exit sets PSTATE.I and the mask
+/// "on" before the `eret`.
 pub(super) extern "C" fn irq(frame: &mut TrapFrame) {
-    super::gic::dispatch(frame);
+    if super::gic::dispatch(frame) == super::gic::Taken::Irq {
+        if frame.from_user_mode() {
+            user_return(frame);
+        }
+        super::cpu::irq_exit();
+    }
+}
+
+/// A synchronous exception from EL0: an SVC (`syscall::from_svc`, with
+/// interrupts on), else the user-exception handler (an abort's faulting
+/// address from FAR; interrupts off by priority, NMIs let through), then
+/// the user-return hook; back to EL0 with PSTATE.I set and the mask "on".
+pub(super) extern "C" fn lower_sync(frame: &mut TrapFrame) {
+    if u64::from(frame.vector()) == EC_SVC64 {
+        super::syscall::from_svc(frame);
+    } else {
+        super::cpu::pmr_off();
+        super::cpu::unmask_daif_irq();
+        let raw = USER_EXCEPTION_HANDLER.load(core::sync::atomic::Ordering::Acquire);
+        let abort =
+            matches!(u64::from(frame.vector()), EC_DATA_ABORT_LOWER | EC_INSTRUCTION_ABORT_LOWER);
+        let address = abort.then_some(frame.far);
+        if raw == 0 {
+            panic!(
+                "aarch64: user exception {} (ESR {:#x}) at {:#x} with no handler",
+                exception_name(frame.vector()),
+                frame.esr,
+                frame.ip()
+            );
+        }
+        // SAFETY: only `set_user_exception_handler` stores non-zero
+        // values, and it stores `UserExceptionHandler`s.
+        let handler = unsafe { core::mem::transmute::<usize, UserExceptionHandler>(raw) };
+        handler(frame, address);
+        user_return(frame);
+    }
+    super::cpu::irq_exit();
+}
+
+/// Runs the user-return hook on a frame from EL0 (its changes written
+/// back).
+fn user_return(frame: &mut TrapFrame) {
+    let mut regs = frame.regs;
+    if super::syscall::run_user_return_hook(&mut regs) {
+        frame.regs = super::syscall::sanitized(regs);
+    }
 }
 
 pub type Handler = fn(&mut TrapFrame);
@@ -161,11 +219,12 @@ pub(super) fn nmi(frame: &TrapFrame) {
 
 /// What handles an exception from EL0 (the NT and Linux layers' fault
 /// handling); kept for the EL0 vectors user mode will have.
-static USER_EXCEPTION_HANDLER: crate::sync::IrqMutex<Option<UserExceptionHandler>> =
-    crate::sync::IrqMutex::new(None);
+/// The user-exception handler's address (0: none).
+static USER_EXCEPTION_HANDLER: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
 
 pub fn set_user_exception_handler(handler: UserExceptionHandler) {
-    *USER_EXCEPTION_HANDLER.lock() = Some(handler);
+    USER_EXCEPTION_HANDLER.store(handler as usize, core::sync::atomic::Ordering::Release);
 }
 
 pub fn set_handler(_vector: u8, _handler: Handler) {

@@ -4038,6 +4038,13 @@ on the seams item PT prepared: native ARM64 Windows programs
   conduit from the FADT; a trampoline that turns the MMU on from a
   TTBR0 identity page): `arm_smp_missed` (`smptest=hide`: the
   bootloader's AP powers itself off first).
+- User mode, its first program (`arm_hello`: hello.exe built for ARM64,
+  ntrt's ARM64 runtime): user spaces on TTBR0 (`arch::user_space`, one
+  for both architectures), EL0 entry and return, SVC system calls (NT's
+  number in the immediate, as Windows ARM64's ntdll makes them), user
+  faults (demand paging), ARM64 PE images (`arch::runs_machine`);
+  xtask's aarch64 images carry the ARM64 builds of the DLLs and of
+  USER_PROGRAMS_ARM64 (exported to `user/bin/arm64`).
 - Devices where the firmware says: the console's PL011 from the SPCR,
   the GIC's distributor and redistributors from the MADT's GICD and GICR
   entries (host-tested parsers; `arm_boot` checks the log says so).
@@ -4046,11 +4053,12 @@ on the seams item PT prepared: native ARM64 Windows programs
 1. xtask's state dump at an aarch64 timeout: QEMU `virt` has no NMI
    for the monitor's `nmi`, so the request needs another way in (the
    console's receive line, its interrupt at the NMI's priority, is the
-   candidate). Then
-   `hello` reaching its kernel line, which needs step 2's ntdll and the
-   ABI.
-2. User mode: Windows' ARM64 ABI (`nt::abi::arm64`: CONTEXT, the system
-   call convention, unwinding) and gala's DLLs built for ARM64; Linux's
+   candidate).
+2. User mode, the rest: gala's ntdll on ARM64 (its stubs on `svc #N`,
+   as Windows' are; LdrInitializeThunk's start, `abi::arm64::
+   ldr_thunk_regs`), then programs that import DLLs; Windows' ARM64 ABI
+   (`nt::abi::arm64`: CONTEXT and its services, exception dispatch,
+   unwinding); more test programs in USER_PROGRAMS_ARM64; Linux's
    aarch64 ABI (`lx::machine::aarch64`, its system call table).
 3. CI: the aarch64 boot scenarios on GitHub's ARM64 runners (free for
    public repositories) or under QEMU's emulation.

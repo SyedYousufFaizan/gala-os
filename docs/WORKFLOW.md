@@ -1807,6 +1807,25 @@ kernel32 through `raw-dylib`), run under gala and under Windows
   rebuild them, as for the other third-party-tool builds. FlaUI tests:
   "FlaUI".
 
+### ARM64 test programs (the aarch64 kernel)
+
+The aarch64 kernel's scenarios (`AARCH64_SCENARIOS`) run ARM64 builds:
+the same program sources, built for `aarch64-pc-windows-msvc` on ntrt's
+ARM64 runtime (`user/ntrt/src/arm64.rs`: system call stubs shaped as
+Windows ARM64's ntdll, `svc #N; ret`, the pinned build's numbers as
+x64's; the TEB from x18, the PEB at TEB+0x60; it grows with the
+programs that need more).
+
+- List the program in `USER_PROGRAMS_ARM64` (beside its x64 entry in
+  USER_PROGRAMS): `build_kernel_aarch64` builds that list and USER_DLLS
+  (but NOT_ARM64_DLLS) for ARM64, and the aarch64 kernel's images carry
+  those in place of the x64 builds (a scenario's built DLLs too).
+- `export-tests` copies them to `user/bin/arm64/` (CI checks they match
+  their sources, as user/bin's); `run-all.ps1` runs only the x64
+  programs beside it, an ARM64 Windows runs these.
+- Its scenario is an `arm_<name>` entry in AARCH64_SCENARIOS, with the
+  x64 scenario's expectations (`arm_hello` is `hello`'s).
+
 ### 32-bit test programs (WOW64)
 
 32-bit (x86) programs test WOW64 (ARCHITECTURE "Plan: WOW64"): no_std
