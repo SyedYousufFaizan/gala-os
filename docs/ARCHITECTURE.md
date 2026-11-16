@@ -266,6 +266,22 @@ vectors' report). User mode is the next step: no program runs yet.
   affinity fields everywhere (Limine's MP response, the MADT's GICC
   entries, `smp::online_cpus`); the GIC packs them for GICR_TYPER and
   ICC_SGI1R itself.
+- **CPUs the bootloader did not start** (`smp.rs`, `psci.rs`): the MADT's
+  others are started with PSCI CPU_ON, through the conduit the FADT's
+  ARM_BOOT_ARCH flags name (HVC or SMC; `psci: version ... through ...`).
+  Such a CPU enters at a physical address with its MMU off: the
+  trampoline `gala_aarch64_psci_entry` (a page of its own) reads its
+  `PsciStart` (in .bss, cleaned to memory first: with the MMU off its
+  loads bypass the caches), loads the kernel's MAIR, TCR (TTBR0's walks
+  on), TTBR1 and a TTBR0 that maps the trampoline's page at its own
+  address (`paging::identity_root`: not global, so a later user space at
+  that address never meets a stale entry), turns the MMU on with the boot
+  CPU's SCTLR and jumps to the AP entry's virtual address with its index.
+  A CPU that does not come online is reported with CPU_ON's result
+  (named) and how far it got (`PsciStart::state`: not reached, reached
+  at EL1, or at another EL, which is not handled). `smptest=hide` tests
+  it (`arm_smp_missed`): the APs Limine started power themselves off
+  (PSCI CPU_OFF), are seen off (AFFINITY_INFO), and are started again so.
 - **What the NT layer registers at its start**: the personalities'
   system call dispatchers (`syscall::set_handler`, the neutral
   `personality::Dispatchers`), the user-return hook and the user
@@ -274,8 +290,8 @@ vectors' report). User mode is the next step: no program runs yet.
 - **Limits**: boots by ACPI only (a device-tree boot falls back to QEMU
   `virt`'s addresses); the PL031 RTC's address is QEMU `virt`'s (no ACPI
   table names an RTC: ACPI machines give the time through UEFI's runtime
-  services); CPUs the bootloader did not start are not started
-  (PSCI CPU_ON); SGIs reach an Aff0 below 16 only; no NMI (the GIC's
+  services); a CPU started by PSCI must enter at EL1; SGIs reach an
+  Aff0 below 16 only; no NMI (the GIC's
   pseudo-NMI: no state dump at a timeout, no `stop_others`); no user
   mode; entered at EL2 with VHE the timer would
   be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
@@ -6167,7 +6183,8 @@ requester while it waits.
 
 `arch::x86_64::apboot`; scenarios `smp_missed`, `smp_late`, `onecpu_*`;
 `smptest=hide|late` on the kernel command line makes an AP miss Limine
-or answer it late.
+or answer it late (aarch64: `hide` only, "The aarch64 port"; this
+section is x86-64's).
 
 The failure this handles: Limine sends each AP INIT and two startup
 IPIs and waits a bounded time (100 x 10 ms of its delay loop; on a BIOS

@@ -12089,6 +12089,7 @@ const AARCH64_SCENARIOS: &[&str] = &[
     "arm_net_echo",
     "arm_persist",
     "arm_clock",
+    "arm_smp_missed",
     "arm_sched",
     "arm_fault_ud",
     "arm_fault_pagefault",
@@ -12322,6 +12323,25 @@ const SCENARIOS: &[Scenario] = &[
             "net: link up, ",
             "manifest: release ",
             "boot: stopping after boot phase manifest (stop_after), the tick running",
+        ],
+    },
+    Scenario {
+        // A CPU the bootloader did not start (ARCHITECTURE "The aarch64
+        // port"): `smptest=hide` sends the AP Limine started to power
+        // itself off (PSCI CPU_OFF), and the kernel starts it from the
+        // MADT with PSCI CPU_ON (its trampoline turning the MMU on): its
+        // GIC part and tick up, the boot run to its end.
+        name: "arm_smp_missed",
+        cmdline: "qemu_exit smptest=hide",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "psci: version 1.",
+            "smp: MADT: 2 enabled CPU(s): 0 1",
+            "smptest: the bootloader's AP (MPIDR 0x1) powered itself off (PSCI CPU_OFF)",
+            "gic: CPU 1: GICv3",
+            "smp: 2 CPUs online (1 reported by the bootloader, 2 in the MADT",
+            "the kernel started 1 itself",
+            "gala: boot ok",
         ],
     },
     Scenario {

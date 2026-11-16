@@ -32,6 +32,7 @@ pub mod pci_config;
 pub mod percpu;
 pub mod port;
 pub mod ps2;
+pub mod psci;
 pub mod qemu;
 pub mod serial;
 pub mod smp;

@@ -258,6 +258,20 @@ pub fn leaked_frames() -> u64 {
     0
 }
 
+/// A TTBR0 root mapping the code page at physical `page` at its own
+/// address (executable, not global: a TLB entry of it never outlives a
+/// `tlbi vmalle1`): what a CPU started by PSCI runs the instruction after
+/// turning its MMU on from. Its tables are kept (one root serves every
+/// CPU the kernel starts).
+pub fn identity_root(page: u64) -> Result<u64, PagingError> {
+    let mut mapper: Mapper<HhdmTables, Vmsa> =
+        Mapper::new(HhdmTables { offset: crate::mm::hhdm_offset() }, &mut alloc_table)?;
+    let flags = PageFlags { global: false, ..PageFlags::KERNEL_RX };
+    let frame = Frame::containing(page);
+    mapper.map(frame.start(), frame.start(), PageSize::Size4K, flags, &mut alloc_table)?;
+    Ok(mapper.root().start())
+}
+
 /// The kernel's TTBR1 root (0 before `init`).
 pub fn kernel_root() -> u64 {
     KERNEL_ROOT.load(Ordering::Acquire)

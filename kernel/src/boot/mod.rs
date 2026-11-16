@@ -280,6 +280,9 @@ pub struct BootInfo {
     /// PCI segment 0's ECAM window, from the MCFG (Limine boots only):
     /// aarch64's way to PCI configuration space (`arch::pci_config`).
     pub pci_ecam: Option<acpi::Ecam>,
+    /// How PSCI is called, from the FADT (Limine boots on aarch64):
+    /// starting the CPUs the bootloader did not.
+    pub psci: Option<acpi::Psci>,
     pub framebuffer_facts: Option<FramebufferFacts>,
     /// The kernel's own executable file (ELF), to hand over to next time.
     pub kernel_file: Option<&'static [u8]>,
@@ -432,6 +435,7 @@ fn collect_handover(entry: HandoverEntry) -> Result<BootInfo, BootError> {
         firmware_cpus: None,
         clock_tables: acpi::ClockTables::default(),
         pci_ecam: None,
+        psci: None,
         framebuffer_facts,
         kernel_file,
         handover: Some(Received {
@@ -570,6 +574,7 @@ pub fn collect(handover: Option<HandoverEntry>) -> Result<BootInfo, BootError> {
             REQUESTS.rsdp.response().map_or(0, |r| r.address),
         ),
         pci_ecam: acpi::read_mcfg(hhdm_offset, REQUESTS.rsdp.response().map_or(0, |r| r.address)),
+        psci: acpi::read_psci(hhdm_offset, REQUESTS.rsdp.response().map_or(0, |r| r.address)),
         framebuffer_facts,
         kernel_file,
         handover: None,

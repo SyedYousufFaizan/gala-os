@@ -329,6 +329,31 @@ pub fn read_clock_tables(hhdm_offset: u64, rsdp_virt: u64) -> ClockTables {
     }
 }
 
+/// How PSCI is called (aarch64), from the FADT.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Psci {
+    /// HVC, else SMC.
+    pub hvc: bool,
+}
+
+/// The FADT's ARM_BOOT_ARCH flags (u16 at 129, ACPI 5.1 and later):
+/// PSCI_COMPLIANT (bit 0), PSCI_USE_HVC (bit 1). None when the firmware
+/// does not offer PSCI.
+pub fn parse_fadt_psci(t: &[u8]) -> Option<Psci> {
+    const PSCI_COMPLIANT: u16 = 1;
+    const PSCI_USE_HVC: u16 = 2;
+    if t.get(..4) != Some(b"FACP") || !checksum_ok(t) {
+        return None;
+    }
+    let flags = u16::from_le_bytes([*t.get(129)?, *t.get(130)?]);
+    (flags & PSCI_COMPLIANT != 0).then_some(Psci { hvc: flags & PSCI_USE_HVC != 0 })
+}
+
+/// PSCI's conduit, from the RSDP at virtual `rsdp` (HHDM).
+pub fn read_psci(hhdm_offset: u64, rsdp_virt: u64) -> Option<Psci> {
+    read_table(hhdm_offset, rsdp_virt, b"FACP").ok().flatten().and_then(parse_fadt_psci)
+}
+
 /// The MADT's GIC addresses, from the RSDP at virtual `rsdp` (HHDM).
 pub fn read_gic(hhdm_offset: u64, rsdp_virt: u64) -> Option<GicAddresses> {
     read_table(hhdm_offset, rsdp_virt, b"APIC").ok().flatten().and_then(parse_madt_gic)
@@ -468,6 +493,19 @@ mod tests {
         let mut bad = table(b"APIC", &body);
         bad[50] ^= 1;
         assert_eq!(parse_madt_gic(&bad), None);
+    }
+
+    #[test]
+    fn fadt_psci() {
+        let mut body = vec![0u8; 276 - SDT_HEADER_LEN];
+        body[129 - 36] = 3; // compliant, HVC
+        assert_eq!(parse_fadt_psci(&table(b"FACP", &body)), Some(Psci { hvc: true }));
+        body[129 - 36] = 1; // compliant, SMC
+        assert_eq!(parse_fadt_psci(&table(b"FACP", &body)), Some(Psci { hvc: false }));
+        body[129 - 36] = 2; // HVC without PSCI: none
+        assert_eq!(parse_fadt_psci(&table(b"FACP", &body)), None);
+        // An ACPI 1 FADT (116 bytes, x86's): none.
+        assert_eq!(parse_fadt_psci(&table(b"FACP", &[0u8; 80])), None);
     }
 
     #[test]
