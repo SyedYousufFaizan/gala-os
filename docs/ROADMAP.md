@@ -4268,19 +4268,50 @@ on the seams item PT prepared: native ARM64 Windows programs
   `calwrong`): the PL031 RTC, the check's verdict and the recalibration
   (CNTFRQ_EL0's rate read again; the RTC's measurement wins over it when
   they disagree), the log naming the architecture's counter and timer.
+- The GIC's pseudo-NMI: interrupts masked by priority (ICC_PMR_EL1),
+  the NMI an SGI above it, an IRQ handler running with NMIs let through;
+  frame-pointer backtraces (`arm_watchdog`: `hangtest`, the watchdog's
+  backtrace of a CPU stuck in its tick handler; `hangtest` now holds the
+  boot's end until the hang is over).
+- CPUs the bootloader did not start, started with PSCI CPU_ON (the
+  conduit from the FADT; a trampoline that turns the MMU on from a
+  TTBR0 identity page): `arm_smp_missed` (`smptest=hide`: the
+  bootloader's AP powers itself off first).
+- User mode, its first program (`arm_hello`: hello.exe built for ARM64,
+  ntrt's ARM64 runtime): user spaces on TTBR0 (`arch::user_space`, one
+  for both architectures), EL0 entry and return, SVC system calls (NT's
+  number in the immediate, as Windows ARM64's ntdll makes them), user
+  faults (demand paging), ARM64 PE images (`arch::runs_machine`);
+  xtask's aarch64 images carry the ARM64 builds of the DLLs and of
+  USER_PROGRAMS_ARM64 (exported to `user/bin/arm64`).
+- Devices where the firmware says: the console's PL011 from the SPCR,
+  the GIC's distributor and redistributors from the MADT's GICD and GICR
+  entries (host-tested parsers; `arm_boot` checks the log says so).
 
 **Next**:
-1. The rest of the kernel's `arch` for aarch64: the GIC's pseudo-NMI
-   (state dumps, `stop_others`), PSCI CPU_ON for CPUs the bootloader did
-   not start; the UART's and the GIC's addresses from the firmware (SPCR,
-   MADT or the device tree, and the PL031's). Then
-   `hello` reaching its kernel line, which needs step 2's ntdll and the
-   ABI.
-2. User mode: Windows' ARM64 ABI (`nt::abi::arm64`: CONTEXT, the system
-   call convention, unwinding) and gala's DLLs built for ARM64; Linux's
+1. xtask's state dump at an aarch64 timeout: QEMU `virt` has no NMI
+   for the monitor's `nmi`, so the request needs another way in (the
+   console's receive line, its interrupt at the NMI's priority, is the
+   candidate).
+2. User mode, the rest: gala's ntdll on ARM64 (its stubs on `svc #N`,
+   as Windows' are; LdrInitializeThunk's start, `abi::arm64::
+   ldr_thunk_regs`), then programs that import DLLs; Windows' ARM64 ABI
+   (`nt::abi::arm64`: CONTEXT and its services, exception dispatch,
+   unwinding); more test programs in USER_PROGRAMS_ARM64; Linux's
    aarch64 ABI (`lx::machine::aarch64`, its system call table).
 3. CI: the aarch64 boot scenarios on GitHub's ARM64 runners (free for
    public repositories) or under QEMU's emulation.
+4. The firmware's boot-menu countdown (EDK2's BdsWait, 5 s) stalled
+   about one aarch64 boot in 150 under multi-threaded TCG on a loaded
+   host, before the boot loader ran: CPU 0 kept taking its timer tick
+   with nothing held for it (gdb's record: `interrupt_request` 0, the
+   virtual timer re-armed), the countdown did not end, and xtask's
+   timeout handling later woke it. Stopgap: xtask skips the countdown
+   (`-boot menu=on,splash-time=0`; 0 stalls in 1000 boots, and each
+   boot is 5 s shorter). Not found: why the countdown's timer event
+   stops firing (EDK2's TimerDxe and DXE core timer list against QEMU's
+   virtual timer); a debug build of the firmware with its DEBUG_INFO
+   log is the way in.
 
 **Done when**: the boot scenarios of the native ARM64 test programs pass
 on aarch64 in CI.
@@ -5814,6 +5845,32 @@ Wanted, not scheduled. Each becomes an item with a section when it is.
   `fpu_test` failed in gala-um; the cause was elsewhere (a new thread's
   first entry took the host's SSE registers: docs/GALA_UM.md).
 
+- **gala on Windows, without virtualization** (the owner): gala-um's
+  shape on a Windows host: the kernel as an ordinary Windows process
+  (a hosted platform beside `kernel/src/hosted`'s Linux one), Windows
+  programs run inside it, their memory in its address space. The hard
+  part is the system calls: Linux gives gala-um the program's system
+  calls (seccomp's SIGSYS), Windows has no such interception, so a raw
+  `syscall` instruction would reach the host's own kernel. Programs
+  that enter the kernel through ntdll only (most do) reach gala with
+  gala's ntdll in the host's place (calls, not traps); the rest need
+  their `syscall` instructions found and redirected, by patching
+  decoded code or by translation (XT's machinery). Other questions:
+  address-space layout (the host's DLLs and gala's programs in one
+  process; fixed-base images), exceptions (vectored handlers for the
+  program's faults), threads (host threads as gala's), and the host's
+  window for the desktop (as U5's on Linux). Today gala-um already
+  runs on Windows through WSL2 (a lightweight VM).
+- **gala in a web browser (WebAssembly)** (the owner): the kernel built
+  for `wasm32` on a hosted platform of its own (no MMU: user memory
+  through the CPU emulator's own translation; threads as Web Workers
+  over shared memory; the screen a canvas; storage in the browser), and
+  the programs' x86-64 code run by XT's step 1 interpreter built for
+  wasm, then a JIT that emits WebAssembly modules per hot block (as
+  browser-based x86 emulators do). The interpreter is the shared piece:
+  written once for XT (x64 on ARM64), it serves here unchanged.
+  Interpreted speed first; correctness against the existing x64 test
+  programs, as XT's.
 - **Self-hosting**: building gala's own test programs (then Nginx) on
   gala. H1-H10 built the base (pipes, child processes, busybox, TinyCC
   building itself, make, Lua and SQLite built on gala); what is left is

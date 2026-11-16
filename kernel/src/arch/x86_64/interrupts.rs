@@ -354,6 +354,11 @@ static NMI_HANDLER: AtomicUsize = AtomicUsize::new(0);
 /// it may only use atomics and `try_lock`.
 pub type NmiHandler = fn(&TrapFrame);
 
+/// The names of the instruction and stack pointers in the state dump's
+/// lines.
+pub const IP_NAME: &str = "rip";
+pub const SP_NAME: &str = "rsp";
+
 /// Routes NMIs to `handler` (without one they are ignored).
 pub fn set_nmi_handler(handler: NmiHandler) {
     NMI_HANDLER.store(handler as usize, Ordering::Release);

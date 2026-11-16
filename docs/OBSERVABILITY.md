@@ -606,7 +606,19 @@ watchdog report and in the state dump.
 A read-only "what are you doing" with no channel of its own
 (`kernel/src/statedump.rs`; cheap: nothing runs until asked). When a
 boot test times out, xtask injects an NMI (QEMU monitor `nmi`, every
-CPU) before killing the VM and waits up to 20 s for the dump:
+CPU) before killing the VM and waits up to 20 s for the dump (x86-64:
+QEMU's aarch64 `virt` has no NMI to inject, so an aarch64 boot that
+times out has no dump yet; the kernel's own NMIs, the GIC's pseudo-NMI,
+do work there: the watchdog's backtraces, the profiler's samples). Every
+timeout's failed log also has QEMU's view of each CPU (`xtask: QEMU's
+CPU#n: PC=... PSTATE=...`, read from the monitor before the NMI), and
+with `XTASK_QEMU_GDB=1` QEMU's own record of each vCPU and every QEMU
+thread's stack (WORKFLOW "Hunting a rare hang"). The run's end says
+itself: `qemu: ending the run (Success|Failure)` before the exit, and
+on aarch64 `qemu: the run did not end: ...` if the semihosting exit
+returned (x86-64's exit device asks QEMU for the end and the CPU runs on
+until it comes, so nothing follows there; xtask starts its own lines on
+a new line, since QEMU's end can cut the guest's last one off):
 
 1. From the NMI (only atomics and `try_lock`): each CPU's rip and kernel
    backtrace (`statedump: cpu N ...`, symbolized in the failed log;

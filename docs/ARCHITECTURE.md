@@ -183,7 +183,9 @@ read back by the second), `arm_clock` (the counter's rate made wrong by
 `calwrong`, caught by the RTC check against the PL031, taken again),
 `arm_sched` (`schedtest`: kernel threads
 switched, woken, joined), `arm_fault_ud` and `arm_fault_pagefault` (the
-vectors' report). User mode is the next step: no program runs yet.
+vectors' report). The first program runs: `arm_hello` (hello.exe built
+for ARM64: its NtWriteFile through `svc #8`, its stack's demand-paging
+faults, its exit).
 
 - **Soft-float**: the kernel is built for
   `aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE: it
@@ -202,9 +204,10 @@ vectors' report). User mode is the next step: no program runs yet.
   layout, then ESR and FAR; 288 bytes), runs `gic::dispatch` and returns
   with `eret`. Every other exception is reported for now (the vector's
   kind and origin, ESR's class named, ELR, FAR, SPSR) and ends the kernel.
-- **Interrupts** (`gic.rs`): a GICv3 (QEMU `virt`'s distributor at
-  0x0800_0000, redistributors from 0x080a_0000: the board's layout),
-  brought up with its first source: the distributor (affinity routing,
+- **Interrupts** (`gic.rs`): a GICv3, where the firmware's MADT says
+  (its GICD entry, the distributor, and GICR entry, the redistributors'
+  range: `gic: GICv3 distributor at ... (the firmware's MADT)`; without
+  them QEMU `virt`'s layout, logged as such), brought up with its first source: the distributor (affinity routing,
   group 1), this CPU's redistributor (found by GICR_TYPER's affinity,
   woken), the CPU interface by its system registers (ICC_SRE, PMR,
   IGRPEN1). An IRQ is acknowledged (ICC_IAR1) and ended (ICC_EOIR1)
@@ -213,6 +216,43 @@ vectors' report). User mode is the next step: no program runs yet.
   the CPU's running priority holds back every interrupt of that priority:
   the thread switched to would run without ticks (`schedtest`'s second
   spin caught it). Private interrupts (SGIs, PPIs) have handlers.
+- **User mode** (`entry.rs`, `syscall.rs`, `interrupts.rs`;
+  `arch::user_space`): a user space is a TTBR0 root of its own (the
+  kernel's half is TTBR1's, in no user root), its pages tagged ASID 0
+  and not global; loading one drops this CPU's ASID-0 entries (`tlbi
+  aside1`) and a kernel thread loads an empty root, so the walker never
+  reaches a freed space's tables; a changed page is dropped on every CPU
+  by a broadcast `tlbi vale1is` under the space's lock (no shootdown at
+  its release). The synchronous vector from EL0 saves the same
+  `TrapFrame` as the IRQ's, at the top of the thread's kernel stack:
+  SP_EL1 is set there before every return to EL0, by
+  `syscall::enter_user_regs`, which builds that frame and takes the
+  vectors' `eret` tail. An SVC's number is the personality's: NT's in
+  the instruction's immediate (ESR's ISS: Windows ARM64's ntdll makes
+  `svc #N`, the numbers the pinned build's, the same as x64's), Linux's
+  in x8; it runs with interrupts on, then the pending `NtContinue` and
+  the user-return hook, as x86-64's. Aborts and other exceptions from
+  EL0 go to the user-exception handler (an abort's address from FAR),
+  then the hook; an IRQ from EL0 runs the hook too. An NT thread's x18
+  is its TEB (`percpu::user_gs_base`), a Linux thread's TPIDR_EL0 its
+  TLS base. A process's image must be the architecture's machine
+  (`arch::runs_machine`: ARM64 here; x64 and x86 wait for XT).
+- **Interrupt masking and the pseudo-NMI** (`cpu.rs`, `gic.rs`):
+  interrupts are masked by priority (ICC_PMR_EL1), not PSTATE.I: "off"
+  (`PMR_OFF`, 0xa0) lets only the NMI's priority (0x80) through, "on"
+  (0xf0) every one; the entries turn the GIC's system-register interface
+  on and set "off" first thing. The NMI is SGI 1 (`gic::NMI_SGI`,
+  `smp::send_nmi`), taken with PSTATE.I set (no nesting) and handed to
+  `interrupts::nmi` (the state dump's and the profiler's handler, kept
+  in an atomic: it may interrupt any lock's holder). An ordinary IRQ is
+  taken only with interrupts on; its handler runs with them off by
+  priority and PSTATE.I clear, so an NMI reaches it too; its exit sets
+  PSTATE.I and the mask back to "on" before the `eret`. A thread
+  switched from inside a handler resumes with the same state (off, I
+  clear), as one switched from anywhere else. Scenario `arm_watchdog`:
+  the watchdog's backtrace of CPU 1 spinning in its tick handler.
+  Backtraces walk AArch64's frame records (`[x29]`, `[x29 + 8]`; the
+  kernel is built with frame pointers, as x86-64's).
 - **Time** (`timer.rs`): the generic timer's virtual channel (PPI 27).
   Its counter's rate is CNTFRQ_EL0's, architected: nothing is calibrated
   (`timer: generic timer ... counter at <n> kHz`). The tick is periodic by
@@ -223,8 +263,11 @@ vectors' report). User mode is the next step: no program runs yet.
   device. A device page is added to its TTBR1 tables, in the 2 MiB below
   the kernel image, with MAIR_EL1's slot 2 set to Device-nGnRE (slots
   2-7 are guaranteed unused); missing tables come from a pool in .bss.
-  The console's PL011 (QEMU `virt`'s at 0x0900_0000, the board's fixed
-  layout) is mapped this way by `serial::init`.
+  The console's PL011 is mapped this way by `serial::init`, at the
+  address the firmware's SPCR names (`boot::early_rsdp`: the tables are
+  in the HHDM before `BootInfo`; a PL011 or an SBSA generic UART, same
+  registers; without an SPCR QEMU `virt`'s 0x0900_0000, logged as such:
+  `serial: PL011 at ... (the firmware's SPCR)`).
 - **Page tables** (`arch/aarch64/paging.rs`): the kernel's higher half
   (TTBR1_EL1) is `mm::paging::Mapper` with the `Vmsa` encoding, built as
   x86-64's (the HHDM of the regions Limine maps, the image per segment,
@@ -262,17 +305,39 @@ vectors' report). User mode is the next step: no program runs yet.
   affinity fields everywhere (Limine's MP response, the MADT's GICC
   entries, `smp::online_cpus`); the GIC packs them for GICR_TYPER and
   ICC_SGI1R itself.
+- **CPUs the bootloader did not start** (`smp.rs`, `psci.rs`): the MADT's
+  others are started with PSCI CPU_ON, through the conduit the FADT's
+  ARM_BOOT_ARCH flags name (HVC or SMC; `psci: version ... through ...`).
+  Such a CPU enters at a physical address with its MMU off: the
+  trampoline `gala_aarch64_psci_entry` (a page of its own) reads its
+  `PsciStart` (in .bss, cleaned to memory first: with the MMU off its
+  loads bypass the caches), loads the kernel's MAIR, TCR (TTBR0's walks
+  on), TTBR1 and a TTBR0 that maps the trampoline's page at its own
+  address (`paging::identity_root`: not global, so a later user space at
+  that address never meets a stale entry), turns the MMU on with the boot
+  CPU's SCTLR and jumps to the AP entry's virtual address with its index.
+  A CPU that does not come online is reported with CPU_ON's result
+  (named) and how far it got (`PsciStart::state`: not reached, reached
+  at EL1, or at another EL, which is not handled). `smptest=hide` tests
+  it (`arm_smp_missed`): the APs Limine started power themselves off
+  (PSCI CPU_OFF), are seen off (AFFINITY_INFO), and are started again so.
 - **What the NT layer registers at its start**: the personalities'
   system call dispatchers (`syscall::set_handler`, the neutral
   `personality::Dispatchers`), the user-return hook and the user
   exception handler are kept for user mode's paths; KUSER_SHARED_DATA is
   a kernel frame written through the HHDM (`paging::SharedPage`).
-- **Limits**: the UART's and the GIC's addresses are the board's, not read
-  from the firmware (SPCR, the MADT's GICD/GICR entries or the device
-  tree: the port); CPUs the bootloader did not start are not started
-  (PSCI CPU_ON); SGIs reach an Aff0 below 16 only; no NMI (the GIC's
-  pseudo-NMI: no state dump at a timeout, no `stop_others`); no user
-  mode; the PL031 RTC's address is the board's too; entered at EL2 with VHE the timer would
+- **Limits**: boots by ACPI only (a device-tree boot falls back to QEMU
+  `virt`'s addresses); the PL031 RTC's address is QEMU `virt`'s (no ACPI
+  table names an RTC: ACPI machines give the time through UEFI's runtime
+  services); a CPU started by PSCI must enter at EL1; SGIs reach an
+  Aff0 below 16 only; xtask cannot ask for a state dump at a timeout
+  (QEMU `virt` has no NMI for its monitor's `nmi`: "machine does not
+  provide NMIs"); no `stop_others` (its one user, the hot swap, is
+  x86-64's); in user mode no NT DLL is loaded yet (the processes of
+  `arm_hello` start at the image's entry: no ntdll, no LdrInitializeThunk,
+  no CONTEXT services, no unwinding); the page file's aging is not safe
+  here (it relies on hardware-set accessed and dirty bits: FEAT_HAFDBS
+  is not turned on); entered at EL2 with VHE the timer would
   be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
   enrollment is BOOTX64.EFI's).
 
@@ -365,7 +430,8 @@ Whitespace-separated `flag` and `key=value` words (`kernel/src/cmdline.rs`).
 | `gpureset=<n>` | the virtio-gpu is reset under the driver after the n-th flush (driver recovery test) |
 | `crashtest` | with `persist`: panic on purpose after mounting when the disk holds no crash record (the crash record's scenario) |
 | `spintest` | the boot thread spins in the kernel for 25 s (the kernel-thread watchdog's scenario) |
-| `hangtest` | CPU 1 spins with interrupts off for 9 s, 3 s after its timer starts (the hang watchdog's scenario) |
+| `bootstack` | the boot thread's stack painted early and its deepest use reported at the run's end (`qemu: ending the run (...); boot stack N bytes deep (deepest K KiB of 64 KiB)`: `boot::stack`) |
+| `hangtest` | CPU 1 spins with interrupts off for 9 s, 3 s after its timer starts, and the boot's end waits for it to go on (the hang watchdog's scenarios, `watchdog` and `arm_watchdog`) |
 | `checkuser` | every return to user mode checks that the CPU is set up for the thread (its kernel stack, CR3, user GS base; no other CPU running it) and panics if not |
 | `tlbparanoid` | every change to a user address space flushes every CPU's whole TLB and every context switch reloads CR3 (tells TLB bugs from others) |
 | `nomigrate` | a thread that runs user code stays on the CPU it first ran on (tells migration bugs from others) |
@@ -6162,7 +6228,8 @@ requester while it waits.
 
 `arch::x86_64::apboot`; scenarios `smp_missed`, `smp_late`, `onecpu_*`;
 `smptest=hide|late` on the kernel command line makes an AP miss Limine
-or answer it late.
+or answer it late (aarch64: `hide` only, "The aarch64 port"; this
+section is x86-64's).
 
 The failure this handles: Limine sends each AP INIT and two startup
 IPIs and waits a bounded time (100 x 10 ms of its delay loop; on a BIOS

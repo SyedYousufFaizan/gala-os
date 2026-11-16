@@ -6862,6 +6862,12 @@ const USER_TARGET: &str = "x86_64-pc-windows-msvc";
 /// 32-bit (x86) test programs, run through WOW64 (ARCHITECTURE "Plan:
 /// WOW64"): USER_PROGRAMS_X86.
 const USER_TARGET_X86: &str = "i686-pc-windows-msvc";
+/// ARM64 builds for the aarch64 kernel's images (ROADMAP AR): the test
+/// programs of USER_PROGRAMS_ARM64 and every USER_DLLS DLL but
+/// NOT_ARM64_DLLS.
+const USER_TARGET_ARM64: &str = "aarch64-pc-windows-msvc";
+/// USER_DLLS packages with no ARM64 build: wow64 runs x86 code on x64.
+const NOT_ARM64_DLLS: &[&str] = &["wow64"];
 /// A test DLL: its package, the file it builds, and its name in user/bin.
 struct Dll {
     package: &'static str,
@@ -9921,6 +9927,25 @@ const USER_PROGRAMS_X86: &[&str] = &[
     "wow64_schannel_test",
 ];
 
+/// Test programs built for ARM64 too (`user/<name>`, ntrt's ARM64
+/// runtime), shipped in the aarch64 kernel's images in place of the x64
+/// ones and exported to user/bin/arm64.
+const USER_PROGRAMS_ARM64: &[&str] = &["hello"];
+
+/// Where the build puts the ARM64 build of test program `program`.
+fn built_program_arm64(program: &str) -> PathBuf {
+    target_dir().join(USER_TARGET_ARM64).join("release").join(format!("{program}.exe"))
+}
+
+/// Where the build puts the ARM64 build of the USER_DLLS file `file`.
+fn built_dll_arm64(file: &str) -> PathBuf {
+    let release = target_dir().join(USER_TARGET_ARM64).join("release");
+    match USER_DLLS.iter().find(|d| d.file == file) {
+        Some(d) if !plain_dll_name(d.file) => release.join(format!("{}.dll", d.package)),
+        _ => release.join(file),
+    }
+}
+
 /// Where the build puts test program `program` (x64 or x86).
 fn built_program(program: &str) -> PathBuf {
     let target = if USER_PROGRAMS_X86.contains(&program) { USER_TARGET_X86 } else { USER_TARGET };
@@ -10183,7 +10208,9 @@ fn main() -> ExitCode {
             Some("boot-test") => boot_test_command(release, &args),
             Some("snapshots") => snapshot::cli(&target_dir(), &args[1..]),
             Some("hotswap-diff") => hotswap_diff(&args[1..]),
-            Some("export-tests") => build_kernel(release).and_then(|()| export_tests()),
+            Some("export-tests") => build_kernel(release)
+                .and_then(|()| build_arm64_programs())
+                .and_then(|()| export_tests()),
             Some("report") => gala_report(release),
             Some("docker-test") => docker_test(&args[1..]),
             Some("screenshot") => screenshot(release, &args[1..]),
@@ -10600,7 +10627,24 @@ fn build_kernel_aarch64(release: bool) -> Result {
     }
     run_cmd(&mut cmd)?;
     let profile = if release { "release" } else { "debug" };
-    drop_debug_relocations(&target_dir().join(KERNEL_TARGET_AARCH64).join(profile).join("kernel"))
+    drop_debug_relocations(&target_dir().join(KERNEL_TARGET_AARCH64).join(profile).join("kernel"))?;
+    // Its images' programs and DLLs, built for ARM64 (always optimized,
+    // as the x64 ones).
+    let mut cmd = user_build_for(USER_TARGET_ARM64);
+    for dll in USER_DLLS.iter().filter(|d| !NOT_ARM64_DLLS.contains(&d.package)) {
+        cmd.args(["--package", dll.package]);
+    }
+    run_cmd(&mut cmd)?;
+    build_arm64_programs()
+}
+
+/// USER_PROGRAMS_ARM64, built for ARM64.
+fn build_arm64_programs() -> Result {
+    let mut cmd = user_build_for(USER_TARGET_ARM64);
+    for program in USER_PROGRAMS_ARM64 {
+        cmd.args(["--package", program]);
+    }
+    run_cmd(&mut cmd)
 }
 
 fn build_kernel(release: bool) -> Result {
@@ -10838,11 +10882,19 @@ fn make_iso_unchecked(
         copy_kernel(path, &boot.join(module))?;
         modules += &format!("    module_path: boot():/boot/{module}\n");
     }
-    let programs = if tree.is_some() { &[][..] } else { USER_PROGRAMS };
-    let others = if tree.is_some() { &[][..] } else { GO_PROGRAMS };
-    let x86 = if tree.is_some() { &[][..] } else { USER_PROGRAMS_X86 };
+    // The aarch64 kernel's images carry the ARM64 builds alone.
+    let arm64 = aarch64_image(name);
+    let none = tree.is_some() || arm64;
+    let programs = if none { &[][..] } else { USER_PROGRAMS };
+    let others = if none { &[][..] } else { GO_PROGRAMS };
+    let x86 = if none { &[][..] } else { USER_PROGRAMS_X86 };
     for program in programs.iter().chain(others).chain(x86) {
         copy(&built_program(program), &boot.join(format!("{program}.exe")))?;
+        modules += &format!("    module_path: boot():/boot/{program}.exe\n");
+    }
+    let arm64_programs = if arm64 && tree.is_none() { USER_PROGRAMS_ARM64 } else { &[][..] };
+    for program in arm64_programs {
+        copy(&built_program_arm64(program), &boot.join(format!("{program}.exe")))?;
         modules += &format!("    module_path: boot():/boot/{program}.exe\n");
     }
     for (file, dir) in extra {
@@ -10913,6 +10965,13 @@ fn make_iso_unchecked(
         };
         let (source, name) = match file.rsplit_once('/') {
             Some((_, name)) => (root().join(file), name),
+            None if arm64 => {
+                // A DLL with no ARM64 build is not shipped there.
+                if USER_DLLS.iter().any(|d| d.file == file && NOT_ARM64_DLLS.contains(&d.package)) {
+                    continue;
+                }
+                (built_dll_arm64(file), file)
+            }
             None => (built_dll(file), file),
         };
         let name = renamed.unwrap_or(name);
@@ -11548,6 +11607,13 @@ fn qemu_aarch64(iso: &Path) -> Result<Command> {
     }
     cmd.args(["-no-reboot", "-nic", "none"]);
     cmd.args(["-semihosting-config", "enable=on,target=native"]);
+    // No boot-menu countdown: the firmware's (ArmVirtQemu's `Timeout`,
+    // 5 s by default) is taken from QEMU's splash time when the menu is
+    // on (QemuBootOrderLib's GetFrontPageTimeoutFromQemu), and 0 skips
+    // BdsWait. Nothing presses a key in a test boot; the countdown only
+    // cost each boot 5 s, and it is where the rare pre-kernel stall
+    // (ROADMAP AR) sat.
+    cmd.args(["-boot", "menu=on,splash-time=0"]);
     let fw = find_aavmf()?;
     cmd.arg("-drive")
         .arg(format!("if=pflash,format=raw,unit=0,readonly=on,file={}", fw.code.display()));
@@ -12095,6 +12161,9 @@ const AARCH64_SCENARIOS: &[&str] = &[
     "arm_net_echo",
     "arm_persist",
     "arm_clock",
+    "arm_smp_missed",
+    "arm_watchdog",
+    "arm_hello",
     "arm_sched",
     "arm_fault_ud",
     "arm_fault_pagefault",
@@ -12312,11 +12381,13 @@ const SCENARIOS: &[Scenario] = &[
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             "gala-os kernel",
+            "serial: PL011 at 0x9000000 (the firmware's SPCR)",
             "firmware: UEFI aarch64",
             "memory map (",
             "frames: ",
             "paging: own tables at ",
             "timer: generic timer (virtual channel, PPI 27), counter at ",
+            "gic: GICv3 distributor at 0x8000000, redistributors from 0x80a0000 (0xf60000 bytes) (the firmware's MADT)",
             "gic: CPU 0: GICv3",
             "interrupts enabled, tick ",
             "smp: bootloader: 2 CPU(s), BSP MPIDR 0: 0 1",
@@ -12330,6 +12401,57 @@ const SCENARIOS: &[Scenario] = &[
             "net: link up, ",
             "manifest: release ",
             "boot: stopping after boot phase manifest (stop_after), the tick running",
+        ],
+    },
+    Scenario {
+        // User mode on aarch64 (ROADMAP AR): hello.exe built for ARM64
+        // (ntrt's ARM64 runtime: `svc #N` stubs, the TEB in x18) prints
+        // through NtWriteFile and exits, as x86-64's `hello`.
+        name: "arm_hello",
+        cmdline: "qemu_exit run=hello.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "Hello from user mode!",
+            "process hello.exe (pid 4) exited with status 0x00000000",
+            BOOT_OK_MARKER,
+        ],
+    },
+    Scenario {
+        // The hang watchdog on aarch64 (as `watchdog`): CPU 1 spins in its
+        // tick handler, interrupts off, for 9 s; the watchdog reports it
+        // and gets its backtrace by the GIC's pseudo-NMI, which reaches a
+        // CPU whose interrupts are off; `hangtest` holds the boot's end
+        // until the CPU goes on.
+        name: "arm_watchdog",
+        cmdline: "qemu_exit hangtest",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "hangtest: CPU 1 spins with interrupts off",
+            "watchdog: CPU 1 has taken no timer interrupt for 5 s",
+            "flight: the last",
+            "watchdog: CPU 1 kernel pc 0xffff",
+            "watchdog: CPU 1 backtrace: 0xffff",
+            "hangtest: CPU 1 goes on",
+            "gala: boot ok",
+        ],
+    },
+    Scenario {
+        // A CPU the bootloader did not start (ARCHITECTURE "The aarch64
+        // port"): `smptest=hide` sends the AP Limine started to power
+        // itself off (PSCI CPU_OFF), and the kernel starts it from the
+        // MADT with PSCI CPU_ON (its trampoline turning the MMU on): its
+        // GIC part and tick up, the boot run to its end.
+        name: "arm_smp_missed",
+        cmdline: "qemu_exit smptest=hide",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "psci: version 1.",
+            "smp: MADT: 2 enabled CPU(s): 0 1",
+            "smptest: the bootloader's AP (MPIDR 0x1) powered itself off (PSCI CPU_OFF)",
+            "gic: CPU 1: GICv3",
+            "smp: 2 CPUs online (1 reported by the bootloader, 2 in the MADT",
+            "the kernel started 1 itself",
+            "gala: boot ok",
         ],
     },
     Scenario {
@@ -18702,6 +18824,11 @@ fn repeat_boots(vms: &[Vm], isos: &[PathBuf], times: usize) -> Result {
         let (_, verdicts) = boot_vm(vm, copy);
         let verdict = verdicts.into_iter().next().map_or(Ok(()), |(_, v)| v);
         let _ = fs::remove_file(copy);
+        // Each copy's firmware variable store (64 MiB for AAVMF's): many
+        // copies fill a small disk, and booting one again makes its own.
+        for vars in ["ovmf-vars.fd", "aavmf-vars.fd"] {
+            let _ = fs::remove_file(copy.with_extension(vars));
+        }
         match &verdict {
             Ok(()) => {
                 let _ = fs::remove_file(copy.with_extension("serial.log"));
@@ -20069,8 +20196,7 @@ fn run_vm_once(
                 let why = format!("stopped: the screen check failed ({e})");
                 dump_note =
                     Some(ask_for_state_dump(&socket, &log, &mut child, &mut vm_clock, &why));
-                let _ = child.kill();
-                let _ = child.wait();
+                end_qemu(&mut child);
                 break None;
             }
         }
@@ -20155,8 +20281,7 @@ fn run_vm_once(
             };
             let why = format!("timed out after {what}; {}", now.describe());
             dump_note = Some(ask_for_state_dump(&socket, &log, &mut child, &mut vm_clock, &why));
-            let _ = child.kill();
-            let _ = child.wait();
+            end_qemu(&mut child);
             break None;
         }
         thread::sleep(Duration::from_millis(50));
@@ -20179,6 +20304,13 @@ fn run_vm_once(
     let total = start.elapsed();
     let vm_time = vm_clock.sample();
     let mut serial = read_log(&log);
+    // xtask's own lines start on a line of their own: a guest whose last
+    // line QEMU's end cut off (its exit requests are asynchronous, so the
+    // guest runs on briefly) would otherwise take the first of them into
+    // that line, where nothing tells it from the guest's output.
+    if !serial.is_empty() && !serial.ends_with('\n') {
+        serial.push('\n');
+    }
     serial += &snap_note;
     if let Some(note) = dump_note {
         serial += &note;
@@ -20431,6 +20563,188 @@ const STATEDUMP_END: &str = "statedump: end";
 /// loaded host prints slowly).
 const STATEDUMP_WAIT: Duration = Duration::from_secs(20);
 
+/// Every CPU's instruction pointer and state as QEMU sees it (the
+/// monitor's `info registers -a`), one line each for the log: what a
+/// timed-out guest that cannot answer was doing (aarch64's `virt` has no
+/// NMI to ask it; a wedged x86-64 guest does not answer either).
+fn cpu_registers(socket: &Path) -> String {
+    use std::io::{Read as _, Write as _};
+    let Ok(mut m) = std::os::unix::net::UnixStream::connect(socket) else {
+        return "xtask: QEMU's CPU registers: the monitor did not answer\n".into();
+    };
+    let _ = m.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = m.write_all(b"info registers -a\n");
+    let mut text = Vec::new();
+    let mut buf = [0u8; 65536];
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        match m.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => text.extend_from_slice(&buf[..n]),
+            Err(_) if !text.is_empty() => break,
+            Err(_) => {}
+        }
+    }
+    cpu_register_lines(&String::from_utf8_lossy(&text))
+}
+
+/// Ends a QEMU that will not end itself (a timeout, a failed screen
+/// check): SIGTERM first, which QEMU takes as a shutdown and so writes out
+/// what its `-d` log still buffers (a SIGKILL loses the log's last lines:
+/// the events just before a hang), then SIGKILL if it has not ended
+/// within 3 s.
+fn end_qemu(child: &mut std::process::Child) {
+    let _ = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let until = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < until {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// `XTASK_QEMU_GDB=1`: QEMU's own record of each vCPU (halted, PC and the
+/// registers that say how it got there, the exception registers, the
+/// power state) and every QEMU thread's stack, read by attaching gdb to
+/// the QEMU process of a timed-out boot (WORKFLOW "A boot that hangs"):
+/// what tells a guest that stopped (a halted vCPU, where) from QEMU
+/// stuck in itself (a thread in exit(), a lock), which the monitor's
+/// registers cannot. It also flushes QEMU's buffered `-d` log
+/// (XTASK_QEMU_LOG), whose last lines a killed QEMU would lose. The gdb
+/// script goes beside `log`.
+fn qemu_gdb_state(pid: u32, log: &Path) -> String {
+    let exe = fs::read_link(format!("/proc/{pid}/exe")).unwrap_or_default();
+    let arm = exe.to_string_lossy().contains("aarch64");
+    // One `vcpu` line per field, named: the guest's registers, then what
+    // decides whether a halted vCPU wakes: the interrupts QEMU holds for
+    // it (interrupt_request, CPU_INTERRUPT_HARD is 0x2) and, on aarch64,
+    // each generic timer's control and compare value and when QEMU's timer
+    // for it fires, against the virtual clock's now (`clock`, ns). A vCPU
+    // halted with an interrupt held is a wakeup QEMU lost; one halted
+    // with none held waits for a timer that never fires.
+    let fields: &[(&str, &str)] = if arm {
+        &[
+            ("pc", "((ARMCPU*)$c)->env.pc"),
+            ("pstate", "((ARMCPU*)$c)->env.pstate"),
+            ("daif", "((ARMCPU*)$c)->env.daif"),
+            ("x0", "((ARMCPU*)$c)->env.xregs[0]"),
+            ("x1", "((ARMCPU*)$c)->env.xregs[1]"),
+            ("x29", "((ARMCPU*)$c)->env.xregs[29]"),
+            ("x30", "((ARMCPU*)$c)->env.xregs[30]"),
+            ("sp", "((ARMCPU*)$c)->env.xregs[31]"),
+            ("elr_el1", "((ARMCPU*)$c)->env.elr_el[1]"),
+            ("esr_el1", "((ARMCPU*)$c)->env.cp15.esr_el[1]"),
+            ("vbar_el1", "((ARMCPU*)$c)->env.cp15.vbar_el[1]"),
+            ("ttbr0_el1", "((ARMCPU*)$c)->env.cp15.ttbr0_el[1]"),
+            ("power_state", "((ARMCPU*)$c)->power_state"),
+            ("cntp_ctl", "((ARMCPU*)$c)->env.cp15.c14_timer[0].ctl"),
+            ("cntp_cval", "((ARMCPU*)$c)->env.cp15.c14_timer[0].cval"),
+            ("cntv_ctl", "((ARMCPU*)$c)->env.cp15.c14_timer[1].ctl"),
+            ("cntv_cval", "((ARMCPU*)$c)->env.cp15.c14_timer[1].cval"),
+            ("cntp_timer_expires", "((ARMCPU*)$c)->gt_timer[0]->expire_time"),
+            ("cntv_timer_expires", "((ARMCPU*)$c)->gt_timer[1]->expire_time"),
+        ]
+    } else {
+        &[
+            ("rip", "((X86CPU*)$c)->env.eip"),
+            ("rflags", "((X86CPU*)$c)->env.eflags"),
+            ("rsp", "((X86CPU*)$c)->env.regs[4]"),
+            ("hflags", "((X86CPU*)$c)->env.hflags"),
+        ]
+    };
+    let common = [
+        ("halted", "$c->halted"),
+        ("stopped", "$c->stopped"),
+        ("exception_index", "$c->exception_index"),
+        ("interrupt_request", "$c->interrupt_request"),
+        ("exit_request", "$c->exit_request"),
+        ("thread_kicked", "$c->thread_kicked"),
+    ];
+    let cpu: String = common
+        .iter()
+        .chain(fields)
+        .map(|(name, expr)| {
+            format!("printf \"vcpu %d {name} %#lx\\n\", $c->cpu_index, (unsigned long)({expr})\n")
+        })
+        .collect();
+    let script = format!(
+        "set pagination off\n\
+         printf \"clock virtual %ld\\n\", (long)qemu_clock_get_ns(1)\n\
+         set $c = cpus_queue.tqh_first\nwhile $c\n{cpu}\
+         set $c = $c->node.tqe_next\nend\nthread apply all bt 20\n\
+         call (int)fflush(0)\n"
+    );
+    let script_path = log.with_extension("gdb");
+    if let Err(e) = fs::write(&script_path, script) {
+        return format!("xtask: QEMU's own state (gdb): cannot write the script: {e}\n");
+    }
+    let out = Command::new("gdb")
+        .args(["-p", &pid.to_string(), "-batch", "-x"])
+        .arg(&script_path)
+        .stdin(Stdio::null())
+        .output();
+    match out {
+        Err(e) => format!("xtask: QEMU's own state (gdb): {e} (is gdb installed?)\n"),
+        Ok(o) => {
+            let text = String::from_utf8_lossy(&o.stdout);
+            let mut lines = String::from("xtask: QEMU's own state (gdb, XTASK_QEMU_GDB):\n");
+            for line in text
+                .lines()
+                .filter(|l| ["vcpu ", "clock ", "Thread ", "#"].iter().any(|p| l.starts_with(p)))
+            {
+                lines += &format!("xtask: gdb: {line}\n");
+            }
+            lines
+        }
+    }
+}
+
+/// `info registers -a`'s output reduced to a line per CPU: its number,
+/// the instruction pointer (aarch64 `PC=`, x86-64 `RIP=`) and its state
+/// (`PSTATE=` with the exception level; x86-64's `RFL=` and `HLT=`).
+fn cpu_register_lines(text: &str) -> String {
+    let mut out = String::new();
+    let mut cpu: Option<String> = None;
+    let mut fields: Vec<String> = Vec::new();
+    let flush = |cpu: &Option<String>, fields: &mut Vec<String>, out: &mut String| {
+        if let Some(c) = cpu
+            && !fields.is_empty()
+        {
+            *out += &format!("xtask: QEMU's {c}: {}\n", fields.join(" "));
+        }
+        fields.clear();
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("CPU#") {
+            flush(&cpu, &mut fields, &mut out);
+            cpu = Some(format!("CPU#{}", rest.split_whitespace().next().unwrap_or("")));
+            continue;
+        }
+        for word in line.split_whitespace() {
+            if ["PC=", "RIP=", "RFL=", "HLT="].iter().any(|k| word.starts_with(k)) {
+                fields.push(word.to_string());
+            }
+        }
+        if let Some(at) = line.find("PSTATE=") {
+            // PSTATE=<hex> <flags> <EL and SP>, e.g. "-Z-- EL1h".
+            fields.push(line[at..].split_whitespace().take(3).collect::<Vec<_>>().join(" "));
+        }
+    }
+    flush(&cpu, &mut fields, &mut out);
+    if out.is_empty() {
+        out = "xtask: QEMU's CPU registers: none read from the monitor\n".into();
+    }
+    out
+}
+
 /// A boot that timed out: injects an NMI through the monitor (QEMU's
 /// `nmi` reaches every CPU; the kernel prints a state dump: each CPU's
 /// rip and backtrace, held locks, memory, the flight recorder, then every
@@ -20444,6 +20758,11 @@ fn ask_for_state_dump(
     why: &str,
 ) -> String {
     use std::io::Write as _;
+    // Before the NMI changes what the CPUs do.
+    let mut registers = cpu_registers(socket);
+    if env::var_os("XTASK_QEMU_GDB").is_some() {
+        registers += &qemu_gdb_state(child.id(), log);
+    }
     let seen = |mark: &str| {
         fs::read(log).is_ok_and(|b| b.windows(mark.len()).any(|w| w == mark.as_bytes()))
     };
@@ -20472,7 +20791,7 @@ fn ask_for_state_dump(
         }
     }
     let wait = STATEDUMP_WAIT.as_secs();
-    match sent {
+    let said = match sent {
         Err(e) => format!("\nxtask: {why}; no state dump (monitor: {e})\n"),
         Ok(()) if seen(STATEDUMP_END) => format!(
             "\nxtask: {why}; the guest's state dump (NMI) took {:.1}s\n",
@@ -20489,7 +20808,8 @@ fn ask_for_state_dump(
             "\nxtask: {why}; the guest did not answer the NMI within {wait}s of run time \
              (no NMI handler yet: early boot, or the machine is wedged)\n"
         ),
-    }
+    };
+    said + &registers
 }
 
 /// Joins the `{"ev":"rec","hex":...}` lines of an event stream into the
@@ -27250,6 +27570,13 @@ fn export_tests() -> Result {
     for (file, exported_as) in EXPORTED_TEST_DATA {
         copy(&root().join(file), &dir.join(exported_as))?;
     }
+    // ARM64 builds under arm64/ (run-all.ps1 runs only the x64 ones beside
+    // it; an ARM64 Windows runs these).
+    let arm64 = dir.join("arm64");
+    fs::create_dir_all(&arm64).map_err(|e| format!("creating {arm64:?}: {e}"))?;
+    for program in USER_PROGRAMS_ARM64 {
+        copy(&built_program_arm64(program), &arm64.join(format!("{program}.exe")))?;
+    }
     eprintln!("xtask: exported {} test programs to {}", USER_PROGRAMS.len(), dir.display());
     // pk_install_test's package source zips user/bin/hello.exe, so it is
     // derived from what was just exported: remake it (deterministic), or
@@ -27603,6 +27930,23 @@ fn bake_icons() -> Result {
 
 #[cfg(test)]
 mod judging {
+    #[test]
+    fn cpu_register_lines_name_each_cpu() {
+        let arm = "CPU#0\n PC=ffffffff80001234 X00=0\nPSTATE=600003c5 -ZC- EL1h  SVCR=0\n\
+                   CPU#1\n PC=0000000000000000 X00=0\nPSTATE=400003c5 -Z-- EL1h BTYPE=0\n";
+        assert_eq!(
+            super::cpu_register_lines(arm),
+            "xtask: QEMU's CPU#0: PC=ffffffff80001234 PSTATE=600003c5 -ZC- EL1h\n\
+             xtask: QEMU's CPU#1: PC=0000000000000000 PSTATE=400003c5 -Z-- EL1h\n"
+        );
+        let x86 = "CPU#0\nRAX=0 RBX=0\nRIP=ffffffff80001000 RFL=00000246 [---Z-P-] CPL=0 HLT=1\n";
+        assert_eq!(
+            super::cpu_register_lines(x86),
+            "xtask: QEMU's CPU#0: RIP=ffffffff80001000 RFL=00000246 HLT=1\n"
+        );
+        assert!(super::cpu_register_lines("").contains("none read"));
+    }
+
     use super::*;
 
     /// A log with a byte that is not UTF-8 is still read whole (the
