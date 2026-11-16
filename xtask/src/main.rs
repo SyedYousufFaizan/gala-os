@@ -12090,6 +12090,7 @@ const AARCH64_SCENARIOS: &[&str] = &[
     "arm_persist",
     "arm_clock",
     "arm_smp_missed",
+    "arm_watchdog",
     "arm_sched",
     "arm_fault_ud",
     "arm_fault_pagefault",
@@ -12323,6 +12324,25 @@ const SCENARIOS: &[Scenario] = &[
             "net: link up, ",
             "manifest: release ",
             "boot: stopping after boot phase manifest (stop_after), the tick running",
+        ],
+    },
+    Scenario {
+        // The hang watchdog on aarch64 (as `watchdog`): CPU 1 spins in its
+        // tick handler, interrupts off, for 9 s; the watchdog reports it
+        // and gets its backtrace by the GIC's pseudo-NMI, which reaches a
+        // CPU whose interrupts are off; `hangtest` holds the boot's end
+        // until the CPU goes on.
+        name: "arm_watchdog",
+        cmdline: "qemu_exit hangtest",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "hangtest: CPU 1 spins with interrupts off",
+            "watchdog: CPU 1 has taken no timer interrupt for 5 s",
+            "flight: the last",
+            "watchdog: CPU 1 kernel pc 0xffff",
+            "watchdog: CPU 1 backtrace: 0xffff",
+            "hangtest: CPU 1 goes on",
+            "gala: boot ok",
         ],
     },
     Scenario {

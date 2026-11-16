@@ -11,9 +11,18 @@
 //! (`init_cpu`: the boot CPU's then, an AP's at its start) its
 //! redistributor (awake; its private interrupts, SGIs and PPIs, enabled
 //! one by one) and its CPU interface through the system registers
-//! (`ICC_*`: enabled, every priority let through). `dispatch`
-//! acknowledges an IRQ (ICC_IAR1_EL1), ends it (ICC_EOIR1_EL1), then runs
-//! its handler (which may switch threads). SGIs are the CPUs' IPIs (`send_sgi`, ICC_SGI1R_EL1).
+//! (`ICC_*`: enabled; its priority mask is `cpu`'s, interrupts' on and
+//! off). `dispatch` acknowledges an IRQ (ICC_IAR1_EL1), ends it
+//! (ICC_EOIR1_EL1), then runs its handler (which may switch threads).
+//! SGIs are the CPUs' IPIs (`send_sgi`, ICC_SGI1R_EL1).
+//!
+//! The pseudo-NMI: SGI `NMI_SGI` at `NMI_PRIORITY`, above the others'
+//! `IRQ_PRIORITY`, which `cpu::PMR_OFF` lets through while interrupts are
+//! off. Taken, it runs `interrupts::nmi` with PSTATE.I set (NMIs do not
+//! nest). An ordinary IRQ's handler runs with interrupts off by priority
+//! and PSTATE.I clear, so an NMI reaches it too (the watchdog's backtrace
+//! of a CPU stuck in its tick handler); its exit sets PSTATE.I and the
+//! mask back to "on" (it was taken only with interrupts on).
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -42,6 +51,12 @@ const SGI_BASE: u64 = 0x1_0000;
 const GICR_IGROUPR0: u64 = SGI_BASE + 0x0080;
 const GICR_ISENABLER0: u64 = SGI_BASE + 0x0100;
 const GICR_IPRIORITYR: u64 = SGI_BASE + 0x0400;
+
+/// The pseudo-NMI's SGI and the two priorities (lower is more urgent;
+/// QEMU's GIC keeps 5 bits of priority: multiples of 8).
+pub const NMI_SGI: u32 = 1;
+pub const NMI_PRIORITY: u8 = 0x80;
+pub const IRQ_PRIORITY: u8 = 0xa0;
 
 /// INTIDs 1020-1023 are special: nothing to handle (spurious).
 const SPURIOUS: u64 = 1020;
@@ -177,17 +192,16 @@ pub fn init_cpu() -> Result<(), GicError> {
     // Every private interrupt in group 1 (none enabled yet).
     write32(rd + GICR_IGROUPR0, u32::MAX);
     // SAFETY: the CPU interface's system registers (ICC_SRE_EL1,
-    // ICC_PMR_EL1, ICC_BPR1_EL1, ICC_IGRPEN1_EL1 by their encodings):
-    // system register access on, every priority unmasked, no preemption
-    // grouping, group 1 on.
+    // ICC_BPR1_EL1, ICC_IGRPEN1_EL1 by their encodings): system register
+    // access on (the entry turned it on already), every priority bit a
+    // group priority (the NMI preempts an IRQ's handler), group 1 on. The
+    // priority mask (ICC_PMR_EL1) is `cpu`'s.
     unsafe {
         core::arch::asm!(
             "mrs {t}, S3_0_C12_C12_5",
             "orr {t}, {t}, #1",
             "msr S3_0_C12_C12_5, {t}",
             "isb",
-            "mov {t}, #0xff",
-            "msr S3_0_C4_C6_0, {t}",
             "msr S3_0_C12_C12_3, xzr",
             "mov {t}, #1",
             "msr S3_0_C12_C12_7, {t}",
@@ -199,12 +213,13 @@ pub fn init_cpu() -> Result<(), GicError> {
     if let Some(slot) = RD_BASE.get(cpu) {
         slot.store(rd, Ordering::Release);
     }
-    // Private interrupts already handled (the reschedule SGI, the timer)
-    // are enabled here too.
+    // The pseudo-NMI on every CPU; private interrupts already handled
+    // (the reschedule SGI, the timer) are enabled here too.
+    enable_here(rd, NMI_SGI, NMI_PRIORITY);
     let handlers = *HANDLERS.lock();
     for (intid, h) in handlers.iter().enumerate() {
         if h.is_some() {
-            enable_here(rd, intid as u32);
+            enable_here(rd, intid as u32, IRQ_PRIORITY);
         }
     }
     crate::info!(
@@ -215,9 +230,9 @@ pub fn init_cpu() -> Result<(), GicError> {
     Ok(())
 }
 
-fn enable_here(rd: u64, intid: u32) {
+fn enable_here(rd: u64, intid: u32, priority: u8) {
     // SAFETY: one byte of GICR_IPRIORITYR per interrupt.
-    unsafe { ((rd + GICR_IPRIORITYR + u64::from(intid)) as *mut u8).write_volatile(0x80) };
+    unsafe { ((rd + GICR_IPRIORITYR + u64::from(intid)) as *mut u8).write_volatile(priority) };
     write32(rd + GICR_ISENABLER0, 1 << intid);
 }
 
@@ -246,23 +261,23 @@ pub fn my_affinity() -> u64 {
     affinity()
 }
 
-/// Enables private interrupt `intid` (an SGI or PPI) on this CPU, at the
-/// middle priority, with `handler` (the same on every CPU: the others
+/// Enables private interrupt `intid` (an SGI or PPI) on this CPU, at
+/// `IRQ_PRIORITY`, with `handler` (the same on every CPU: the others
 /// enable it when they start, `init_cpu`).
 pub fn enable_private(intid: u32, handler: Handler) {
     let rd = my_rd();
     let i = intid as usize;
-    if rd == 0 || i >= PRIVATE {
+    if rd == 0 || i >= PRIVATE || intid == NMI_SGI {
         crate::warn!("gic: interrupt {intid} not enabled (GIC up here: {})", rd != 0);
         return;
     }
     HANDLERS.lock()[i] = Some(handler);
-    enable_here(rd, intid);
+    enable_here(rd, intid, IRQ_PRIORITY);
 }
 
-/// Handles one IRQ (the IRQ vector's): acknowledged, ended, then its
-/// handler run with the interrupted state. An interrupt without a handler is
-/// logged once per INTID.
+/// Handles one IRQ (the IRQ vector's): acknowledged, ended, then the NMI
+/// or its handler run with the interrupted state. An interrupt without a
+/// handler is logged once per INTID.
 pub fn dispatch(frame: &mut TrapFrame) {
     let iar: u64;
     // SAFETY: ICC_IAR1_EL1: acknowledges the highest pending group 1 IRQ.
@@ -284,6 +299,15 @@ pub fn dispatch(frame: &mut TrapFrame) {
     unsafe {
         core::arch::asm!("msr S3_0_C12_C12_1, {}", in(reg) iar, options(nomem, nostack, preserves_flags))
     };
+    if intid == u64::from(NMI_SGI) {
+        // PSTATE.I stays set (the vector's): no NMI within an NMI.
+        super::interrupts::nmi(frame);
+        return;
+    }
+    // An ordinary IRQ is taken only with interrupts on; its handler runs
+    // with them off by priority, the NMI let through.
+    super::cpu::pmr_off();
+    super::cpu::unmask_daif_irq();
     let handler = HANDLERS.lock().get(intid as usize).copied().flatten();
     match handler {
         Some(h) => h(frame),
@@ -294,4 +318,5 @@ pub fn dispatch(frame: &mut TrapFrame) {
             }
         }
     }
+    super::cpu::irq_exit();
 }

@@ -4029,6 +4029,11 @@ on the seams item PT prepared: native ARM64 Windows programs
   `calwrong`): the PL031 RTC, the check's verdict and the recalibration
   (CNTFRQ_EL0's rate read again; the RTC's measurement wins over it when
   they disagree), the log naming the architecture's counter and timer.
+- The GIC's pseudo-NMI: interrupts masked by priority (ICC_PMR_EL1),
+  the NMI an SGI above it, an IRQ handler running with NMIs let through;
+  frame-pointer backtraces (`arm_watchdog`: `hangtest`, the watchdog's
+  backtrace of a CPU stuck in its tick handler; `hangtest` now holds the
+  boot's end until the hang is over).
 - CPUs the bootloader did not start, started with PSCI CPU_ON (the
   conduit from the FADT; a trampoline that turns the MMU on from a
   TTBR0 identity page): `arm_smp_missed` (`smptest=hide`: the
@@ -4038,8 +4043,10 @@ on the seams item PT prepared: native ARM64 Windows programs
   entries (host-tested parsers; `arm_boot` checks the log says so).
 
 **Next**:
-1. The rest of the kernel's `arch` for aarch64: the GIC's pseudo-NMI
-   (state dumps, `stop_others`). Then
+1. xtask's state dump at an aarch64 timeout: QEMU `virt` has no NMI
+   for the monitor's `nmi`, so the request needs another way in (the
+   console's receive line, its interrupt at the NMI's priority, is the
+   candidate). Then
    `hello` reaching its kernel line, which needs step 2's ntdll and the
    ABI.
 2. User mode: Windows' ARM64 ABI (`nt::abi::arm64`: CONTEXT, the system

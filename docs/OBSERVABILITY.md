@@ -606,7 +606,10 @@ watchdog report and in the state dump.
 A read-only "what are you doing" with no channel of its own
 (`kernel/src/statedump.rs`; cheap: nothing runs until asked). When a
 boot test times out, xtask injects an NMI (QEMU monitor `nmi`, every
-CPU) before killing the VM and waits up to 20 s for the dump:
+CPU) before killing the VM and waits up to 20 s for the dump (x86-64:
+QEMU's aarch64 `virt` has no NMI to inject, so an aarch64 boot that
+times out has no dump yet; the kernel's own NMIs, the GIC's pseudo-NMI,
+do work there: the watchdog's backtraces, the profiler's samples):
 
 1. From the NMI (only atomics and `try_lock`): each CPU's rip and kernel
    backtrace (`statedump: cpu N ...`, symbolized in the failed log;

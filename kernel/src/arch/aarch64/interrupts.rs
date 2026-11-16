@@ -135,14 +135,28 @@ pub type UserExceptionHandler = fn(&mut TrapFrame, Option<u64>);
 /// timeout). AArch64 has no NMI as x86-64's: the GICv3's pseudo-NMI (an
 /// interrupt above the masking priority) comes with the port, so nothing
 /// calls it yet, which the log says once.
-static NMI_HANDLER: crate::sync::IrqMutex<Option<NmiHandler>> = crate::sync::IrqMutex::new(None);
+/// The NMI's handler, as a function's address (0: none): an atomic, not
+/// a lock, since the NMI may interrupt any lock's holder.
+static NMI_HANDLER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The names of the instruction and stack pointers in the state dump's
+/// lines.
+pub const IP_NAME: &str = "pc";
+pub const SP_NAME: &str = "sp";
 
 pub fn set_nmi_handler(handler: NmiHandler) {
-    *NMI_HANDLER.lock() = Some(handler);
-    crate::warn!(
-        "interrupts: no NMI on aarch64 yet: a state dump at a timeout is not taken (the GIC's \
-         pseudo-NMI comes with the port)"
-    );
+    NMI_HANDLER.store(handler as usize, core::sync::atomic::Ordering::Release);
+}
+
+/// The pseudo-NMI (`gic::NMI_SGI`), taken with PSTATE.I set.
+pub(super) fn nmi(frame: &TrapFrame) {
+    let at = NMI_HANDLER.load(core::sync::atomic::Ordering::Acquire);
+    if at != 0 {
+        // SAFETY: only `set_nmi_handler` stores here, an `NmiHandler`'s
+        // address.
+        let handler: NmiHandler = unsafe { core::mem::transmute::<usize, NmiHandler>(at) };
+        handler(frame);
+    }
 }
 
 /// What handles an exception from EL0 (the NT and Linux layers' fault

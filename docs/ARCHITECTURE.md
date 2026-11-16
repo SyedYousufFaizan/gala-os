@@ -214,6 +214,22 @@ vectors' report). User mode is the next step: no program runs yet.
   the CPU's running priority holds back every interrupt of that priority:
   the thread switched to would run without ticks (`schedtest`'s second
   spin caught it). Private interrupts (SGIs, PPIs) have handlers.
+- **Interrupt masking and the pseudo-NMI** (`cpu.rs`, `gic.rs`):
+  interrupts are masked by priority (ICC_PMR_EL1), not PSTATE.I: "off"
+  (`PMR_OFF`, 0xa0) lets only the NMI's priority (0x80) through, "on"
+  (0xf0) every one; the entries turn the GIC's system-register interface
+  on and set "off" first thing. The NMI is SGI 1 (`gic::NMI_SGI`,
+  `smp::send_nmi`), taken with PSTATE.I set (no nesting) and handed to
+  `interrupts::nmi` (the state dump's and the profiler's handler, kept
+  in an atomic: it may interrupt any lock's holder). An ordinary IRQ is
+  taken only with interrupts on; its handler runs with them off by
+  priority and PSTATE.I clear, so an NMI reaches it too; its exit sets
+  PSTATE.I and the mask back to "on" before the `eret`. A thread
+  switched from inside a handler resumes with the same state (off, I
+  clear), as one switched from anywhere else. Scenario `arm_watchdog`:
+  the watchdog's backtrace of CPU 1 spinning in its tick handler.
+  Backtraces walk AArch64's frame records (`[x29]`, `[x29 + 8]`; the
+  kernel is built with frame pointers, as x86-64's).
 - **Time** (`timer.rs`): the generic timer's virtual channel (PPI 27).
   Its counter's rate is CNTFRQ_EL0's, architected: nothing is calibrated
   (`timer: generic timer ... counter at <n> kHz`). The tick is periodic by
@@ -291,9 +307,10 @@ vectors' report). User mode is the next step: no program runs yet.
   `virt`'s addresses); the PL031 RTC's address is QEMU `virt`'s (no ACPI
   table names an RTC: ACPI machines give the time through UEFI's runtime
   services); a CPU started by PSCI must enter at EL1; SGIs reach an
-  Aff0 below 16 only; no NMI (the GIC's
-  pseudo-NMI: no state dump at a timeout, no `stop_others`); no user
-  mode; entered at EL2 with VHE the timer would
+  Aff0 below 16 only; xtask cannot ask for a state dump at a timeout
+  (QEMU `virt` has no NMI for its monitor's `nmi`: "machine does not
+  provide NMIs"); no `stop_others` (its one user, the hot swap, is
+  x86-64's); no user mode; entered at EL2 with VHE the timer would
   be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
   enrollment is BOOTX64.EFI's).
 
@@ -386,7 +403,7 @@ Whitespace-separated `flag` and `key=value` words (`kernel/src/cmdline.rs`).
 | `gpureset=<n>` | the virtio-gpu is reset under the driver after the n-th flush (driver recovery test) |
 | `crashtest` | with `persist`: panic on purpose after mounting when the disk holds no crash record (the crash record's scenario) |
 | `spintest` | the boot thread spins in the kernel for 25 s (the kernel-thread watchdog's scenario) |
-| `hangtest` | CPU 1 spins with interrupts off for 9 s, 3 s after its timer starts (the hang watchdog's scenario) |
+| `hangtest` | CPU 1 spins with interrupts off for 9 s, 3 s after its timer starts, and the boot's end waits for it to go on (the hang watchdog's scenarios, `watchdog` and `arm_watchdog`) |
 | `checkuser` | every return to user mode checks that the CPU is set up for the thread (its kernel stack, CR3, user GS base; no other CPU running it) and panics if not |
 | `tlbparanoid` | every change to a user address space flushes every CPU's whole TLB and every context switch reloads CR3 (tells TLB bugs from others) |
 | `nomigrate` | a thread that runs user code stays on the CPU it first ran on (tells migration bugs from others) |

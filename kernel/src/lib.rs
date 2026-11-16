@@ -534,6 +534,7 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     if cmdline.flag("selftest") {
         selftest::run_all();
     }
+    time::wait_hang_test(cmdline.flag("hangtest"));
 
     nt::ledger::dump();
     if events::written() > 0 {

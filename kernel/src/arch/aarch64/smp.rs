@@ -65,6 +65,14 @@ core::arch::global_asm!(
     "mov x9, #(3 << 20)",
     "msr cpacr_el1, x9",
     "isb",
+    // As the boot CPU's entry: the GIC's system registers, interrupts
+    // masked by priority.
+    "mrs x9, S3_0_C12_C12_5",
+    "orr x9, x9, #1",
+    "msr S3_0_C12_C12_5, x9",
+    "isb",
+    "mov x9, #{pmr_off}",
+    "msr S3_0_C4_C6_0, x9",
     "mov x19, x0",
     "adrp x9, {tops}",
     "add x9, x9, :lo12:{tops}",
@@ -91,6 +99,7 @@ core::arch::global_asm!(
     root = sym AP_ROOT,
     mair = const super::paging::MAIR,
     main = sym ap_main,
+    pmr_off = const super::cpu::PMR_OFF,
 );
 
 // The PSCI trampoline (one page of its own: TTBR0 maps it at its
@@ -355,8 +364,10 @@ pub fn send_reschedule(index: u32) {
     }
 }
 
-pub fn send_nmi(_hw_id: u32) {
-    unported("smp::send_nmi")
+/// The pseudo-NMI (`gic::NMI_SGI`) to the CPU with hardware id `hw_id`:
+/// it reaches the CPU with its interrupts off too.
+pub fn send_nmi(hw_id: u32) {
+    super::gic::send_sgi(super::gic::NMI_SGI, u64::from(hw_id));
 }
 
 /// The boot CPU online (index 0), and the reschedule SGI's handler: its
@@ -566,6 +577,8 @@ fn wait_off(id: u64) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NotStopped(pub u64);
 
+/// Not on aarch64 yet: its one user is the hot swap (ROADMAP SN), which
+/// is x86-64's; it comes with it (an ordinary SGI, as x86-64's IPI).
 pub fn stop_others<R>(
     _expired: impl Fn() -> bool,
     _f: impl FnOnce(&[u64; MAX_CPUS]) -> R,

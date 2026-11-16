@@ -31,6 +31,15 @@ core::arch::global_asm!(
     "mov x9, sp",
     "msr spsel, #1",
     "mov sp, x9",
+    // The GIC's system-register interface (ICC_SRE_EL1.SRE) and its
+    // priority mask at "interrupts off" (`cpu::PMR_OFF`): interrupts are
+    // masked by priority from here on.
+    "mrs x9, S3_0_C12_C12_5",
+    "orr x9, x9, #1",
+    "msr S3_0_C12_C12_5, x9",
+    "isb",
+    "mov x9, #{pmr_off}",
+    "msr S3_0_C4_C6_0, x9",
     "mov x0, xzr",
     "mov x1, xzr",
     "mov x2, xzr",
@@ -120,6 +129,7 @@ core::arch::global_asm!(
     "bl {trap}",
     trap = sym trap,
     irq = sym super::interrupts::irq,
+    pmr_off = const super::cpu::PMR_OFF,
 );
 
 const _: () = assert!(super::interrupts::TRAP_FRAME_SIZE == 288);
