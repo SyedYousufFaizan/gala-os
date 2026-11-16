@@ -36,6 +36,8 @@ mod avl;
 mod bitmap;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 mod dispatch;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+mod ftable;
 mod heap;
 mod rtl;
 #[cfg(target_arch = "x86_64")]

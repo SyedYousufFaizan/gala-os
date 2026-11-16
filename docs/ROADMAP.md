@@ -202,7 +202,7 @@ has a section under "Open items".
 | LX | Linux personality | in progress | seams 2, 3, 6 and milestone 1 done, seam 4's Linux side (links, case-sensitive directories, modes kept); static busybox runs (milestone 2), TCP sockets, threads, futex, epoll; file mappings, glibc's dynamic programs (LD step 1); seam 5's first core object, AF_UNIX sockets, and memfd (LD step 2) |
 | CT | Linux containers: Docker Desktop and Podman over a WSL facade | planned | spec recordings first; needs LX beyond milestone 5 |
 | LD | Desktop Linux applications | in progress | step 1: dynamically linked glibc programs run through ld.so (`lx_dyn`); step 2: memfd and AF_UNIX sockets with SCM_RIGHTS (`lx_memfd`, `lx_unix`), the Wayland wire format (`wl_abi`) and the first in-kernel Wayland server (wl_compositor, wl_shm, xdg_wm_base, wl_output; toplevels as desktop windows: `lx_wl`), wl_seat input and window control (`lx_wl_input`), weston-simple-shm (`lx_simple_shm`), popups (`lx_wl_popup`); step 3: the first GTK program, its window drawn and clicked (`lx_gtk`, GTK 3 on a Linux root of Ubuntu's packages); step 5: X11 programs through rootless Xwayland, gala its window manager, xterm on a pty (`lx_xterm`), GTK under X11 (`lx_gtk_x11`); step 6's first part: a distribution's desktop in one window (`lx_xdesktop`); step 7: Linux distributions in the start menu (`linux_menu`); step 9: GIMP 3.2 in batch mode, its saved file Ubuntu 26.04's byte for byte (`lx_gimp_batch`; System V shared memory: `lx_shm`; sysinfo: `lx_sysinfo`), and on the desktop: its window, in.png opened, Colors > Invert and File > Export, the exported file Ubuntu 26.04's byte for byte (`lx_gimp`); next: all of GIMP's plug-ins |
-| AR | ARM64 port | in progress | the aarch64 kernel boots on QEMU `virt` with its own page tables, GIC, scheduler, CPUs, virtio disk and network (`arm_*` scenarios); ARM64 Windows programs run through gala's ntdll, bound to ARM64 DLLs, with threads, exceptions to vectored handlers and APCs (`arm_*` scenarios); next run-time function tables and more test programs, then Linux's aarch64 ABI |
+| AR | ARM64 port | in progress | the aarch64 kernel boots on QEMU `virt` with its own page tables, GIC, scheduler, CPUs, virtio disk and network (`arm_*` scenarios); ARM64 Windows programs run through gala's ntdll, bound to ARM64 DLLs, with threads, exceptions to vectored handlers and APCs (`arm_*` scenarios); next more test programs, then Linux's aarch64 ABI |
 | XT | 64-bit Windows programs on ARM64 | planned | dynamic binary translation of x64 code, then 32-bit x86 (WOW64 on ARM; Office's x86 installer); after AR |
 | AN | Android applications | planned | binder, ART, SwiftShader graphics; x86_64 images first |
 
@@ -4304,7 +4304,11 @@ on the seams item PT prepared: native ARM64 Windows programs
   dispatch and RtlUnwindEx, unwind consolidation, the dispatcher's
   MSFT_OP_CONTEXT frame.
 - NtGetContextThread and NtSetContextThread on ARM64 (`arm_context`:
-  suspended threads, the caller; `arm_threadinfo`). ntrt's 64-bit runtime is one
+  suspended threads, the caller; `arm_threadinfo`).
+- Function tables registered at run time on ARM64 (RtlAddFunctionTable,
+  the growable tables, callbacks): gala's ntdll keeps one registry for
+  x64 and ARM64 (`ftable.rs`); `arm_seh` checks a table and a growable
+  one. ntrt's 64-bit runtime is one
   for x64 and ARM64 (`nt64.rs`), so the x64 test programs build for
   ARM64 as they are.
 - Devices where the firmware says: the console's PL011 from the SPCR,
@@ -4316,10 +4320,9 @@ on the seams item PT prepared: native ARM64 Windows programs
    for the monitor's `nmi`, so the request needs another way in (the
    console's receive line, its interrupt at the NMI's priority, is the
    candidate).
-2. User mode, the rest: function tables registered at run time for
-   ARM64 (RtlAddFunctionTable, the growable ones: JITs register
-   their code so; seh_test's table checks are x64's only yet); more test
-   programs in USER_PROGRAMS_ARM64; Linux's aarch64 ABI (`lx::machine::aarch64`, its
+2. User mode, the rest: more test programs in USER_PROGRAMS_ARM64 (the
+   x64 ones that build unchanged first, then those with x64 assembly);
+   `.pdata` link records (jump islands); Linux's aarch64 ABI (`lx::machine::aarch64`, its
    system call table).
 3. CI: the aarch64 boot scenarios on GitHub's ARM64 runners (free for
    public repositories) or under QEMU's emulation.

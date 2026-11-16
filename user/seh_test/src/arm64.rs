@@ -210,9 +210,81 @@ pub fn capture_checks(_c: &mut Checks, _cp: *const u8) -> Result<(), u32> {
     Ok(())
 }
 
-/// Function tables registered at run time: not read by gala's ntdll on
-/// ARM64 yet (ROADMAP AR), so not checked here.
-pub fn table_checks(_c: &mut Checks, _ntdll: usize, _fns: &Fns) -> Result<(), u32> {
+/// An ARM64 entry with packed unwind data for a function of `len` bytes
+/// at `begin` (Flag 1, FunctionLength in instructions, no saves): a lookup
+/// reads nothing but the entry.
+const fn packed(begin: u32, len: u32) -> Entry {
+    [begin, 1 | ((len / 4) << 2)]
+}
+
+/// Lookups in function tables registered at run time: a table of two
+/// entries (RtlAddFunctionTable), then a growable one, as x64's checks do.
+pub fn table_checks(c: &mut Checks, ntdll: usize, fns: &Fns) -> Result<(), u32> {
+    let mut base64 = 0u64;
+    let (Some(add), Some(delete)) =
+        (find_export(ntdll, b"RtlAddFunctionTable"), find_export(ntdll, b"RtlDeleteFunctionTable"))
+    else {
+        return c.ok(false, 0);
+    };
+    // SAFETY: the documented signatures.
+    let (add, delete) = unsafe {
+        (
+            core::mem::transmute::<usize, extern "system" fn(*const Entry, u32, u64) -> u8>(add),
+            core::mem::transmute::<usize, extern "system" fn(*const Entry) -> u8>(delete),
+        )
+    };
+    // Memory of its own (as a JIT's code is), not inside this image.
+    let (s, region, _) = allocate(0, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    c.ok(s == STATUS_SUCCESS && region != 0, s.into())?;
+    let region = region as u64;
+    let table = [packed(0x10, 0x10), packed(0x40, 0x10)];
+    c.ok(add(table.as_ptr(), 2, region) != 0, 0)?;
+    let entry = (fns.lookup)(region + 0x18, &mut base64, core::ptr::null_mut());
+    c.eq(entry as u64, table.as_ptr() as u64)?;
+    c.eq(base64, region)?;
+    let entry = (fns.lookup)(region + 0x4c, &mut base64, core::ptr::null_mut());
+    c.eq(entry as u64, table.as_ptr() as u64 + 8)?;
+    c.ok((fns.lookup)(region + 0x28, &mut base64, core::ptr::null_mut()).is_null(), 0)?;
+    c.ok(delete(table.as_ptr()) != 0, 0)?;
+    c.ok((fns.lookup)(region + 0x18, &mut base64, core::ptr::null_mut()).is_null(), 0)?;
+
+    // A growable table: entries relative to RangeBase, only the counted
+    // ones searched, more after RtlGrowFunctionTable, none after
+    // RtlDeleteGrowableFunctionTable.
+    let (Some(add), Some(grow), Some(delete)) = (
+        find_export(ntdll, b"RtlAddGrowableFunctionTable"),
+        find_export(ntdll, b"RtlGrowFunctionTable"),
+        find_export(ntdll, b"RtlDeleteGrowableFunctionTable"),
+    ) else {
+        return c.ok(false, 0);
+    };
+    type AddGrowable = extern "system" fn(*mut usize, *mut Entry, u32, u32, usize, usize) -> u32;
+    // SAFETY: the documented signatures.
+    let (add, grow, delete) = unsafe {
+        (
+            core::mem::transmute::<usize, AddGrowable>(add),
+            core::mem::transmute::<usize, extern "system" fn(usize, u32)>(grow),
+            core::mem::transmute::<usize, extern "system" fn(usize)>(delete),
+        )
+    };
+    let mut entries = [packed(0x10, 0x10), [0, 0], [0, 0], [0, 0]];
+    let table = entries.as_mut_ptr();
+    let region = 0x7_0000_0000u64;
+    let mut handle = 0usize;
+    c.eq(add(&mut handle, table, 1, 4, region as usize, region as usize + 0x100).into(), 0)?;
+    c.ok(handle != 0, 0)?;
+    let entry = (fns.lookup)(region + 0x18, &mut base64, core::ptr::null_mut());
+    c.eq(entry as u64, table as u64)?;
+    c.eq(base64, region)?;
+    c.ok((fns.lookup)(region + 0x38, &mut base64, core::ptr::null_mut()).is_null(), 0)?;
+    // SAFETY: the table's second slot, written before it is counted.
+    unsafe { table.add(1).write_volatile(packed(0x30, 0x10)) };
+    grow(handle, 2);
+    let entry = (fns.lookup)(region + 0x38, &mut base64, core::ptr::null_mut());
+    c.eq(entry as u64, table as u64 + 8)?;
+    c.ok((fns.lookup)(region + 0x48, &mut base64, core::ptr::null_mut()).is_null(), 0)?;
+    delete(handle);
+    c.ok((fns.lookup)(region + 0x18, &mut base64, core::ptr::null_mut()).is_null(), 0)?;
     Ok(())
 }
 
