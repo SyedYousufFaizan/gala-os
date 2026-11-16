@@ -403,6 +403,7 @@ Whitespace-separated `flag` and `key=value` words (`kernel/src/cmdline.rs`).
 | `gpureset=<n>` | the virtio-gpu is reset under the driver after the n-th flush (driver recovery test) |
 | `crashtest` | with `persist`: panic on purpose after mounting when the disk holds no crash record (the crash record's scenario) |
 | `spintest` | the boot thread spins in the kernel for 25 s (the kernel-thread watchdog's scenario) |
+| `bootstack` | the boot thread's stack painted early and its deepest use reported at the run's end (`qemu: ending the run (...); boot stack N bytes deep (deepest K KiB of 64 KiB)`: `boot::stack`) |
 | `hangtest` | CPU 1 spins with interrupts off for 9 s, 3 s after its timer starts, and the boot's end waits for it to go on (the hang watchdog's scenarios, `watchdog` and `arm_watchdog`) |
 | `checkuser` | every return to user mode checks that the CPU is set up for the thread (its kernel stack, CR3, user GS base; no other CPU running it) and panics if not |
 | `tlbparanoid` | every change to a user address space flushes every CPU's whole TLB and every context switch reloads CR3 (tells TLB bugs from others) |

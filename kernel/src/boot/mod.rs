@@ -9,6 +9,7 @@
 pub mod acpi;
 mod framebuffer;
 mod limine;
+pub mod stack;
 
 use core::fmt;
 use core::ops::Range;

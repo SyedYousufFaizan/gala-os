@@ -24,5 +24,9 @@ pub fn exit(code: QemuExitCode) -> ! {
     // command line told us it is present.
     let mut port = unsafe { Port::<u32>::new(DEBUG_EXIT_PORT) };
     port.write(code as u32);
+    // Only without the exit device: said, rather than a silent halt.
+    crate::console::emergency_line(format_args!(
+        "qemu: the run did not end: no isa-debug-exit device at port {DEBUG_EXIT_PORT:#x}; halting"
+    ));
     cpu::halt_forever()
 }

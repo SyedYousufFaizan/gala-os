@@ -384,6 +384,7 @@ Limine into `target/`. The `handover_next` kernel is built into
 | `XTASK_CMDLINE="words"` | add kernel command-line words to every boot (the kernel takes the last `args=`, so this can replace a scenario's arguments) |
 | `XTASK_QEMU_ARGS="..."` | extra QEMU arguments; an `-accel` here replaces xtask's own |
 | `XTASK_QEMU_LOG=int,cpu_reset` | QEMU's `-d` log into `<image>.qemu.log` |
+| `XTASK_QEMU_GDB=1` | at a boot's timeout, attach gdb to its QEMU and add QEMU's own record of each vCPU and every QEMU thread's stack to the failed log ("Hunting a rare hang") |
 | `XTASK_QEMU=<path>` | the QEMU binary to use |
 | `XTASK_FIRMWARE=uefi\|bios` | force one firmware for every boot |
 | `XTASK_NO_BATCH=1` | every scenario in its own VM |
@@ -4155,6 +4156,21 @@ before blaming CI:
   late still show.
 - In gala-um, catch a hung instance live and `gdb -p` the `exe` process
   (`thread apply all bt`).
+- **A guest that stops with no state dump** (aarch64's `virt` has no NMI
+  for the dump; a wedged guest answers none): the failed log has QEMU's
+  view of each CPU at the timeout (`xtask: QEMU's CPU#n: PC=...
+  PSTATE=...`, from the monitor). `XTASK_QEMU_GDB=1` adds QEMU's own
+  record (`xtask: gdb:` lines: halted, PC, x0/x1/x29/x30/SP, ELR, ESR,
+  VBAR, TTBR0, the power state; RIP/RFLAGS on x86-64) and every QEMU
+  thread's stack: a halted vCPU says the guest stopped (where, and what
+  last called), a thread inside `exit()` or a lock says QEMU did. The
+  monitor's PC under TCG can be a stale value; gdb's halted flag is not.
+  With `XTASK_REPEAT`, catching a 1-in-100 hang takes a few hundred
+  boots; `XTASK_QEMU_LOG=int` adds every exception taken (the last ones
+  before the stop). The kernel says each step of its exit (`qemu: ending
+  the run (...)`, and `qemu: the run did not end: ...` if the host did
+  not end it), and `bootstack` on the command line adds how deep the
+  boot stack was ever used.
 - **A program hangs without a ledger** (it never exits, so the ledger is
   not printed): add `events=syscall,thread` to its scenario's command
   line and read `target/debug/test-<name>.events.jsonl` while QEMU still

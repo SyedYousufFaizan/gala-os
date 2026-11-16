@@ -18786,6 +18786,11 @@ fn repeat_boots(vms: &[Vm], isos: &[PathBuf], times: usize) -> Result {
         let (_, verdicts) = boot_vm(vm, copy);
         let verdict = verdicts.into_iter().next().map_or(Ok(()), |(_, v)| v);
         let _ = fs::remove_file(copy);
+        // Each copy's firmware variable store (64 MiB for AAVMF's): many
+        // copies fill a small disk, and booting one again makes its own.
+        for vars in ["ovmf-vars.fd", "aavmf-vars.fd"] {
+            let _ = fs::remove_file(copy.with_extension(vars));
+        }
         match &verdict {
             Ok(()) => {
                 let _ = fs::remove_file(copy.with_extension("serial.log"));
@@ -20514,6 +20519,130 @@ const STATEDUMP_END: &str = "statedump: end";
 /// loaded host prints slowly).
 const STATEDUMP_WAIT: Duration = Duration::from_secs(20);
 
+/// Every CPU's instruction pointer and state as QEMU sees it (the
+/// monitor's `info registers -a`), one line each for the log: what a
+/// timed-out guest that cannot answer was doing (aarch64's `virt` has no
+/// NMI to ask it; a wedged x86-64 guest does not answer either).
+fn cpu_registers(socket: &Path) -> String {
+    use std::io::{Read as _, Write as _};
+    let Ok(mut m) = std::os::unix::net::UnixStream::connect(socket) else {
+        return "xtask: QEMU's CPU registers: the monitor did not answer\n".into();
+    };
+    let _ = m.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = m.write_all(b"info registers -a\n");
+    let mut text = Vec::new();
+    let mut buf = [0u8; 65536];
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        match m.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => text.extend_from_slice(&buf[..n]),
+            Err(_) if !text.is_empty() => break,
+            Err(_) => {}
+        }
+    }
+    cpu_register_lines(&String::from_utf8_lossy(&text))
+}
+
+/// `XTASK_QEMU_GDB=1`: QEMU's own record of each vCPU (halted, PC and the
+/// registers that say how it got there, the exception registers, the
+/// power state) and every QEMU thread's stack, read by attaching gdb to
+/// the QEMU process of a timed-out boot (WORKFLOW "A boot that hangs"):
+/// what tells a guest that stopped (a halted vCPU, where) from QEMU
+/// stuck in itself (a thread in exit(), a lock), which the monitor's
+/// registers cannot. The gdb script goes beside `log`.
+fn qemu_gdb_state(pid: u32, log: &Path) -> String {
+    let exe = fs::read_link(format!("/proc/{pid}/exe")).unwrap_or_default();
+    let arm = exe.to_string_lossy().contains("aarch64");
+    let cpu = if arm {
+        "p/x ((ARMCPU*)$c)->env.pc\n\
+         p/x ((ARMCPU*)$c)->env.pstate\n\
+         p/x ((ARMCPU*)$c)->env.daif\n\
+         p/x ((ARMCPU*)$c)->env.xregs[0]\n\
+         p/x ((ARMCPU*)$c)->env.xregs[1]\n\
+         p/x ((ARMCPU*)$c)->env.xregs[29]\n\
+         p/x ((ARMCPU*)$c)->env.xregs[30]\n\
+         p/x ((ARMCPU*)$c)->env.xregs[31]\n\
+         p/x ((ARMCPU*)$c)->env.elr_el[1]\n\
+         p/x ((ARMCPU*)$c)->env.cp15.esr_el[1]\n\
+         p/x ((ARMCPU*)$c)->env.cp15.vbar_el[1]\n\
+         p/x ((ARMCPU*)$c)->env.cp15.ttbr0_el[1]\n\
+         p/x ((ARMCPU*)$c)->power_state\n"
+    } else {
+        "p/x ((X86CPU*)$c)->env.eip\n\
+         p/x ((X86CPU*)$c)->env.eflags\n\
+         p/x ((X86CPU*)$c)->env.regs[4]\n\
+         p/x ((X86CPU*)$c)->env.hflags\n"
+    };
+    let script = format!(
+        "set pagination off\nset $c = cpus_queue.tqh_first\nwhile $c\n\
+         p $c->cpu_index\np $c->halted\np $c->stopped\np $c->exception_index\n{cpu}\
+         set $c = $c->node.tqe_next\nend\nthread apply all bt 20\n"
+    );
+    let script_path = log.with_extension("gdb");
+    if let Err(e) = fs::write(&script_path, script) {
+        return format!("xtask: QEMU's own state (gdb): cannot write the script: {e}\n");
+    }
+    let out = Command::new("gdb")
+        .args(["-p", &pid.to_string(), "-batch", "-x"])
+        .arg(&script_path)
+        .stdin(Stdio::null())
+        .output();
+    match out {
+        Err(e) => format!("xtask: QEMU's own state (gdb): {e} (is gdb installed?)\n"),
+        Ok(o) => {
+            let text = String::from_utf8_lossy(&o.stdout);
+            let mut lines = String::from("xtask: QEMU's own state (gdb, XTASK_QEMU_GDB):\n");
+            for line in text
+                .lines()
+                .filter(|l| l.starts_with('$') || l.starts_with("Thread ") || l.starts_with('#'))
+            {
+                lines += &format!("xtask: gdb: {line}\n");
+            }
+            lines
+        }
+    }
+}
+
+/// `info registers -a`'s output reduced to a line per CPU: its number,
+/// the instruction pointer (aarch64 `PC=`, x86-64 `RIP=`) and its state
+/// (`PSTATE=` with the exception level; x86-64's `RFL=` and `HLT=`).
+fn cpu_register_lines(text: &str) -> String {
+    let mut out = String::new();
+    let mut cpu: Option<String> = None;
+    let mut fields: Vec<String> = Vec::new();
+    let flush = |cpu: &Option<String>, fields: &mut Vec<String>, out: &mut String| {
+        if let Some(c) = cpu
+            && !fields.is_empty()
+        {
+            *out += &format!("xtask: QEMU's {c}: {}\n", fields.join(" "));
+        }
+        fields.clear();
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("CPU#") {
+            flush(&cpu, &mut fields, &mut out);
+            cpu = Some(format!("CPU#{}", rest.split_whitespace().next().unwrap_or("")));
+            continue;
+        }
+        for word in line.split_whitespace() {
+            if ["PC=", "RIP=", "RFL=", "HLT="].iter().any(|k| word.starts_with(k)) {
+                fields.push(word.to_string());
+            }
+        }
+        if let Some(at) = line.find("PSTATE=") {
+            // PSTATE=<hex> <flags> <EL and SP>, e.g. "-Z-- EL1h".
+            fields.push(line[at..].split_whitespace().take(3).collect::<Vec<_>>().join(" "));
+        }
+    }
+    flush(&cpu, &mut fields, &mut out);
+    if out.is_empty() {
+        out = "xtask: QEMU's CPU registers: none read from the monitor\n".into();
+    }
+    out
+}
+
 /// A boot that timed out: injects an NMI through the monitor (QEMU's
 /// `nmi` reaches every CPU; the kernel prints a state dump: each CPU's
 /// rip and backtrace, held locks, memory, the flight recorder, then every
@@ -20527,6 +20656,11 @@ fn ask_for_state_dump(
     why: &str,
 ) -> String {
     use std::io::Write as _;
+    // Before the NMI changes what the CPUs do.
+    let mut registers = cpu_registers(socket);
+    if env::var_os("XTASK_QEMU_GDB").is_some() {
+        registers += &qemu_gdb_state(child.id(), log);
+    }
     let seen = |mark: &str| {
         fs::read(log).is_ok_and(|b| b.windows(mark.len()).any(|w| w == mark.as_bytes()))
     };
@@ -20555,7 +20689,7 @@ fn ask_for_state_dump(
         }
     }
     let wait = STATEDUMP_WAIT.as_secs();
-    match sent {
+    let said = match sent {
         Err(e) => format!("\nxtask: {why}; no state dump (monitor: {e})\n"),
         Ok(()) if seen(STATEDUMP_END) => format!(
             "\nxtask: {why}; the guest's state dump (NMI) took {:.1}s\n",
@@ -20572,7 +20706,8 @@ fn ask_for_state_dump(
             "\nxtask: {why}; the guest did not answer the NMI within {wait}s of run time \
              (no NMI handler yet: early boot, or the machine is wedged)\n"
         ),
-    }
+    };
+    said + &registers
 }
 
 /// Joins the `{"ev":"rec","hex":...}` lines of an event stream into the
@@ -27688,6 +27823,23 @@ fn bake_icons() -> Result {
 
 #[cfg(test)]
 mod judging {
+    #[test]
+    fn cpu_register_lines_name_each_cpu() {
+        let arm = "CPU#0\n PC=ffffffff80001234 X00=0\nPSTATE=600003c5 -ZC- EL1h  SVCR=0\n\
+                   CPU#1\n PC=0000000000000000 X00=0\nPSTATE=400003c5 -Z-- EL1h BTYPE=0\n";
+        assert_eq!(
+            super::cpu_register_lines(arm),
+            "xtask: QEMU's CPU#0: PC=ffffffff80001234 PSTATE=600003c5 -ZC- EL1h\n\
+             xtask: QEMU's CPU#1: PC=0000000000000000 PSTATE=400003c5 -Z-- EL1h\n"
+        );
+        let x86 = "CPU#0\nRAX=0 RBX=0\nRIP=ffffffff80001000 RFL=00000246 [---Z-P-] CPL=0 HLT=1\n";
+        assert_eq!(
+            super::cpu_register_lines(x86),
+            "xtask: QEMU's CPU#0: RIP=ffffffff80001000 RFL=00000246 HLT=1\n"
+        );
+        assert!(super::cpu_register_lines("").contains("none read"));
+    }
+
     use super::*;
 
     /// A log with a byte that is not UTF-8 is still read whole (the

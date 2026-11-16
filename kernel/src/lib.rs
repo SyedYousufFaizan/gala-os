@@ -99,6 +99,10 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     };
     arch::bootphase::mark("boot_info");
     let cmdline = Cmdline::new(info.cmdline);
+    // `bootstack`: the boot stack's use measured (boot::stack).
+    if cmdline.flag("bootstack") {
+        boot::stack::mark();
+    }
     if cmdline.flag(QEMU_EXIT_FLAG) {
         QEMU_EXIT.store(true, Ordering::Relaxed);
     }
@@ -901,6 +905,13 @@ fn log_memory_map(info: &BootInfo) -> MemorySummary {
 /// Stops after a failure: reports to QEMU in test mode, otherwise halts.
 fn finish(code: QemuExitCode) -> ! {
     if QEMU_EXIT.load(Ordering::Relaxed) {
+        // Said first: a run that then does not end names where it stopped
+        // (the exit's own line follows if the host does not end it).
+        console::emergency_line(format_args!(
+            "qemu: ending the run ({:?}){}",
+            code,
+            boot::stack::Usage
+        ));
         qemu::exit(code);
     }
     arch::cpu::halt_forever()
