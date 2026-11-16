@@ -170,6 +170,10 @@ const laneName: Record<string, string> = {
   host: "your machine",
   win: "Windows 11",
   gala: "gala",
+  old: "running kernel",
+  new: "new kernel",
+  here: "this machine",
+  there: "another machine",
 };
 
 /** How a window from either personality reaches the screen. */

@@ -4,10 +4,12 @@
 // and cannot drift from it. Written by prerender.mjs into dist/llms.txt.
 import {
   componentGroups,
+  debugCapabilities,
   decisions,
   focus,
   insideTools,
   linuxPrograms,
+  liveCapabilities,
   planned,
   repoTools,
   statusLabel,
@@ -56,6 +58,14 @@ export function llmsText(): string {
     }
     out.push("");
   }
+
+  out.push("## Beyond a reboot");
+  out.push("");
+  for (const c of [...liveCapabilities, ...debugCapabilities]) {
+    const proof = c.proof ? ` (checked by: ${c.proof.join(", ")})` : "";
+    out.push(`- **${c.name}** (${statusLabel[c.status].toLowerCase()}): ${c.what} ${c.how}${proof}`);
+  }
+  out.push("");
 
   out.push("## Components");
   out.push("");

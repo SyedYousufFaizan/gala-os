@@ -1,15 +1,18 @@
 import {
   componentGroups,
+  debugCapabilities,
   decisions,
   focus,
   insideTools,
   linuxPrograms,
+  liveCapabilities,
   planned,
   repoTools,
   shots,
   statusLabel,
   toolGroups,
   windowsPrograms,
+  type Capability,
   type Program,
   type Status,
 } from "./content";
@@ -22,6 +25,7 @@ const doc = (name: string) => `${REPO}/blob/main/docs/${name}`;
 
 const nav = [
   { id: "how", label: "How it works" },
+  { id: "beyond", label: "Beyond a reboot" },
   { id: "components", label: "Components" },
   { id: "now", label: "In progress" },
   { id: "runs", label: "What runs" },
@@ -59,6 +63,26 @@ function ProgramList({ programs }: { programs: Program[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function CapabilityCard({ c }: { c: Capability }) {
+  return (
+    <li id={`can-${c.id}`}>
+      <div className="card-top">
+        <h4>{c.name}</h4>
+        <StatusTag status={c.status} />
+      </div>
+      <p>{c.what}</p>
+      <p className="card-how">{c.how}</p>
+      {c.proof && (
+        <p className="program-sc">
+          {c.proof.map((s) => (
+            <code key={s}>{s}</code>
+          ))}
+        </p>
+      )}
+    </li>
   );
 }
 
@@ -196,6 +220,62 @@ export function App() {
 
             <h3 className="dia-title">Two systems, one desktop</h3>
             <WindowPaths />
+          </Section>
+
+          <Section
+            id="beyond"
+            title="Beyond a reboot"
+            intro="Most systems lose everything that is running when the kernel changes or the machine stops. gala is built so that running state can outlive both: written down, carried over and started again."
+          >
+            <ul className="cards cards-wide">
+              {liveCapabilities.map((c) => (
+                <CapabilityCard key={c.id} c={c} />
+              ))}
+            </ul>
+
+            <h3 className="dia-title">A kernel handover, step by step</h3>
+            <p className="dia-intro">
+              How a new kernel takes over a running machine. The programs
+              see a pause, not a restart.
+            </p>
+            <Flow
+              label="The steps of a kernel handover"
+              steps={[
+                { lane: "old", title: "Load the new kernel", detail: "its image is checked against its signature first" },
+                { lane: "old", title: "Quiesce", detail: "every thread stops where it can safely stop; a blocked call is noted for later" },
+                { lane: "old", title: "Write the record", detail: "processes, memory, handles, sockets, the clock: versioned data" },
+                { lane: "new", title: "Jump", detail: "straight into the new kernel, no firmware or bootloader" },
+                { lane: "new", title: "Rebuild", detail: "the record is read, older formats too; memory stays in place" },
+                { lane: "user", title: "Carry on", detail: "blocked calls are reissued and connections stay open" },
+              ]}
+              caption="Anything the record cannot carry yet makes the handover refuse, and the old kernel keeps running, with the reason in its log."
+            />
+
+            <h3 className="dia-title">Next: a program that moves between machines</h3>
+            <p className="dia-intro">
+              The same record, cut down to one program. Planned; the
+              commands are those the roadmap names.
+            </p>
+            <Flow
+              label="Freezing a program and starting it on another machine"
+              steps={[
+                { lane: "here", title: "gala snapshot", detail: "the program and its children freeze at a quiet point" },
+                { lane: "here", title: "export", detail: "one file: memory, threads, handles, windows; signed and encrypted" },
+                { lane: "there", title: "import", detail: "version, digests and signature checked" },
+                { lane: "there", title: "gala restore", detail: "it runs on, its windows on the new desktop" },
+              ]}
+            />
+
+            <h3 className="dia-title">Making rare bugs ordinary</h3>
+            <p className="dia-intro">
+              The same idea pointed at bugs: a failure is made to happen on
+              demand, and when it happens, it explains itself.
+            </p>
+            <ul className="cards">
+              {debugCapabilities.map((c) => (
+                <CapabilityCard key={c.id} c={c} />
+              ))}
+            </ul>
           </Section>
 
           <Section

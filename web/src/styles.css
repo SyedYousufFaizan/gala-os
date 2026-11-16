@@ -552,6 +552,17 @@ a {
   border-color: var(--line-strong);
 }
 
+.lane-old {
+  background: var(--surface);
+  border-color: var(--line-strong);
+}
+
+.lane-new,
+.lane-there {
+  background: var(--works-soft);
+  border-color: color-mix(in srgb, var(--works) 30%, transparent);
+}
+
 .flow-lane {
   font-size: 0.6875rem;
   text-transform: uppercase;
@@ -805,6 +816,17 @@ a {
 .cards p {
   color: var(--ink-soft);
   font-size: 0.9rem;
+}
+
+.cards-wide {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 26rem), 1fr));
+}
+
+.card-how {
+  font-size: 0.85rem !important;
+  color: var(--ink-faint) !important;
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
 }
 
 .card-path {

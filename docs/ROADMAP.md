@@ -227,7 +227,7 @@ has a section under "Open items".
 | SND | Sound | later | nothing yet; virtio-sound with a WAV-file check first, then WASAPI; not urgent |
 | USB | USB: xHCI, keyboards, mice and storage | later | nothing yet; device interrupts first, then xHCI on `qemu-xhci`, HID, storage; not urgent |
 | BR | A web browser: stock Edge | in progress | stage 1 done: chromium_version, chromium_dump (a page's script runs), chromium_https (a page from the guest's nginx over TLS) and chromium_host (a page from the host network) pass in the gate; stage 2 (a window) under way: chromium_window |
-| OF | Microsoft 365 apps and the new Outlook | planned | gap analysis first |
+| OF | Microsoft 365 apps and the new Outlook | in progress | the gap analysis done; the Click-to-Run install completes (`office_install_local`); Word and Excel start without a window yet (`office_word`, `office_excel`) |
 
 ### Robustness, live update, tooling
 

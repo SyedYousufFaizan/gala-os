@@ -450,6 +450,114 @@ export const linuxPrograms: Program[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// What gala can do that an ordinary system cannot. From ROADMAP R2-R9 and
+// SN, ARCHITECTURE "Kernel handover", "Deterministic simulation", "Live
+// mocking", "Fault injection", and WORKFLOW "Machine snapshots".
+
+export type Capability = {
+  id: string;
+  name: string;
+  status: Status;
+  what: string;
+  how: string;
+  /** The boot scenarios (or commands) that hold it to account. */
+  proof?: string[];
+};
+
+/** The large ones: running state that outlives its kernel or its machine. */
+export const liveCapabilities: Capability[] = [
+  {
+    id: "handover",
+    name: "Replace the kernel without a reboot",
+    status: "works",
+    what: "The running kernel hands the machine to a new kernel image, without the firmware or the bootloader, and the programs carry on: their memory stays where it is, threads blocked in waits and I/O are reissued, and open TCP and UDP connections survive.",
+    how: "Every thread is stopped at a quiescent point and the kernel's state is written as a versioned record. The new kernel can be a newer build with a different state format; what it cannot carry yet makes the handover refuse with the reason, never half-happen.",
+    proof: ["handover_k32", "handover_upgrade", "handover_net"],
+  },
+  {
+    id: "snapshot",
+    name: "Save a whole machine, resume it in seconds",
+    status: "works",
+    what: "A running machine is saved when a chosen line appears in its log and resumed from there, as often as wanted. One snapshot can be resumed twice to try two fixes from the same state.",
+    how: "The Office install takes 28 minutes to reach the step that fails. Saved there, it resumes in 3 seconds and reaches the end 21 seconds later. A snapshot only resumes on the build it was taken with, and every difference is named.",
+    proof: ["snapshot_machine"],
+  },
+  {
+    id: "hotswap",
+    name: "Hot-swap DLLs and the kernel into a running machine",
+    status: "works",
+    what: "A fix to a DLL or to the kernel is patched into a resumed snapshot, into every process that has it loaded, without starting over.",
+    how: "The old and new builds are compared function by function. Every program thread is stopped, no changed function may be on any thread's stack, the new code is mapped beside the old and each old entry jumps to its new version. Anything unsafe is refused with the reason. It is a development tool: a hot-swapped run is never counted as a pass.",
+    proof: ["hotswap_machine", "hotswap_dll", "hotswap_wow64"],
+  },
+  {
+    id: "live-update",
+    name: "Live update of the whole system",
+    status: "building",
+    what: "A running gala serving SSH and Nginx updates its system image and its kernel, and every connection and session goes on.",
+    how: "Built on the handover. What is left: carrying consoles, jobs, pipes in mid-request and the desktop, and restarting user-mode processes one at a time onto a new system image.",
+  },
+  {
+    id: "freeze",
+    name: "Freeze a program and move it to another machine",
+    status: "planned",
+    what: "gala snapshot freezes one program and its children; gala restore starts it again, here or, exported as one file, on another machine, where its windows open on the new desktop.",
+    how: "A program snapshot is the handover's record cut down to one process tree: its memory, threads, handles, windows and sockets. Exports are signed and encrypted to their target, since a program's memory holds its secrets.",
+  },
+];
+
+/** The ones that make bugs reproducible instead of rare. */
+export const debugCapabilities: Capability[] = [
+  {
+    id: "sim",
+    name: "Deterministic simulation",
+    status: "works",
+    what: "One thread runs at a time, a seeded random choice picks which, and time is virtual. A race that shows up once repeats every time from its seed.",
+    how: "The approach FoundationDB and TigerBeetle use, applied to Windows programs in gala-um.",
+    proof: ["cargo xtask sim-test"],
+  },
+  {
+    id: "replay",
+    name: "Record, replay and control the clock",
+    status: "works",
+    what: "A run's boot time, clock readings and random numbers are recorded and played back. The clock can be set and moved while programs run, their timers following it, and the disk can be made slow on purpose.",
+    how: "Wrappers at the device and service boundaries (the clock, the random source, the disk), so a test can put the system in a state that is hard to reach for real.",
+    proof: ["cargo xtask replay-test"],
+  },
+  {
+    id: "faults",
+    name: "Fault injection",
+    status: "works",
+    what: "Memory allocations, physical pages, disk requests, network sends and page-file writes fail on purpose, every nth time or at random from a seed.",
+    how: "Every allocation in the kernel can fail, so every failure path is exercised rather than trusted.",
+    proof: ["cargo xtask fault-test"],
+  },
+  {
+    id: "ledger",
+    name: "A ledger of what is missing",
+    status: "works",
+    what: "Every system call, information class, flag or DLL function a program reached that gala does not implement yet is counted and listed at the end of the run. No gap stays hidden behind a crash elsewhere.",
+    how: "Ranked by how often each was hit, the list is the work queue for the next program.",
+    proof: ["ledger_test"],
+  },
+  {
+    id: "crash",
+    name: "Watchdogs and a crash record that survives reboots",
+    status: "works",
+    what: "A stuck CPU is caught by a watchdog, and a crash writes its message, backtrace and last events to the disk, where the next boot finds and prints them.",
+    how: "An always-on flight recorder keeps each CPU's last 256 system calls and exits, at the cost of a few stores each.",
+    proof: ["watchdog", "kernel_watchdog", "crash_record"],
+  },
+  {
+    id: "lockdep",
+    name: "Lock-order checking",
+    status: "works",
+    what: "Two locks taken in opposite orders on two paths are reported the first time the inversion is seen, before they ever deadlock.",
+    how: "On in debug kernels, host tests and gala-um, so CI catches an inversion even when the timing never lines up.",
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Planned
 
 export type Planned = { name: string; what: string };
@@ -458,10 +566,6 @@ export const planned: Planned[] = [
   {
     name: "Microsoft Edge and WebView2",
     what: "after Chromium, the stock Edge, and the WebView2 runtime that the new Outlook and many other apps embed",
-  },
-  {
-    name: "Live update, kernel included",
-    what: "replacing the system image and the kernel while programs keep running, built on the handover",
   },
   {
     name: "A remote desktop",
