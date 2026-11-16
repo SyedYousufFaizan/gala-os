@@ -11923,6 +11923,7 @@ enum NetClient {
 /// xtask then runs.
 const NET_SCENARIOS: &[(&str, &str, NetClient)] = &[
     ("net_echo", "net: echo listening on port 7", NetClient::Echo),
+    ("arm_net_echo", "net: echo listening on port 7", NetClient::Echo),
     ("winsock_test", "winsock_test: listening on port 7", NetClient::Echo),
     ("udp_echo", "udp_test: listening on port 7", NetClient::Udp),
     ("handover_net", "handover_net_test: listening on port 7", NetClient::HandoverNet),
@@ -12083,8 +12084,14 @@ const SINGLE_THREAD_TCG: &[&str] = &[
 /// The scenarios of the aarch64 kernel (ROADMAP AR), booted on QEMU's
 /// `virt` machine (`Boot::UefiAarch64`): its kernel is built for
 /// `aarch64-unknown-none-softfloat` and put in their image instead of x86-64's.
-const AARCH64_SCENARIOS: &[&str] =
-    &["arm_boot", "arm_sched", "arm_fault_ud", "arm_fault_pagefault"];
+const AARCH64_SCENARIOS: &[&str] = &[
+    "arm_boot",
+    "arm_net_echo",
+    "arm_persist",
+    "arm_sched",
+    "arm_fault_ud",
+    "arm_fault_pagefault",
+];
 
 /// Whether the image `name` (`test-<scenario>`) is an aarch64 scenario's.
 fn aarch64_image(name: &str) -> bool {
@@ -12290,7 +12297,7 @@ const SCENARIOS: &[Scenario] = &[
         // them), then the boot ends where the port has got to
         // (`stop_after`) and the kernel exits through semihosting.
         name: "arm_boot",
-        cmdline: "qemu_exit stop_after=drivers",
+        cmdline: "qemu_exit stop_after=manifest",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             "gala-os kernel",
@@ -12310,7 +12317,8 @@ const SCENARIOS: &[Scenario] = &[
             "disk: virtio-blk at 00:",
             "net: virtio-net at 00:",
             "net: link up, ",
-            "boot: stopping after boot phase drivers (stop_after), the tick running",
+            "manifest: release ",
+            "boot: stopping after boot phase manifest (stop_after), the tick running",
         ],
     },
     Scenario {
@@ -12731,6 +12739,35 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit run=smprace_test.exe",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["smprace_test: ok", "exited with status 0x00000000"],
+    },
+    Scenario {
+        // The aarch64 kernel's network card carrying frames (DMA through
+        // virtio's queues): the kernel's echo server, xtask's client, the
+        // boot run to its end.
+        name: "arm_net_echo",
+        cmdline: "qemu_exit net_echo",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "net: virtio-net",
+            "net: link up, 10.0.2.15/24",
+            "net_echo: echoed 65536 bytes",
+            "xtask: net client: echo ok",
+        ],
+    },
+    Scenario {
+        // The aarch64 kernel's disk carrying requests both ways (DMA
+        // through virtio's queues): C: kept on the disk (`persist`); the
+        // first boot (DISK_SCENARIOS) formats the empty disk and raises
+        // its rollback floor, this one reads both back.
+        name: "arm_persist",
+        cmdline: "qemu_exit persist",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "disk: virtio-blk",
+            "persist: data area of 29 MiB at sector 4104",
+            "rollback: release 1 runs on a disk whose floor is 1",
+            "gala: boot ok",
+        ],
     },
     Scenario {
         // N1a: a kernel TCP echo server on port 7 behind QEMU's user-mode
@@ -23272,6 +23309,17 @@ struct DiskScenario {
 }
 
 const DISK_SCENARIOS: &[DiskScenario] = &[
+    DiskScenario {
+        // C: kept on the aarch64 kernel's disk (`arm_persist`): the
+        // first boot formats it.
+        name: "arm_persist",
+        size: 32 << 20,
+        host_mib: None,
+        setup: |_| {},
+        check: |_| Ok(()),
+        earlier_boots: &[&["persist: formatted the disk", "gala: boot ok"]],
+        earlier_fail: false,
+    },
     DiskScenario {
         // The aarch64 kernel's disk driver finds its device through the
         // ECAM (nothing is read or written).
