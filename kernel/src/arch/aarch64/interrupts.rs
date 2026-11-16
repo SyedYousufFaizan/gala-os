@@ -90,9 +90,20 @@ impl TrapFrame {
         self.esr & 0x1ff_ffff
     }
 
+    /// A BRK's kind is its immediate's, as Windows ARM64 assigns them:
+    /// 0xf000 a breakpoint (`__debugbreak`), 0xf001 a failed assertion,
+    /// 0xf003 a fast fail, 0xf004 an integer division by zero (the
+    /// compiler's check: AArch64's division does not trap); any other an
+    /// illegal instruction (as Wine's arm64 signal handling maps them).
     pub fn kind(&self) -> TrapKind {
         match u64::from(self.vector()) {
-            EC_BRK => TrapKind::Breakpoint,
+            EC_BRK => match self.esr & 0xffff {
+                0xf000 => TrapKind::Breakpoint,
+                0xf001 => TrapKind::Assertion,
+                0xf003 => TrapKind::FastFail,
+                0xf004 => TrapKind::DivideError,
+                _ => TrapKind::InvalidOpcode,
+            },
             EC_UNKNOWN => TrapKind::InvalidOpcode,
             EC_ILLEGAL_STATE => TrapKind::Protection,
             EC_INSTRUCTION_ABORT_LOWER | EC_DATA_ABORT_LOWER => TrapKind::PageFault,
@@ -103,6 +114,11 @@ impl TrapFrame {
     /// BRK leaves the pc on the instruction.
     pub fn breakpoint_address(&self) -> u64 {
         self.regs.ip()
+    }
+
+    /// A fast fail's code (`__fastfail`'s argument: x0).
+    pub fn fast_fail_code(&self) -> u64 {
+        self.regs.gpr(super::syscall::Gpr::X0)
     }
 
     pub fn page_fault_access(&self) -> Option<FaultAccess> {

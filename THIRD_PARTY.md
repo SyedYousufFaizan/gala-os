@@ -215,6 +215,19 @@ versions are pinned in `web/package-lock.json` (CI installs with `npm ci`).
   WSL's default environment, how the default moves on unregister and
   that an empty install directory is removed. No code copied; the
   numbers and strings are restated in gala's code.
+- ARM64 exceptions in user mode (`kernel/src/arch/aarch64/interrupts.rs`'s
+  `TrapFrame::kind`, `kernel/src/nt/abi/arm64`'s records,
+  `user/exception_test`'s ARM64 part): which `brk` immediate is which
+  exception on Windows ARM64 (0xf000 breakpoint, 0xf001 assertion
+  failure, 0xf003 fast fail, 0xf004 integer divide by zero, any other an
+  illegal instruction; the pc left on the `brk`) and an access
+  violation's parameters (execute for an instruction abort, else write or
+  read by the syndrome's WnR bit) from Wine's
+  `dlls/ntdll/unix/signal_arm64.c` (github.com/wine-mirror/wine master as
+  of 2026-11-16, LGPL-2.1+) as a description of Windows' behaviour;
+  `brk #0xf000` for `__debugbreak` also from Microsoft's documentation of
+  that intrinsic. The ARM64 CONTEXT's layout from winnt.h's
+  ARM64_NT_CONTEXT. No code copied.
 - The tar reader of `user/wsl` (`src/tar.rs`): POSIX.1-2008's pax
   description of the ustar and pax formats and GNU tar's manual (long
   names, base-256 numbers). gzip's member header: RFC 1952 (the

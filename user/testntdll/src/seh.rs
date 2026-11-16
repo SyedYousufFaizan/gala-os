@@ -29,18 +29,15 @@
 //! - Unwind consolidation (STATUS_UNWIND_CONSOLIDATE, C++ catch blocks):
 //!   `consolidate_if_asked`.
 //!
-//! - An unhandled exception goes to the top-level filter
-//!   (RtlSetUnhandledExceptionFilter); unless it continues execution, the
-//!   process ends with the exception code.
+//! - The vectored handlers, the order of the steps and the unhandled
+//!   exception's filter are `dispatch.rs`'s, shared with ARM64.
 //!
 //! Not yet: nested exceptions and collided unwinds (dispositions 2 and 3
 //! are treated as ExceptionContinueSearch), the history table.
 
 use core::arch::global_asm;
 
-use crate::{
-    ExceptionPointers, NtContinue, NtTerminateProcess, call_handlers, image_of, rd32, with_handlers,
-};
+use crate::{NtContinue, NtTerminateProcess, image_of, rd32};
 
 const UNW_FLAG_EHANDLER: u32 = 1;
 const UNW_FLAG_UHANDLER: u32 = 2;
@@ -68,7 +65,7 @@ const CTX_RIP: usize = 0xf8;
 /// CONTEXT.ContextFlags, and the flag RtlVirtualUnwind sets when it
 /// unwound a call (the new Rip is a return address), as Windows does
 /// since 8: DISPATCHER_CONTEXT.ControlPcIsUnwound comes from it.
-const CTX_FLAGS: usize = 0x30;
+pub(crate) const CTX_FLAGS: usize = 0x30;
 const CONTEXT_UNWOUND_TO_CALL: u32 = 0x2000_0000;
 /// Integer register `n` in unwind-code numbering (rax, rcx, rdx, rbx,
 /// rsp, rbp, rsi, rdi, r8..r15): the CONTEXT keeps them in that order.
@@ -885,7 +882,7 @@ pub extern "system" fn RtlCaptureStackBackTrace(
 /// dispatcher's own frame, which runs on what is left of an overflowed
 /// stack (the vectored handlers get a stack overflow first).
 #[inline(never)]
-fn dispatch_frames(record: *mut u8, context: *mut u8) -> bool {
+pub(crate) fn dispatch_frames(record: *mut u8, context: *mut u8) -> bool {
     let (_, stack_base) = stack_bounds();
     let mut ctx = Context::from_ptr(context);
     for _ in 0..4096 {
@@ -928,74 +925,6 @@ fn dispatch_frames(record: *mut u8, context: *mut u8) -> bool {
         }
     }
     false
-}
-
-/// Exception dispatch: the vectored exception handlers, then the frames'
-/// handlers; the vectored continue handlers run both when an exception
-/// handler continued execution and when none did (assumed from the
-/// documented contract and how Go uses them: its last continue handler
-/// reports unhandled crashes; to be checked against Windows). Unhandled:
-/// the process ends with the exception code.
-pub extern "system" fn dispatch_exception(record: *mut u8, context: *mut u8) -> ! {
-    let mut pointers = ExceptionPointers { record, context };
-    // Snapshots, so that handlers may (un)register handlers themselves.
-    let (exception, continue_) = with_handlers(|t| (t.exception, t.continue_));
-    let handled = call_handlers(&exception, &mut pointers) || dispatch_frames(record, context);
-    if call_handlers(&continue_, &mut pointers) || handled {
-        NtContinue(context, 0);
-    }
-    // Unhandled: the top-level filter (kernel32's UnhandledExceptionFilter,
-    // which calls SetUnhandledExceptionFilter's) may continue execution;
-    // otherwise the process ends.
-    let filter = TOP_FILTER.load(core::sync::atomic::Ordering::Acquire);
-    if filter != 0 {
-        // The kernel keeps it for the crash report: the filter may end
-        // the process with a status of its own (Crashpad's 0xffff7002).
-        crate::GalaUnhandledException(record, context);
-        // SAFETY: a filter registered with RtlSetUnhandledExceptionFilter.
-        let f: extern "system" fn(*mut ExceptionPointers) -> i32 =
-            unsafe { core::mem::transmute(filter) };
-        if f(&mut pointers) == -1 {
-            crate::GalaUnhandledException(core::ptr::null(), core::ptr::null());
-            NtContinue(context, 0);
-        }
-    }
-    // SAFETY: the record starts with its ExceptionCode; ExceptionAddress
-    // is at +0x10 and the parameters at +0x20.
-    let (code, address, info) = unsafe {
-        (
-            (record as *const u32).read_unaligned(),
-            record.add(0x10).cast::<u64>().read_unaligned(),
-            record.add(0x28).cast::<u64>().read_unaligned(),
-        )
-    };
-    // Gaps are never silent: the ledger has the code and where it was
-    // raised (and for access violations, the address accessed).
-    let what = b"ntdll.dll!unhandled exception";
-    crate::GalaRecordMissing(
-        what.as_ptr(),
-        what.len(),
-        2,
-        u64::from(code) << 32 | (address & 0xffff_ffff),
-    );
-    if code == 0xc000_0005 {
-        let what = b"ntdll.dll!unhandled access violation at";
-        crate::GalaRecordMissing(what.as_ptr(), what.len(), 2, info);
-    }
-    NtTerminateProcess(-1, code);
-    loop {
-        core::hint::spin_loop();
-    }
-}
-
-/// The top-level unhandled exception filter (0: none).
-static TOP_FILTER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-
-/// RtlSetUnhandledExceptionFilter: the filter unhandled exceptions go to
-/// (kernel32 sets its UnhandledExceptionFilter).
-#[unsafe(no_mangle)]
-pub extern "system" fn RtlSetUnhandledExceptionFilter(filter: usize) {
-    TOP_FILTER.store(filter, core::sync::atomic::Ordering::Release);
 }
 
 // --- Unwinding ---------------------------------------------------------
@@ -1090,25 +1019,6 @@ extern "system" fn unwind_to(
     loop {
         core::hint::spin_loop();
     }
-}
-
-/// RtlRaiseException's work: dispatch the record raised with `context`
-/// (its caller's registers); resume it if a handler continued execution.
-extern "system" fn raise(record: *mut u8, context: *mut u8) -> ! {
-    // Its Rip is the return address of the call that raised: unwound to a
-    // call (a hardware exception's context, from the kernel, is not).
-    // SAFETY: the caller's CONTEXT (ContextFlags at 0x30).
-    unsafe {
-        let flags = context.add(CTX_FLAGS).cast::<u32>();
-        flags.write_unaligned(flags.read_unaligned() | CONTEXT_UNWOUND_TO_CALL);
-        // The record is marked EXCEPTION_SOFTWARE_ORIGINATE (0x80), with
-        // whatever flags the caller set: Windows 25H2's 64-bit
-        // RtlRaiseException does so itself (a record raised with flags 0
-        // reaches the handlers with 0x80; the 32-bit one leaves them).
-        let er = record.add(ER_FLAGS).cast::<u32>();
-        er.write_unaligned(er.read_unaligned() | EXCEPTION_SOFTWARE_ORIGINATE);
-    }
-    dispatch_exception(record, context)
 }
 
 /// RtlRestoreContext(ContextRecord, ExceptionRecord): resumes the context
@@ -1363,10 +1273,10 @@ global_asm!(
     "call {nt_continue}",
     "int3",
     ".seh_endproc",
-    raise = sym raise,
+    raise = sym crate::dispatch::raise,
     nt_continue = sym crate::NtContinue,
     unwind_to = sym unwind_to,
-    dispatch = sym dispatch_exception,
+    dispatch = sym crate::dispatch::dispatch_exception,
     record = const RECORD_OFFSET,
     machine_frame = const MACHINE_FRAME_OFFSET,
 );

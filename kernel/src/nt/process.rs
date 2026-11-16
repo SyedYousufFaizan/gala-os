@@ -1618,8 +1618,9 @@ fn on_user_exception(frame: &mut TrapFrame, cr2: Option<u64>) {
                 if !super::abi::deliver_to_user(&process, frame, status, cr2) {
                     super::abi::keep_note(&process, frame, status, frame.ip(), cr2);
                     warn!(
-                        "user exception: {:#x} at rip {:#x} (cr2 {addr:#x})",
+                        "user exception: {:#x} at {} {:#x} (cr2 {addr:#x})",
                         status.0,
+                        platform::IP_NAME,
                         frame.ip()
                     );
                     terminate_current(status);
@@ -1634,6 +1635,24 @@ fn on_user_exception(frame: &mut TrapFrame, cr2: Option<u64>) {
         TrapKind::Breakpoint => NtStatus::BREAKPOINT,
         TrapKind::InvalidOpcode => NtStatus::ILLEGAL_INSTRUCTION,
         TrapKind::Protection => NtStatus::PRIVILEGED_INSTRUCTION,
+        TrapKind::Assertion => NtStatus::ASSERTION_FAILURE,
+        TrapKind::FastFail => {
+            // No handler runs (`__fastfail`'s contract): the process ends
+            // with STATUS_STACK_BUFFER_OVERRUN, its crash report naming
+            // where and the log the code.
+            let status = NtStatus::STACK_BUFFER_OVERRUN;
+            if let Some(process) = current() {
+                super::abi::keep_note(&process, frame, status, frame.ip(), None);
+            }
+            warn!(
+                "user exception: fast fail (code {}) at {} {:#x}: the process ends, no handler runs",
+                frame.fast_fail_code(),
+                platform::IP_NAME,
+                frame.ip()
+            );
+            terminate_current(status);
+            return;
+        }
         TrapKind::PageFault | TrapKind::Other => NtStatus::ACCESS_VIOLATION,
     };
     if let Some(process) = current()
@@ -1645,8 +1664,9 @@ fn on_user_exception(frame: &mut TrapFrame, cr2: Option<u64>) {
         super::abi::keep_note(&process, frame, status, frame.ip(), cr2);
     }
     warn!(
-        "user exception: {} at rip {:#x} (cr2 {:#x}, error {:#x})",
+        "user exception: {} at {} {:#x} (cr2 {:#x}, error {:#x})",
         platform::exception_name(vector),
+        platform::IP_NAME,
         frame.ip(),
         cr2.unwrap_or(0),
         frame.error_code()

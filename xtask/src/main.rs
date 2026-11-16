@@ -7204,6 +7204,13 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("arm_import", "testdll.dll", "gala"),
     ("arm_sync", "ntdll.dll", "Windows/System32"),
     ("exception_test", "ntdll.dll", "Windows/System32"),
+    ("arm_exception", "ntdll.dll", "Windows/System32"),
+    ("arm_tls", "ntdll.dll", "Windows/System32"),
+    ("arm_tls", "kernel32.dll", "Windows/System32"),
+    ("arm_tls", "tlsdll.dll", "gala"),
+    ("arm_apc", "ntdll.dll", "Windows/System32"),
+    ("arm_crash_dispatched", "ntdll.dll", "Windows/System32"),
+    ("arm_crash_filtered", "ntdll.dll", "Windows/System32"),
     ("seh_test", "ntdll.dll", "Windows/System32"),
     ("guard_test", "ntdll.dll", "Windows/System32"),
     ("import_test", "ntdll.dll", "Windows/System32"),
@@ -9934,8 +9941,18 @@ const USER_PROGRAMS_X86: &[&str] = &[
 /// Test programs built for ARM64 too (`user/<name>`, ntrt's ARM64
 /// runtime), shipped in the aarch64 kernel's images in place of the x64
 /// ones and exported to user/bin/arm64.
-const USER_PROGRAMS_ARM64: &[&str] =
-    &["hello", "startup_test", "import_test", "thread_test", "sync_test", "wait_test"];
+const USER_PROGRAMS_ARM64: &[&str] = &[
+    "hello",
+    "startup_test",
+    "import_test",
+    "thread_test",
+    "sync_test",
+    "wait_test",
+    "exception_test",
+    "tls_test",
+    "apc_test",
+    "crash",
+];
 
 /// Where the build puts the ARM64 build of test program `program`.
 fn built_program_arm64(program: &str) -> PathBuf {
@@ -12174,6 +12191,12 @@ const AARCH64_SCENARIOS: &[&str] = &[
     "arm_thread",
     "arm_sync",
     "arm_wait",
+    "arm_exception",
+    "arm_tls",
+    "arm_apc",
+    "arm_crash",
+    "arm_crash_dispatched",
+    "arm_crash_filtered",
     "arm_sched",
     "arm_fault_ud",
     "arm_fault_pagefault",
@@ -12465,6 +12488,85 @@ const SCENARIOS: &[Scenario] = &[
         cmdline: "qemu_exit run=wait_test.exe",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &["wait_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // exception_test's ARM64 build (as `exception_test`): faults,
+        // `brk` and `udf` reach a vectored handler with ARM64's record
+        // and CONTEXT, and it continues execution.
+        name: "arm_exception",
+        cmdline: "qemu_exit run=exception_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["exception_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // tls_test's ARM64 build (as `tls_test`): static TLS of the program
+        // and of a DLL loaded later, through kernel32 and gala's ntdll.
+        name: "arm_tls",
+        cmdline: "qemu_exit run=tls_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["tls_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // apc_test's ARM64 build (as `apc_test`): user APCs run in FIFO
+        // order from alertable waits and delays (STATUS_USER_APC), through
+        // gala's ntdll's KiUserApcDispatcher.
+        name: "arm_apc",
+        cmdline: "qemu_exit run=apc_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["apc_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // crash's ARM64 build (as `crash`): with no ntdll the kernel ends
+        // the process and its crash report has ARM64's registers.
+        name: "arm_crash",
+        cmdline: "qemu_exit run=crash.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "crash: writing to address 0",
+            "user exception: data abort from EL0",
+            "crash report: crash.exe (pid 4) ended by an unhandled exception 0xc0000005 \
+             (access violation) in thread",
+            "(crash.exe+0x",
+            "writing address 0x0",
+            "crash report:   x0 =",
+            "crash report:   sp =",
+            "crash report:   [sp+0x00]",
+            "process crash.exe (pid 4) exited with status 0xc0000005",
+            BOOT_OK_MARKER,
+        ],
+    },
+    Scenario {
+        // As `crash_dispatched`: the exception goes to gala's ntdll's ARM64
+        // dispatcher, finds no handler (the ledger says the frames were not
+        // searched: ARM64 unwinding is to come) and ends the process.
+        name: "arm_crash_dispatched",
+        cmdline: "qemu_exit run=crash.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "crash: writing to address 0",
+            "crash report: crash.exe (pid 4) ended by an unhandled exception 0xc0000005 \
+             (access violation) in thread",
+            "(crash.exe+0x",
+            "writing address 0x0",
+            "process crash.exe (pid 4) exited with status 0xc0000005",
+            BOOT_OK_MARKER,
+        ],
+    },
+    Scenario {
+        // As `crash_filtered`: a top-level filter ends the process with its
+        // own code; the report still describes the exception.
+        name: "arm_crash_filtered",
+        cmdline: "qemu_exit run=crash.exe args=filter",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "crash: the top-level filter ends the process",
+            "crash report: crash.exe (pid 4) ended with status 0xffff7002 after an unhandled \
+             exception 0xc0000005 (access violation) in thread",
+            "(crash.exe+0x",
+            "writing address 0x0",
+            "process crash.exe (pid 4) exited with status 0xffff7002",
+            BOOT_OK_MARKER,
+        ],
     },
     Scenario {
         // The hang watchdog on aarch64 (as `watchdog`): CPU 1 spins in its

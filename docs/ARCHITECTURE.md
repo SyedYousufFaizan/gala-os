@@ -253,6 +253,23 @@ faults, its exit).
   them); NtCreateThread starts a thread from a CONTEXT's registers.
   gala's ntdll and ntrt make `svc #N` as Windows ARM64's ntdll does
   (`arm_startup`, `arm_import`: a program bound to an ARM64 DLL).
+  Exceptions reach user mode (`deliver_to_user`): gala's ARM64
+  dispatcher frame is the CONTEXT of the fault (CONTEXT_FULL, its pc the
+  faulting instruction's, a `brk`'s too) at sp and the EXCEPTION_RECORD
+  right above it; ntdll's KiUserExceptionDispatcher hands both to the
+  dispatch x64 shares (`testntdll/src/dispatch.rs`: vectored handlers,
+  frames, continue handlers, the top-level filter). A `brk`'s immediate
+  is its exception, as Windows ARM64 assigns them (`TrapFrame::kind`:
+  0xf000 breakpoint, 0xf001 assertion failure, 0xf003 fast fail, 0xf004
+  integer divide by zero, which AArch64's division never raises itself;
+  any other an illegal instruction); a fast fail ends the process with
+  STATUS_STACK_BUFFER_OVERRUN and runs no handler. A user APC's frame is
+  the CONTEXT to resume at sp and the routine with its three arguments
+  above it (`deliver_apc`: ARM64's CONTEXT has no home area to carry
+  them, as x64's does); KiUserApcDispatcher calls the routine and
+  NtContinues with TestAlert (`arm_exception`, `arm_apc`, `arm_tls`:
+  kernel32 loads, the APC a TLS callback queues runs before the entry).
+  Crash reports show x0-x30, sp, pc and pstate (`arm_crash*`).
 - **Interrupt masking and the pseudo-NMI** (`cpu.rs`, `gic.rs`):
   interrupts are masked by priority (ICC_PMR_EL1), not PSTATE.I: "off"
   (`PMR_OFF`, 0xa0) lets only the NMI's priority (0x80) through, "on"
@@ -349,10 +366,11 @@ faults, its exit).
   Aff0 below 16 only; xtask cannot ask for a state dump at a timeout
   (QEMU `virt` has no NMI for its monitor's `nmi`: "machine does not
   provide NMIs"); no `stop_others` (its one user, the hot swap, is
-  x86-64's); in user mode no exception reaches user mode (no ARM64
-  exception frame, no .pdata unwinding), NtContinue's TestAlert runs no
-  APC (no ARM64 APC frame), and NtGetContextThread and
-  NtSetContextThread answer STATUS_NOT_IMPLEMENTED; the page file's aging is not safe
+  x86-64's); in user mode frame-based exception handlers are not
+  searched (ARM64's .pdata and .xdata are not read: the ledger says so
+  when an exception goes unhandled for want of them), and
+  NtGetContextThread and NtSetContextThread answer
+  STATUS_NOT_IMPLEMENTED; the page file's aging is not safe
   here (it relies on hardware-set accessed and dirty bits: FEAT_HAFDBS
   is not turned on); entered at EL2 with VHE the timer would
   be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
