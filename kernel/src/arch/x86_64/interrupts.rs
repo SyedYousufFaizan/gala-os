@@ -157,6 +157,12 @@ impl TrapFrame {
         self.rip.wrapping_sub(1)
     }
 
+    /// A fast fail's code (`__fastfail`'s argument: rcx). x86-64's `int
+    /// 0x29` is not told apart yet (it raises #GP: TrapKind::Protection).
+    pub fn fast_fail_code(&self) -> u64 {
+        self.rcx
+    }
+
     /// A page fault's access (the error code's bits: 1 write, 4
     /// instruction fetch); None for other traps.
     pub fn page_fault_access(&self) -> Option<FaultAccess> {

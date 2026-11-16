@@ -1,10 +1,11 @@
 //! Windows' ARM64 ABI: arguments in x0-x7, then the stack; a call's
 //! argument in x0; ARM64's CONTEXT (`context`), which a process's first
 //! thread starts LdrInitializeThunk with, NtContinue resumes and
-//! NtCreateThread starts a thread from. Not yet (ROADMAP AR): the
-//! exception and APC frames (exceptions are not dispatched to user mode,
-//! NtContinue's TestAlert runs no APC), NtGetContextThread and
-//! NtSetContextThread, the KUSER_SHARED_DATA processor features; their
+//! NtCreateThread starts a thread from; the dispatcher frames gala's
+//! ntdll reads: an exception's (`deliver_to_user`: the CONTEXT and the
+//! EXCEPTION_RECORD) and a user APC's (`deliver_apc`: the CONTEXT and the
+//! routine with its arguments). Not yet (ROADMAP AR): NtGetContextThread
+//! and NtSetContextThread, the KUSER_SHARED_DATA processor features; their
 //! services answer STATUS_NOT_IMPLEMENTED.
 
 use super::ArgSlot;
@@ -111,28 +112,128 @@ pub fn thread_start(ctx: &[u8]) -> (UserRegs, u64) {
     (regs, regs.ip())
 }
 
-pub fn deliver_to_user(
-    _process: &Process,
-    _frame: &mut TrapFrame,
-    _status: NtStatus,
-    _cr2: Option<u64>,
-) -> bool {
-    false
+/// gala's ARM64 dispatcher frame on the user stack: the CONTEXT at the new
+/// sp, the EXCEPTION_RECORD right above it, the whole 16-byte aligned.
+/// gala's ntdll's KiUserExceptionDispatcher reads it so (the frame of
+/// Windows' own ARM64 dispatcher is not public).
+const RECORD_OFFSET: u64 = context::SIZE as u64;
+const RECORD_SIZE: u64 = 0x98;
+const DISPATCH_FRAME_SIZE: u64 = (RECORD_OFFSET + RECORD_SIZE + 0xf) & !0xf;
+
+/// EXCEPTION_RECORD (the 64-bit layout) for `status` raised at `address`.
+fn exception_record(status: NtStatus, address: u64, info: &[u64]) -> [u8; RECORD_SIZE as usize] {
+    let mut r = [0u8; RECORD_SIZE as usize];
+    r[0..4].copy_from_slice(&status.0.to_le_bytes());
+    r[0x10..0x18].copy_from_slice(&address.to_le_bytes());
+    r[0x18..0x1c].copy_from_slice(&(info.len() as u32).to_le_bytes());
+    for (i, v) in info.iter().enumerate() {
+        r[0x20 + 8 * i..0x28 + 8 * i].copy_from_slice(&v.to_le_bytes());
+    }
+    r
 }
 
+/// An access violation's kind as EXCEPTION_RECORD's first parameter says
+/// it: 0 read, 1 write, 8 execute (an instruction abort).
+fn access_kind(frame: &TrapFrame) -> u64 {
+    match frame.access() {
+        platform::FaultAccess::Execute => 8,
+        platform::FaultAccess::Write => 1,
+        platform::FaultAccess::Read => 0,
+    }
+}
+
+/// Hands a user-mode exception to ntdll!KiUserExceptionDispatcher, if the
+/// process has one: the CONTEXT of the fault (CONTEXT_FULL, its pc the
+/// faulting instruction's: a BRK's too, which its handler steps over) and
+/// the EXCEPTION_RECORD go on the user stack (`DISPATCH_FRAME_SIZE`) and
+/// the thread resumes in the dispatcher with sp at the CONTEXT. False if
+/// it cannot be delivered.
+pub fn deliver_to_user(
+    process: &Process,
+    frame: &mut TrapFrame,
+    status: NtStatus,
+    cr2: Option<u64>,
+) -> bool {
+    let dispatcher = process.exception_dispatcher.load(core::sync::atomic::Ordering::Relaxed);
+    if dispatcher == 0 {
+        return false;
+    }
+    let pc = frame.ip();
+    let info: &[u64] = match status {
+        NtStatus::BREAKPOINT => &[0],
+        NtStatus::ACCESS_VIOLATION | NtStatus::GUARD_PAGE_VIOLATION | NtStatus::STACK_OVERFLOW => {
+            &[access_kind(frame), cr2.unwrap_or(u64::MAX)]
+        }
+        _ => &[],
+    };
+    keep_note(process, frame, status, pc, cr2);
+    let record = exception_record(status, pc, info);
+    let state = platform::xsave();
+    let mut fp = [0u8; context::FP_STATE_BYTES];
+    fp.copy_from_slice(state.bytes());
+    let ctx = context::to_bytes(&context_regs(&frame.user_regs()), Some(&fp));
+    let stack = frame.sp();
+    let at = stack.wrapping_sub(DISPATCH_FRAME_SIZE) & !0xf;
+    let pushed = at < stack
+        && process.write(at, &ctx).is_ok()
+        && process.write(at + RECORD_OFFSET, &record).is_ok();
+    if !pushed {
+        warn!("user exception: cannot push the dispatcher frame (sp {stack:#x})");
+        return false;
+    }
+    frame.set_ip(dispatcher);
+    frame.set_sp(at);
+    true
+}
+
+/// Keeps the exception for the process's crash report: its registers at
+/// `ip`, and for an access violation the address and the access kind.
 pub fn keep_note(
     process: &Process,
     frame: &TrapFrame,
     status: NtStatus,
     ip: u64,
-    _cr2: Option<u64>,
+    cr2: Option<u64>,
 ) {
+    let access = matches!(
+        status,
+        NtStatus::ACCESS_VIOLATION | NtStatus::GUARD_PAGE_VIOLATION | NtStatus::STACK_OVERFLOW
+    )
+    .then(|| (cr2.unwrap_or(u64::MAX), access_kind(frame)));
     let mut regs = frame.user_regs();
     regs.set_ip(ip);
-    *process.last_exception.lock() = Some(Note::new(process, status, None, regs, false));
+    *process.last_exception.lock() = Some(Note::new(process, status, access, regs, false));
 }
 
-pub fn report_registers<T: core::fmt::Display>(_note: &Note, _stack: &[Option<T>]) {}
+/// The crash report's register lines (x0-x30, sp, pc, pstate) and the top
+/// of the stack (`stack`, already named by module).
+pub fn report_registers<T: core::fmt::Display>(note: &Note, stack: &[Option<T>]) {
+    let w = note.regs.to_words();
+    /// x`first`.. and their values, as one line.
+    struct Row<'a>(usize, &'a [u64]);
+    impl core::fmt::Display for Row<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            for (k, v) in self.1.iter().enumerate() {
+                let sep = if k == 0 { "" } else { " " };
+                write!(f, "{sep}x{:<2}={v:#018x}", self.0 + k)?;
+            }
+            Ok(())
+        }
+    }
+    for (row, values) in w[..31].chunks(4).enumerate() {
+        info!("crash report:   {}", Row(4 * row, values));
+    }
+    info!("crash report:   sp ={:#018x} pc ={:#018x} pstate={:#010x}", w[31], w[32], w[33]);
+    for (i, v) in stack.iter().enumerate() {
+        match v {
+            Some(v) => info!("crash report:   [sp+{:#04x}] {v}", 8 * i),
+            None => {
+                info!("crash report:   [sp+{:#04x}] (unreadable)", 8 * i);
+                break;
+            }
+        }
+    }
+}
 
 /// The page's machine fields (ARM64); its processor features are not
 /// written yet.
@@ -161,8 +262,9 @@ pub(in crate::nt) fn nt_set_context_thread(_call: &mut Call<'_>) -> NtStatus {
 /// `Context` its flags name over the registers it called with (the
 /// floating-point part loaded now: the kernel does not use those
 /// registers, so they are what the thread resumes with). x18 stays the
-/// TEB whatever the CONTEXT's X18 says (`syscall::for_user`). TestAlert
-/// runs no APC yet: ARM64's APC frame is ROADMAP AR's.
+/// TEB whatever the CONTEXT's X18 says (`syscall::for_user`). With
+/// TestAlert, a queued user APC runs first (`deliver_apc`), the resulting
+/// context its frame's.
 pub(in crate::nt) fn nt_continue(call: &mut Call<'_>) -> NtStatus {
     let ctx_ptr = match call.arg(0) {
         Ok(v) => v,
@@ -182,20 +284,124 @@ pub(in crate::nt) fn nt_continue(call: &mut Call<'_>) -> NtStatus {
     if !regs.is_valid() {
         return NtStatus::INVALID_PARAMETER;
     }
-    if let Some(fp) = context::float_state(&ctx) {
+    let fp = context::float_state(&ctx);
+    let test_alert = match call.arg(1) {
+        Ok(v) => v as u8 != 0,
+        Err(status) => return status,
+    };
+    if test_alert
+        && crate::nt::thread::has_user_apc()
+        && deliver_apc(call, &regs, &fp.unwrap_or_else(current_fp))
+    {
+        return NtStatus::SUCCESS;
+    }
+    if let Some(fp) = fp {
         platform::xrstor(&xstate_of(&fp));
     }
     platform::continue_with(regs);
     NtStatus::SUCCESS
 }
 
-pub(in crate::nt) fn gala_unhandled_exception(_call: &mut Call<'_>) -> NtStatus {
-    NtStatus::NOT_IMPLEMENTED
+/// GalaUnhandledException(Record, Context): gala's ntdll reports an
+/// exception no handler took before the top-level filter runs (which may
+/// end the process with a status of its own), so the crash report still
+/// describes it; a null record withdraws it (the filter continued
+/// execution). As x64's, from ARM64's CONTEXT; a C++ throw's and a
+/// delay load's details are x64's only yet.
+pub(in crate::nt) fn gala_unhandled_exception(call: &mut Call<'_>) -> NtStatus {
+    let record = match call.arg(0) {
+        Ok(v) => v,
+        Err(status) => return status,
+    };
+    let context = match call.arg(1) {
+        Ok(v) => v,
+        Err(status) => return status,
+    };
+    if record == 0 {
+        *call.process.unhandled_exception.lock() = None;
+        return NtStatus::SUCCESS;
+    }
+    // EXCEPTION_RECORD: code +0, flags +4, address +0x10, parameter count
+    // +0x18, parameters +0x20.
+    let mut rec = [0u8; RECORD_SIZE as usize];
+    let mut ctx = [0u8; context::SIZE];
+    if call.process.read(record, &mut rec).is_err() || call.process.read(context, &mut ctx).is_err()
+    {
+        return NtStatus::ACCESS_VIOLATION;
+    }
+    let word = |at: usize| u64::from_le_bytes(rec[at..at + 8].try_into().unwrap_or([0; 8]));
+    let code = word(0) as u32;
+    let count = word(0x18) as u32;
+    let access =
+        (code == NtStatus::ACCESS_VIOLATION.0 && count >= 2).then(|| (word(0x28), word(0x20)));
+    let mut regs = user_regs(&context::from_bytes(&ctx));
+    regs.set_ip(word(0x10));
+    let mut note = Note::new(&call.process, NtStatus(code), access, regs, false);
+    note.flags = (word(0) >> 32) as u32;
+    *call.process.unhandled_exception.lock() = Some(note);
+    NtStatus::SUCCESS
 }
 
-/// No APC frame yet: the wait's status as it is.
-pub(in crate::nt) fn deliver_apc_after(_call: &Call<'_>, status: NtStatus) -> NtStatus {
+/// After an alertable wait that ended with STATUS_USER_APC: the thread
+/// runs its APCs (`deliver_apc`) and then returns from the wait with that
+/// status (x0 of the CONTEXT it resumes).
+pub(in crate::nt) fn deliver_apc_after(call: &Call<'_>, status: NtStatus) -> NtStatus {
+    if status != NtStatus::USER_APC {
+        return status;
+    }
+    let mut regs = call.frame.return_regs();
+    regs.set_syscall_result(u64::from(status.0));
+    deliver_apc(call, &regs, &current_fp());
     status
+}
+
+/// The running thread's FP/SIMD state as CONTEXT's floating-point part.
+fn current_fp() -> [u8; context::FP_STATE_BYTES] {
+    let mut fp = [0u8; context::FP_STATE_BYTES];
+    fp.copy_from_slice(platform::xsave().bytes());
+    fp
+}
+
+/// gala's ARM64 APC frame: the CONTEXT to resume at sp, then
+/// NormalRoutine, NormalContext, SystemArgument1 and SystemArgument2 right
+/// above it (ARM64's CONTEXT has no home area to hold them, as x64's
+/// does), the whole 16-byte aligned. gala's ntdll's KiUserApcDispatcher
+/// reads it so.
+const APC_ARGS_OFFSET: u64 = context::SIZE as u64;
+const APC_FRAME_SIZE: u64 = APC_ARGS_OFFSET + 32;
+
+/// Runs the next user APC, if any, by resuming the thread in
+/// ntdll!KiUserApcDispatcher with the APC frame below `regs`' sp: the
+/// dispatcher calls the routine and NtContinues the CONTEXT (`regs` and
+/// `fp`) with TestAlert set, which delivers the next APC.
+pub(in crate::nt) fn deliver_apc(
+    call: &Call<'_>,
+    regs: &UserRegs,
+    fp: &[u8; context::FP_STATE_BYTES],
+) -> bool {
+    let dispatcher = call.process.apc_dispatcher.load(core::sync::atomic::Ordering::Relaxed);
+    if dispatcher == 0 {
+        return false;
+    }
+    let Some(apc) = crate::nt::thread::take_user_apc() else { return false };
+    let ctx = context::to_bytes(&context_regs(regs), Some(fp));
+    let mut args = [0u8; 32];
+    for (i, v) in [apc.routine, apc.args[0], apc.args[1], apc.args[2]].iter().enumerate() {
+        args[8 * i..8 * i + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    let sp = regs.sp();
+    let frame = sp.wrapping_sub(APC_FRAME_SIZE) & !0xf;
+    if frame >= sp
+        || call.process.write(frame, &ctx).is_err()
+        || call.process.write(frame + APC_ARGS_OFFSET, &args).is_err()
+    {
+        return false;
+    }
+    let mut next = UserRegs::default();
+    next.set_sp(frame);
+    next.set_ip(dispatcher);
+    platform::continue_with(next);
+    true
 }
 
 /// No WOW64 on aarch64.

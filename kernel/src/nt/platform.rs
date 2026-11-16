@@ -14,7 +14,7 @@
 //! become trait-associated or NT-owned types when `nt/` leaves the kernel
 //! crate (see "Remaining" in docs/GALA_UM.md).
 
-pub use crate::arch::interrupts::{FaultAccess, TrapFrame, TrapKind};
+pub use crate::arch::interrupts::{FaultAccess, IP_NAME, SP_NAME, TrapFrame, TrapKind};
 pub use crate::arch::paging::{PagingError, UserFault};
 #[cfg(not(feature = "hosted"))]
 pub use crate::arch::paging::{SharedPage, SharedUserSpace, SpaceLock, UserSpace};
