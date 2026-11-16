@@ -3,20 +3,28 @@
 // `content.ts` at build time, so it is the same set of facts the page shows
 // and cannot drift from it. Written by prerender.mjs into dist/llms.txt.
 import {
-  architecture,
+  componentGroups,
+  debugCapabilities,
   decisions,
-  layers,
-  programs,
-  type Layer,
+  focus,
+  insideTools,
+  linuxPrograms,
+  liveCapabilities,
+  planned,
+  repoTools,
+  statusLabel,
+  toolGroups,
+  windowsPrograms,
+  type Program,
 } from "./content";
 
-const layerOrder: Layer[] = ["core", "nt", "shell", "linux", "project"];
-
-const statusWord = {
-  works: "works",
-  building: "being built",
-  planned: "planned",
-} as const;
+function programs(out: string[], list: Program[]) {
+  for (const p of list) {
+    const name = p.version ? `${p.name} ${p.version}` : p.name;
+    out.push(`- **${name}**: ${p.what} (scenarios: ${p.scenarios.join(", ")})`);
+  }
+  out.push("");
+}
 
 export function llmsText(): string {
   const out: string[] = [];
@@ -24,12 +32,12 @@ export function llmsText(): string {
   out.push("# gala");
   out.push("");
   out.push(
-    "> gala is a from-scratch x86_64 operating system kernel written in Rust " +
+    "> gala is a from-scratch operating system kernel written in Rust " +
       "that runs unmodified Windows programs on its own clean-room system " +
       "DLLs, with a Linux personality on the same core. It is not a Windows " +
       "fork and contains no Microsoft code: compatibility is at the ABI " +
       "boundary only, and every behaviour is established by testing against " +
-      "a real Windows build.",
+      "a real Windows build. x86_64 works; an ARM64 port is in progress.",
   );
   out.push("");
   out.push(
@@ -37,28 +45,78 @@ export function llmsText(): string {
   );
   out.push("");
 
-  out.push("## What runs on it");
+  out.push("## In progress now");
   out.push("");
-  for (const p of programs) {
-    const name = p.version ? `${p.name} ${p.version}` : p.name;
-    out.push(`- **${name}**: ${p.what} (scenarios: ${p.scenarios.join(", ")})`);
-  }
-  out.push("");
-
-  out.push("## Architecture");
-  out.push("");
-  for (const l of layerOrder) {
-    out.push(`### ${layers[l].name}`);
+  for (const f of focus) {
+    out.push(`### ${f.title}`);
     out.push("");
-    out.push(layers[l].blurb);
+    out.push(f.lede);
     out.push("");
-    for (const e of architecture.filter((a) => a.layer === l)) {
-      out.push(`- **${e.title}** (${statusWord[e.status]}): ${e.summary}`);
+    for (const s of f.steps) {
+      const detail = s.detail ? `: ${s.detail}` : "";
+      out.push(`- ${s.label} (${statusLabel[s.status].toLowerCase()})${detail}`);
     }
     out.push("");
   }
 
-  out.push("## Design decisions");
+  out.push("## Beyond a reboot");
+  out.push("");
+  for (const c of [...liveCapabilities, ...debugCapabilities]) {
+    const proof = c.proof ? ` (checked by: ${c.proof.join(", ")})` : "";
+    out.push(`- **${c.name}** (${statusLabel[c.status].toLowerCase()}): ${c.what} ${c.how}${proof}`);
+  }
+  out.push("");
+
+  out.push("## Components");
+  out.push("");
+  for (const g of componentGroups) {
+    out.push(`### ${g.title}`);
+    out.push("");
+    out.push(g.intro);
+    out.push("");
+    for (const c of g.items) {
+      const path = c.path ? ` [${c.path}]` : "";
+      out.push(
+        `- **${c.name}** (${statusLabel[c.status].toLowerCase()})${path}: ${c.what}`,
+      );
+    }
+    out.push("");
+  }
+
+  out.push("## What runs on it");
+  out.push("");
+  out.push("### Windows programs, unmodified");
+  out.push("");
+  programs(out, windowsPrograms);
+  out.push("### Linux programs");
+  out.push("");
+  programs(out, linuxPrograms);
+
+  out.push("## Planned");
+  out.push("");
+  for (const p of planned) out.push(`- **${p.name}**: ${p.what}`);
+  out.push("");
+
+  out.push("## Tooling");
+  out.push("");
+  for (const g of toolGroups) {
+    out.push(`### ${g.title}`);
+    out.push("");
+    out.push(g.intro);
+    out.push("");
+    for (const t of g.tools) out.push(`- \`${t.cmd}\`: ${t.what}`);
+    out.push("");
+  }
+  out.push("### Beside the code");
+  out.push("");
+  for (const t of repoTools) out.push(`- **${t.name}**: ${t.what}`);
+  out.push("");
+  out.push("### Inside gala");
+  out.push("");
+  for (const t of insideTools) out.push(`- \`${t.name}\`: ${t.what}`);
+  out.push("");
+
+  out.push("## Principles");
   out.push("");
   for (const d of decisions) {
     out.push(`### ${d.title}`);

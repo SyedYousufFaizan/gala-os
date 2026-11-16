@@ -1383,8 +1383,8 @@ code `xtask/src/trust.rs`).
 
 gala-os.com is a static site in `web/`: React components prerendered to
 HTML at build time, so the published page is real markup that reads
-without JavaScript. Its content (what gala is, what runs on it, the map of
-ARCHITECTURE's sections, the design decisions) is data in
+without JavaScript. Its content (what gala is, its components and their status, what is
+in progress, what runs on it, the tooling, the principles) is data in
 `web/src/content.ts`; when a subsystem's status changes, that file is
 where the site learns it.
 
@@ -1398,7 +1398,7 @@ where the site learns it.
   the project path and the apex domain 404s) and `.nojekyll` (Pages
   otherwise runs the output through Jekyll, which drops files beginning
   with an underscore). The Website workflow asserts both survive a build.
-- Screenshots live in `web/public/shots/` and are listed in `App.tsx`.
+- Screenshots live in `web/public/shots/` and are listed in `content.ts` (`shots`).
 - `prerender.mjs` writes three files, not one: `index.html` (the markup),
   `sitemap.xml` (one URL, `lastmod` taken from the build date rather than
   written by hand, where it would be wrong the moment the page changed)
@@ -1407,8 +1407,8 @@ where the site learns it.
   the facts: all come from `content.ts`.
 - Page counts come from Ali Web Services: a `defer` script in
   `web/index.html` carrying the site's public id (THIRD_PARTY "The
-  website"). It is the only third-party request the page makes besides
-  the fonts, it records nothing until it runs, and the page is
+  website"). It is the only third-party request the page makes (the
+  page uses the visitor's system fonts), it records nothing until it runs, and the page is
   prerendered, so a visitor who blocks it still reads everything. Query
   strings are dropped at the service's end, apart from the `utm_*`
   parameters; no identifiers of gala's own are sent.

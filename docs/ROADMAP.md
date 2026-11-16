@@ -217,14 +217,17 @@ has a section under "Open items".
 | SH | The shell in user mode | planned | taskbar, start menu and wallpaper out of the kernel; the compositor later (RS B3a) |
 | SM | Start menu: default apps and install-on-click | steps 1-2 done; step 3 next (the owner) | see "SM. The start menu's apps" below |
 | AI | An AI-enabled start menu | planned | aichat through `gala install`; needs crypt32's ROOT store (TLS) and SH |
+| MCP | The system's actions as tools for AI clients | planned | `gala mcp` and aichat's custom tools from one description per command; tools loaded by category through a tool call |
 | UIA | UI Automation and windows across processes | in progress | `uia_test`, `flaui_test`, `windows_across_test`, `filezilla_flaui`; ARCHITECTURE "UI Automation" |
 | SD | Server and desktop workloads kept apart | in progress | one kernel: `profile=server`, CLI parity, bare desktops done |
 | SSH | SSH as a remote shell | in progress | steps 1-5 in their first form |
 | CP | An interactive console prompt | planned | serial line, screen and keyboard, gala-um's terminal; no SSH needed |
 | RS | Remote access and sessions | in progress | A, B1, B2, B3a's window stations, presenters, console switch and window state apart from the compositor (bare desktops too) done; B3b next |
 | GPU | Graphics and GPU | in progress | G0 and G1 done; G2 in progress (OpenGL and Vulkan done); G3 parked |
+| SND | Sound | later | nothing yet; virtio-sound with a WAV-file check first, then WASAPI; not urgent |
+| USB | USB: xHCI, keyboards, mice and storage | later | nothing yet; device interrupts first, then xHCI on `qemu-xhci`, HID, storage; not urgent |
 | BR | A web browser: stock Edge | in progress | stage 1 done: chromium_version, chromium_dump (a page's script runs), chromium_https (a page from the guest's nginx over TLS) and chromium_host (a page from the host network) pass in the gate; stage 2 (a window) under way: chromium_window |
-| OF | Microsoft 365 apps and the new Outlook | planned | gap analysis first |
+| OF | Microsoft 365 apps and the new Outlook | in progress | the gap analysis done; the Click-to-Run install completes (`office_install_local`); Word and Excel start without a window yet (`office_word`, `office_excel`) |
 
 ### Robustness, live update, tooling
 
@@ -240,9 +243,10 @@ has a section under "Open items".
 | R8 | Chain of trust for updates | in progress | steps 2-6 built; Secure Boot next |
 | R9 | Live update, kernel included | in progress | handover milestones (a)-(e) done |
 | OT | OpenTelemetry as the telemetry model | in progress | OT1 done; OT2: threads on every event, the process tree |
+| SU | Security updates: where fixes come from and how they reach machines | planned | gala's dependencies, its own code, Windows' advisories, vendors' security releases for installed applications; delivery through R8 |
 | CS | Crash-safe: no hard resets, a kind crash screen | planned | the kernel restarts itself through R9's handover; the last-resort path saves and explains |
 | TM | A task manager for Windows and Linux programs alike | in progress | steps 1-3 done (`taskmgr`: one list of both personalities, gala's taskmgr.exe ending one of each, "Not responding"); inspection next, then statistics (p50/p95/p99, the busiest threads, where they wait) and a Copy button for pasting a view into an agent, and sparklines beside every metric |
-| EX | A file explorer over every file system | planned | Windows drives, WSL distributions and LX's root in one tree |
+| EX | A file explorer over every file system | in progress | steps 1-2 done and part of 3-4 (`explorer`); next Windows drives, WSL distributions and LX's root in one tree |
 | PK | `gala install` over winget manifests | in progress | zip/portable installs per user and machine-wide, NSIS installs and a real Inno Setup install (Inno Setup 7.1.1: installed with its Start menu shortcuts and `.iss` association, run, uninstalled), on the winget resolver (selection, dependencies, ARP matching); MSI and MSIX readers |
 | SN | Snapshots: whole machines, then single programs, from the command line | in progress | machine snapshots in xtask done (step 1); hot swapping gala's DLLs into a resumed snapshot done (step 1d: at your own risk, never a real run); the kernel too, alone or with DLLs in one plan (step 1e, the same rule); modules no process maps replaced whole and new ones added, every changed module taken by the flag alone (step 1f); next a failing CI run's snapshot as an artifact; program snapshots on R9's state format; `gala snapshot`, `restore`, `export`, `import` |
 | DR | Windows drivers, staged and isolated | later | |
@@ -802,13 +806,28 @@ under 10 MB, Chromium over 300 MB; BR brings Edge and WebView2 as an
 installed package, never part of the image). The LLM client is an
 existing CLI, **aichat** (sigoden/aichat, MIT or Apache-2.0, Rust, one
 exe): streaming over server-sent events, many providers, function
-calling (its llm-functions tools are scripts), a REPL, one-shot use and
-`aichat --serve`, a local OpenAI-compatible server. It is installed
-with `gala install sigoden.AIChat` (winget-pkgs: a zip with a portable
-`aichat.exe`, which PK's stages 1-2 handle), not shipped. The tools are
-the `gala` commands (start, windows, activate, snap, close, ...) and
-UIA for driving programs, so the model acts only through what CLI
-parity already exposes.
+calling, a REPL, one-shot use and `aichat --serve`, a local
+OpenAI-compatible server. It is installed with `gala install
+sigoden.AIChat` (winget-pkgs: a zip with a portable `aichat.exe`, which
+PK's stages 1-2 handle), not shipped. The tools are the `gala` commands
+(start, windows, activate, snap, close, ...) and UIA for driving
+programs, so the model acts only through what CLI parity already
+exposes; item MCP describes them once and generates what aichat reads.
+
+aichat's custom tools need nothing of llm-functions (its bash/Node.js
+tool kit, not used): aichat reads the declarations from `functions.json`
+(a JSON array of name, description and a JSON-schema `parameters`),
+runs an executable of the tool's name from its functions `bin`
+directory (found through PATHEXT on Windows) with the arguments as one
+JSON command-line argument, and reads the result (JSON or text) from
+the file `LLM_OUTPUT` names; a nonzero exit code is a failed call
+(aichat `src/function.rs`). `mapping_tools` aliases a set of tools and
+`use_tools` picks the default sets, which item MCP's categories map
+onto. aichat has no MCP client of its own (its MCP route is
+llm-functions' Node.js bridge; native support is an open request,
+issue #1346 and draft PR #1427); if it gains one, it uses `gala mcp`
+instead and nothing else changes. aichat asks no confirmation before a
+tool runs: confirmations are gala's (step 3).
 
 **Next** (each step test first, the ledger leading):
 1. Install and run: a scenario installs `sigoden.AIChat` from a
@@ -827,7 +846,10 @@ parity already exposes.
    in-guest Nginx with the test CA in gala's roots.
 3. `gala ask`: the console entry point (provider and model from
    configuration, the key stored with DPAPI, never in a plain file),
-   streaming to the console, the `gala` commands as tools; every
+   streaming to the console, the `gala` commands as tools (item MCP's
+   generated `functions.json`, `gala.exe` under each tool's name); a
+   test passes awkward JSON (quotes, backslashes, spaces) through the
+   tool's command line and checks it arrives intact; every
    request, tool call (arguments and result) and confirmation in the
    event stream; actions that close, kill or delete ask first; text a
    tool returns is treated as untrusted (prompt injection).
@@ -849,6 +871,95 @@ stream.
 **Design**: to be written in ARCHITECTURE with step 3 (the assistant's
 process, tools, confirmation and key storage); "Installing software"
 (PK); "Schannel (TLS)" for the root store.
+
+### MCP. The system's actions as tools for AI clients
+
+**Goal**: everything the `gala` command can do is a tool an AI client
+can call: `gala mcp` is a Model Context Protocol server, and the same
+tools are aichat's custom tools for item AI, all generated from one
+description of each command.
+
+**Approach**:
+- **One description per command**: each `gala` command's name,
+  summary, category and arguments (a JSON schema), and whether it only
+  reads or changes something (destructive: closes, kills, deletes,
+  installs), are written once; the CLI parser, `gala help`, the MCP tool
+  list and aichat's `functions.json` are generated from them, so a new
+  shasha feature's `gala` command (item SD) is a tool with nothing more
+  to write, and the four never disagree.
+- **Two front ends, one implementation**: `gala mcp` speaks MCP
+  (JSON-RPC) over standard input and output, so any MCP client starts
+  it locally and a remote one reaches it through SSH (`ssh host gala
+  mcp`): no new network service. For aichat, `gala.exe` is installed
+  in aichat's functions `bin` directory under each tool's name (hard
+  links, or copies) and acts as the name it was started as, as busybox
+  does; the arguments come as JSON on its command line and the result
+  goes to `LLM_OUTPUT` (item AI).
+- **Tools loaded by a tool call, by category**: a model chooses worse
+  among hundreds of tools, so a client starts with a small core and
+  loads the rest on demand. Categories: desktop (windows, start, snap,
+  wallpaper), processes, programs (`gala install`, item PK), files,
+  services, registry, accounts and sessions, diagnostics (events, the
+  ledger, crash reports, state dumps, `gala gpu`), UIA (driving
+  programs). The core is `gala_tools` (with no argument the categories
+  and their summaries; with a category its tools' names, descriptions
+  and schemas) and the read-only tools of the session in use. Loading
+  works in each front end as far as its client allows: in `gala mcp`,
+  `gala_tools` with `load` adds the category's tools to the server's
+  list and sends `notifications/tools/list_changed`, and the client
+  lists them again; for clients that do not follow that notification,
+  and for aichat (whose `functions.json` is read once at start),
+  `gala_call` runs any tool by name with JSON arguments that gala
+  checks against the tool's schema, so a tool `gala_tools` described
+  is callable without being declared. aichat's `mapping_tools` gets one
+  alias per category, so a user or a role can also start with a
+  category declared.
+- **Diagnostics as resources**: what is read rather than done (the
+  event stream, the ledger, crash reports, the state dump) is also an
+  MCP resource, so an agent reads gala's own observability directly.
+- **Security**: the server is an ordinary process with the caller's
+  token, so the access checks and UIPI of the actions themselves apply;
+  no tool reaches what the `gala` command cannot. Every tool carries
+  MCP's read-only and destructive hints, and a destructive call asks
+  for confirmation on gala's side (MCP elicitation where the client
+  supports it, otherwise the console or a shasha dialog), never left to
+  the client. A low-integrity server offers the read-only tools only.
+  Text a tool returns (window text, file contents, pages) is marked as
+  untrusted for the client (prompt injection). Nothing leaves the
+  machine unless the user connects a remote model; then what tools
+  return is sent to it, which the AI item's configuration states.
+- **Observability**: every call (client, tool, arguments, result,
+  confirmation asked and answered, time taken) is an event in the event
+  stream; a failed call returns the NTSTATUS and the ledger entry behind
+  it, not a bare error.
+
+**Next** (each step test first):
+1. The command descriptions and the generated CLI parser and `gala
+   help` for the existing commands (`gala_cli` unchanged).
+2. `gala mcp` over stdio with read-only tools and `gala_tools`: a
+   test program acting as an MCP client (initialize, tools/list,
+   tools/call, a malformed request, an unknown tool) in a boot scenario
+   and in gala-um.
+3. Loading by category (`load`, `notifications/tools/list_changed`)
+   and `gala_call` with schema checks.
+4. The actions, with the destructive hints and confirmation (an
+   elicitation answered yes and no by the test client), each call in the
+   event stream.
+5. aichat's front end: the generated `functions.json`, `mapping_tools`
+   aliases per category, `gala.exe` under each tool's name (with item AI
+   step 3).
+6. Diagnostics as resources; UIA's tools (find, invoke, read a value).
+7. Later, if wanted: MCP's HTTP transport with its authorization, for
+   clients that cannot use SSH.
+
+**Done when**: an MCP client test lists the core tools, loads a
+category through `gala_tools`, calls a read-only tool and a destructive
+one (refused when the confirmation says no), and aichat calls the same
+tools through `functions.json`; every call is in the event stream.
+
+**Design**: to be written in ARCHITECTURE with step 1 (the command
+descriptions, the two front ends, categories and loading, confirmation);
+item SD for CLI parity, item AI for the client.
 
 ### UIA. UI Automation and windows across processes
 
@@ -1215,6 +1326,94 @@ events and GPU hangs (a fence late by N s) in crash reports; `gala gpu`.
 **Design**: ARCHITECTURE "Plan: graphics and GPU" (security: contexts
 as kernel objects on `\Device\Gpu0`; handover: devices reset, programs
 see device-lost).
+
+### SND. Sound
+
+**Goal**: programs play sound (and later record it) through the
+Windows audio APIs they use, on a virtio sound device first, with what
+was played checkable in a test. Not urgent (the owner): after the
+current focus.
+
+**Today**: nothing. No audio driver; winmm has its timer functions
+only and reports no audio or MIDI devices (ARCHITECTURE "Other
+DLLs"); no MMDevice API, WASAPI, DirectSound or XAudio2.
+
+**Next** (each step test first):
+1. The virtio-sound driver (virtio 1.2's sound device; QEMU's
+   `virtio-sound-pci`) over the modern virtio-pci transport GPU G1
+   uses: its streams, PCM formats and the period/buffer model, the
+   driver host-tested against a fake device as virtio-gpu's is.
+   Scenarios run QEMU with `-audiodev wav`, which writes everything
+   played to a file: a test plays a known tone and xtask compares the
+   file (frequency, length, no gaps), deterministic and without a sound
+   card on the host.
+2. The audio device list and WASAPI (`mmdevapi.dll`,
+   `audioses.dll`: IMMDeviceEnumerator, the default endpoint,
+   IAudioClient in shared mode with event-driven buffers,
+   IAudioRenderClient, the mix format), which Chromium's audio service
+   and most current programs use; `audio_test` against real Windows
+   (device listed, a stream started and fed, its position advancing).
+   Wine's mmdevapi and winmm (LGPL) are allowed sources (THIRD_PARTY.md
+   for anything borrowed).
+3. On top: winmm's waveOut and PlaySound, then DirectSound.
+4. Later: capture (a microphone; QEMU's wav backend has no input, a
+   scripted source instead), Intel HD Audio for real machines (Intel's
+   published HDA specification), exclusive mode, XAudio2, sound sent to
+   RS's remote client (ARCHITECTURE "Remote access", the client's
+   "sound").
+
+**Done when** (each step): its tests pass; stream starts, stops,
+underruns (the device starved) and the device's errors in an `events=`
+category, and the streams per process in the state dump.
+
+**Design**: to be written in ARCHITECTURE with step 1 (the driver, the
+kernel interface the audio DLLs use: shared buffers and a position
+event, as GPU's `GalaGpu*` calls are planned; handover: the device is
+reset, streams restart).
+
+### USB. USB: xHCI, keyboards, mice and storage
+
+**Goal**: gala drives USB through its own xHCI driver, so USB
+keyboards, mice and sticks work, first on QEMU's `qemu-xhci`, then on
+real machines; Windows programs see USB devices through the APIs they
+use. Not urgent (the owner): after the current focus.
+
+**Today**: nothing. The keyboard and mouse are PS/2, every device is
+polled, and xHCI is only listed among gala's own drivers under
+"Later". (The image boots from a USB stick through the firmware, not
+through gala.)
+
+**Next** (each step test first):
+1. Device interrupts: MSI/MSI-X for PCI devices, the virtio devices
+   moved off polling first (their scenarios unchanged), as xHCI's
+   event rings need them.
+2. The xHCI driver and hubs, from Intel's published xHCI
+   specification and the USB 2.0/3.x specifications: rings, slots,
+   enumeration, control and interrupt transfers, hot plug, a device
+   unplugged mid-transfer. Host tests against a fake controller; a
+   scenario with QEMU's `qemu-xhci`, devices plugged and unplugged
+   through the monitor.
+3. HID: the boot protocol for `usb-kbd` and `usb-mouse`, then report
+   descriptors; `usb-tablet` gives an absolute pointer, into the
+   desktop's input as the PS/2 driver's events are (scripted screen
+   tests can then click by position).
+4. Mass storage (bulk-only transport, SCSI commands) as a disk under
+   gala's file systems; `usb-storage` in a scenario.
+5. What Windows programs see: `hid.dll` and HID collections, device
+   enumeration through SetupAPI and cfgmgr32 (empty today:
+   `cfgmgr32_test`), raw input for HID devices, WinUSB for programs
+   talking to their own device; tests against real Windows with the
+   same QEMU devices.
+6. Third-party USB device drivers through DR's user-mode driver host
+   (UMDF); user-space Linux USB (libusb) with LX's device interfaces.
+
+**Done when** (each step): its tests pass; enumeration, plug and
+unplug, transfer errors and stalls in an `events=usb` category; the
+device tree in the state dump and in `gala devices`.
+
+**Design**: to be written in ARCHITECTURE with step 2 (the driver,
+the device tree, handover: the controller reset and devices enumerated
+again by the next kernel).
 
 ### BR. A web browser: stock Microsoft Edge
 
@@ -4991,6 +5190,124 @@ among the slowest hand-offs.
 **Design**: OBSERVABILITY "OpenTelemetry export"; WORKFLOW
 "OpenTelemetry".
 
+### SU. Security updates
+
+**Goal**: every vulnerability that can reach a gala machine has a named
+source that finds it, an owner who fixes it and a path that delivers the
+fix. R8 is the delivery path for gala itself (every commit on main whose
+CI passes is a release on the feed); this item covers where the fixes
+come from, and how applications installed on gala get theirs.
+
+The boundary follows Windows: Microsoft Update services Windows and
+Microsoft's runtimes, not other vendors' applications, which update
+themselves or through winget. What gala replaces of Windows (kernel,
+system DLLs, Schannel, crypt32, the CA bundle) is gala's to patch;
+what is installed as a package (the .NET runtime, the VC++
+redistributables, WebView2, any application) is updated as a package.
+Not gala's: the test corpus (Chromium, Nginx, the JDK and the rest run
+only inside QEMU and never ship), and distributions inside LX, which
+update themselves (R8).
+
+**Sources of fixes**:
+1. Dependencies shipped in gala: the Rust crates in the system DLLs and
+   `gala.exe` (rustls, the RustCrypto and dalek crates, miniz_oxide,
+   fontdue and ttf-parser, the vendored getrandom), Limine, Mozilla's
+   CA bundle (additions and distrusts), the mingw runtime pieces
+   (THIRD_PARTY.md lists them all).
+2. gala's own code, the largest source for an OS: every system call
+   from user mode (NT and LX), the network stack, the security model
+   (SECURITY "Status" lists its known gaps, e.g. NtOpenProcess granting
+   what is asked), and every parser of untrusted bytes (PE images, the
+   registry log, zip and cabinets, TUF metadata, X.509, fonts, TLS).
+3. Microsoft's advisories (MSRC, Patch Tuesday): gala reimplements
+   Windows' behaviour, so a flaw Microsoft fixes in an API's semantics
+   may be gala's too. Advisories are public documentation (CLEAN_ROOM
+   allows them); Wine's and ReactOS's security fixes are the same kind
+   of signal.
+4. Installed applications: their vendors' security releases, watched
+   by gala (next step 8) and applied through the applications' own
+   updaters or through `gala upgrade`.
+
+**Next**:
+1. Advisories for dependencies in CI: `cargo deny check advisories`
+   (RustSec) on every pull request and on a daily schedule (advisories
+   appear without commits), Dependabot or Renovate for `Cargo.lock`, a
+   watch on what Cargo does not see (the vendored getrandom, Limine
+   releases, the CA bundle). Its first finding is known: `rsa` 0.9 has
+   RUSTSEC-2023-0071 (Marvin, a timing side channel in RSA decryption,
+   no fixed version), used by `user/bcrypt/src/rsa.rs` for private-key
+   operations any program can call; decide between another
+   implementation and a documented exception.
+2. A private path for fixes: CI publishes every commit on main, so a
+   fix committed there discloses its hole. A disclosure policy in
+   `.github/SECURITY.md` (docs/SECURITY.md is the security model),
+   GitHub's private vulnerability reporting, and a private fork where an
+   embargoed fix is built and tested before it lands and ships.
+3. Fuzzing of gala's own code, run continuously and not only per pull
+   request (OBSERVABILITY "Fuzzing"): a system-call fuzzer in QEMU (the
+   kernel never panics on user input), `cargo fuzz` on the host for the
+   parsers above (OSS-Fuzz takes open-source projects). Every finding
+   becomes a test program, as any bug does.
+4. Adversarial review of changes that cross a trust boundary (system
+   calls, access checks, parsers, the updater), and audits area by area
+   on a schedule; the `unsafe` files audited and the host tests run
+   under Miri.
+5. Microsoft's monthly advisories triaged: each one about an API's
+   behaviour that gala implements becomes a test program checked on
+   real Windows (as WD's are).
+6. Applications' own updaters work: the services, scheduled tasks and
+   logon entries they run from (Task Scheduler: `ITaskService`,
+   `schtasks`, the task store, has no item yet), elevation services,
+   files replaced while in use (MoveFileEx's delay-until-reboot, the
+   Restart Manager), MSI patches (`.msp`) and minor upgrades (PK stage
+   5). BR stage 4's "updater and elevation service may stay off" is a
+   security gap until Edge's updater runs. Test first: an application
+   whose updater replaces it with a newer version.
+7. `gala upgrade` without being asked: a scheduled check that upgrades
+   (or reports, by the user's choice) every package with a newer
+   version, honouring UpgradeBehavior and RequireExplicitUpgrade (PK
+   next step 1), with applications that are running; it uses winget's
+   source index (PK next step 2). Programs installed outside `gala
+   install` are matched through their ARP entries, as winget does.
+   Every check, upgrade and refusal as events.
+8. Vendors' security releases watched, so gala knows which upgrades
+   are security upgrades (winget's manifests do not say: a version is a
+   version). A CI job, daily, gathers advisories from CISA's Known
+   Exploited Vulnerabilities catalog, OSV, GitHub's advisory database,
+   NVD and the vendors' own bulletins (MSRC for Microsoft's
+   applications and runtimes, Mozilla's MFSAs, Chrome's release notes,
+   Oracle's quarterly patch updates, Adobe's bulletins), and maps each
+   to winget package identifiers and version ranges. The mapping
+   (vendor and product names, CPEs, to `PackageIdentifier`) is a
+   curated table checked into the repository, starting with the
+   packages gala's scenarios install and the most installed ones; an
+   advisory it cannot map is listed in the job's report, not dropped.
+   The result is published as signed metadata in R8's feed (a target
+   like any other, so clients check it as they check a release), and
+   on a machine `gala upgrade` applies security upgrades first and
+   sooner than its schedule (at once for a known-exploited one), and
+   `gala list` shows which installed versions have advisories against
+   them. Test first: a fixture feed with an advisory against an
+   installed test package; `gala upgrade` takes that package first and
+   the event names the advisory. Every advisory gathered, mapped,
+   unmapped and applied as events.
+9. A vendor's security release that does not install or run on gala
+   (its installer or updater hits a gap) is a regression of the
+   highest rank: the advisory job also installs each mapped security
+   release in a scenario and reports the ones that fail, so the gap is
+   fixed before users are left on the vulnerable version.
+
+The sandbox limits what an exploited application can do before its fix
+arrives: integrity levels and restricted tokens (SEC), job objects and
+the browser's sandbox (BR stage 3).
+
+**Done when**: advisories for gala's dependencies fail CI; a fuzzer runs
+against the system calls and the parsers without a finding left open;
+an application updates itself on gala; `gala upgrade` runs on a
+schedule and applies vendors' security releases first, from advisories
+published in the feed; a security fix can be prepared in private and shipped through
+the feed.
+
 ### CS. Crash-safe: no hard resets, a kind crash screen
 
 **Goal** (the owner): the user never has to reset the machine, and when
@@ -5487,8 +5804,8 @@ Wanted, not scheduled. Each becomes an item with a section when it is.
   dump. User-space Linux drivers (libusb, FUSE, CUPS, SANE) come with LX
   when it gets device interfaces.
 - **gala's own drivers** against published standards: after virtio,
-  AHCI/NVMe, xHCI, e1000; device interrupts (all devices are polled
-  today).
+  AHCI/NVMe, e1000 (xHCI and device interrupts: item USB; sound:
+  item SND).
 - **Raspberry Pi** (on item AR's port): Pi 4/5, QEMU's `raspi4b`/`virt`
   first; Limine or the Pi's firmware loading the kernel, the GIC and the
   generic timer, the PL011 UART, the mailbox framebuffer, then EMMC2/SD,
