@@ -173,14 +173,15 @@ ROADMAP AR, under way on QEMU's `virt` machine (GICv3, a PL011, virtio
 over PCIe), booted by UEFI (QEMU's own edk2 build, or AAVMF) and
 Limine's `BOOTAA64.EFI` from the same kind of ISO as x86-64's (Limine's
 EFI image carries both loaders; the ISO holds the aarch64 kernel). The
-kernel boots through its drivers phase: scenarios `arm_boot` (to
-`stop_after=drivers`: both CPUs online, the NT layer's start, the tick
-seen running, PCI through the ECAM, the disk and network drivers set up
-on their devices), `arm_sched` (`schedtest`: kernel threads switched,
-woken, joined), `arm_fault_ud` and `arm_fault_pagefault` (the vectors'
-report). No request reaches the disk or the network yet (nothing before
-the manifest makes one); the manifest and the boot files are the next
-phase.
+kernel boots to its end (`gala: boot ok`) with no program run:
+scenarios `arm_boot` (to `stop_after=manifest`: both CPUs online, the
+NT layer's start, the tick seen running, PCI through the ECAM, the disk
+and network drivers set up on their devices, the manifest verified),
+`arm_net_echo` (the kernel's echo server: frames both ways through the
+card), `arm_persist` (C: kept on the disk: formatted by a first boot,
+read back by the second), `arm_sched` (`schedtest`: kernel threads
+switched, woken, joined), `arm_fault_ud` and `arm_fault_pagefault` (the
+vectors' report). User mode is the next step: no program runs yet.
 
 - **Soft-float**: the kernel is built for
   `aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE: it

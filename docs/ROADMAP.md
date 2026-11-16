@@ -4018,17 +4018,21 @@ on the seams item PT prepared: native ARM64 Windows programs
 - PCI (`arm_boot`, with a disk and a card attached): configuration space
   through segment 0's ECAM window from the MCFG (host-tested parser), the
   virtio-blk and virtio-net drivers set up on their devices through
-  virtio's modern interface (on both architectures). Their first
-  requests (DMA) come with the phases after the manifest.
+  virtio's modern interface (on both architectures).
+- The rest of the boot, to `gala: boot ok` with no program (`arm_boot`
+  to `stop_after=manifest`: the manifest verified): the card's frames
+  both ways (`arm_net_echo`: the kernel's echo server and xtask's
+  client), the disk's requests both ways (`arm_persist`: C: formatted on
+  the disk by a first boot, its area and rollback floor read back by the
+  second).
 
 **Next**:
-1. The kernel's `arch` for aarch64, in boot order, each phase's
-   `stop_after` moving `arm_boot` on: the boot files and the manifest
-   (the disk's and the network's first requests after them), the GIC's
-   pseudo-NMI
+1. The rest of the kernel's `arch` for aarch64: the GIC's pseudo-NMI
    (state dumps, `stop_others`), PSCI CPU_ON for CPUs the bootloader did
    not start; the UART's and the GIC's addresses from the firmware (SPCR,
-   MADT or the device tree); the RTC (PL031). Then
+   MADT or the device tree); the RTC (PL031), which the clock's check
+   against the wall clock needs (it names x86-64's TSC throughout: the
+   counter becomes the architecture's). Then
    `hello` reaching its kernel line, which needs step 2's ntdll and the
    ABI.
 2. User mode: Windows' ARM64 ABI (`nt::abi::arm64`: CONTEXT, the system
