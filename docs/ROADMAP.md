@@ -5925,6 +5925,29 @@ Wanted, not scheduled. Each becomes an item with a section when it is.
   hibernate before restarting. Sleep (suspend to RAM) is apart and
   harder: ACPI sleep states and drivers that save and restore device
   state.
+- **Updates that change data layouts, in place**: migrations, as a
+  database has for its schema, for the two paths that cannot change a
+  layout today. R9's handover needs none (the new kernel rebuilds its
+  objects from the versioned record, whose readers are already the
+  migrations). (1) SN's hot swap refuses a static that changed size and
+  any other change to data its old code built. With migrations: every
+  changed type gets a transformer from the old layout to the new, run
+  while every thread is stopped (as the swap already stops them),
+  finding each instance and each pointer to it from the build's type
+  information, as a moving collector finds them; types that only grow
+  can instead keep the new fields beside the old object (Linux
+  livepatch's shadow variables) and need no pointer moved. A changed
+  type live in a register or on a stack is refused, as a changed
+  function on a stack is now; pointers hidden in integers or unions
+  are what the type information cannot see, so such types stay
+  refused. (2) A handover keeps programs' memory in place, so it only
+  carries gala's DLLs with unchanged layouts (the layout digest). R9's
+  user-mode half restarts processes onto a new system image; the
+  alternative for gala's own DLLs, whose types gala knows, is a
+  per-DLL migration of its state inside each process, the old code
+  kept mapped for return addresses, vtables and callbacks still
+  pointing at it (as the hot swap keeps it). Restarting stays the
+  default; migration is for programs that cannot be restarted.
 - **A debugger on the kernel**: `boot-test --gdb` starts QEMU with its
   gdb stub (`-s`, `-S` to wait) and prints the gdb command line (the
   kernel ELF's symbols, the target port), on a boot or on a snapshot's
