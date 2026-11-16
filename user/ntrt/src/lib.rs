@@ -3,9 +3,10 @@
 //! Programs written against it run unchanged on real Windows of the pinned
 //! build, which is what differential testing needs.
 //!
-//! Built for x64 (`x64.rs`, every test program) and for x86 (`x86.rs`, a
+//! Built for x64 (`x64.rs`, every test program), for x86 (`x86.rs`, a
 //! smaller runtime for 32-bit programs run through WOW64: ARCHITECTURE
-//! "Plan: WOW64").
+//! "Plan: WOW64") and for ARM64 (`arm64.rs`, the programs aarch64's
+//! scenarios run: ROADMAP AR).
 
 #![no_std]
 
@@ -18,6 +19,11 @@ pub use x64::*;
 mod x86;
 #[cfg(target_arch = "x86")]
 pub use x86::*;
+
+#[cfg(target_arch = "aarch64")]
+mod arm64;
+#[cfg(target_arch = "aarch64")]
+pub use arm64::*;
 
 /// The running Windows' build number: KUSER_SHARED_DATA's NtBuildNumber
 /// (+0x260; the page is at 0x7ffe0000 in every process, 32-bit ones

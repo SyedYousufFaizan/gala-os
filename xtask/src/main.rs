@@ -6862,6 +6862,12 @@ const USER_TARGET: &str = "x86_64-pc-windows-msvc";
 /// 32-bit (x86) test programs, run through WOW64 (ARCHITECTURE "Plan:
 /// WOW64"): USER_PROGRAMS_X86.
 const USER_TARGET_X86: &str = "i686-pc-windows-msvc";
+/// ARM64 builds for the aarch64 kernel's images (ROADMAP AR): the test
+/// programs of USER_PROGRAMS_ARM64 and every USER_DLLS DLL but
+/// NOT_ARM64_DLLS.
+const USER_TARGET_ARM64: &str = "aarch64-pc-windows-msvc";
+/// USER_DLLS packages with no ARM64 build: wow64 runs x86 code on x64.
+const NOT_ARM64_DLLS: &[&str] = &["wow64"];
 /// A test DLL: its package, the file it builds, and its name in user/bin.
 struct Dll {
     package: &'static str,
@@ -9915,6 +9921,25 @@ const USER_PROGRAMS_X86: &[&str] = &[
     "wow64_schannel_test",
 ];
 
+/// Test programs built for ARM64 too (`user/<name>`, ntrt's ARM64
+/// runtime), shipped in the aarch64 kernel's images in place of the x64
+/// ones and exported to user/bin/arm64.
+const USER_PROGRAMS_ARM64: &[&str] = &["hello"];
+
+/// Where the build puts the ARM64 build of test program `program`.
+fn built_program_arm64(program: &str) -> PathBuf {
+    target_dir().join(USER_TARGET_ARM64).join("release").join(format!("{program}.exe"))
+}
+
+/// Where the build puts the ARM64 build of the USER_DLLS file `file`.
+fn built_dll_arm64(file: &str) -> PathBuf {
+    let release = target_dir().join(USER_TARGET_ARM64).join("release");
+    match USER_DLLS.iter().find(|d| d.file == file) {
+        Some(d) if !plain_dll_name(d.file) => release.join(format!("{}.dll", d.package)),
+        _ => release.join(file),
+    }
+}
+
 /// Where the build puts test program `program` (x64 or x86).
 fn built_program(program: &str) -> PathBuf {
     let target = if USER_PROGRAMS_X86.contains(&program) { USER_TARGET_X86 } else { USER_TARGET };
@@ -10177,7 +10202,9 @@ fn main() -> ExitCode {
             Some("boot-test") => boot_test_command(release, &args),
             Some("snapshots") => snapshot::cli(&target_dir(), &args[1..]),
             Some("hotswap-diff") => hotswap_diff(&args[1..]),
-            Some("export-tests") => build_kernel(release).and_then(|()| export_tests()),
+            Some("export-tests") => build_kernel(release)
+                .and_then(|()| build_arm64_programs())
+                .and_then(|()| export_tests()),
             Some("report") => gala_report(release),
             Some("docker-test") => docker_test(&args[1..]),
             Some("screenshot") => screenshot(release, &args[1..]),
@@ -10594,7 +10621,24 @@ fn build_kernel_aarch64(release: bool) -> Result {
     }
     run_cmd(&mut cmd)?;
     let profile = if release { "release" } else { "debug" };
-    drop_debug_relocations(&target_dir().join(KERNEL_TARGET_AARCH64).join(profile).join("kernel"))
+    drop_debug_relocations(&target_dir().join(KERNEL_TARGET_AARCH64).join(profile).join("kernel"))?;
+    // Its images' programs and DLLs, built for ARM64 (always optimized,
+    // as the x64 ones).
+    let mut cmd = user_build_for(USER_TARGET_ARM64);
+    for dll in USER_DLLS.iter().filter(|d| !NOT_ARM64_DLLS.contains(&d.package)) {
+        cmd.args(["--package", dll.package]);
+    }
+    run_cmd(&mut cmd)?;
+    build_arm64_programs()
+}
+
+/// USER_PROGRAMS_ARM64, built for ARM64.
+fn build_arm64_programs() -> Result {
+    let mut cmd = user_build_for(USER_TARGET_ARM64);
+    for program in USER_PROGRAMS_ARM64 {
+        cmd.args(["--package", program]);
+    }
+    run_cmd(&mut cmd)
 }
 
 fn build_kernel(release: bool) -> Result {
@@ -10832,11 +10876,19 @@ fn make_iso_unchecked(
         copy_kernel(path, &boot.join(module))?;
         modules += &format!("    module_path: boot():/boot/{module}\n");
     }
-    let programs = if tree.is_some() { &[][..] } else { USER_PROGRAMS };
-    let others = if tree.is_some() { &[][..] } else { GO_PROGRAMS };
-    let x86 = if tree.is_some() { &[][..] } else { USER_PROGRAMS_X86 };
+    // The aarch64 kernel's images carry the ARM64 builds alone.
+    let arm64 = aarch64_image(name);
+    let none = tree.is_some() || arm64;
+    let programs = if none { &[][..] } else { USER_PROGRAMS };
+    let others = if none { &[][..] } else { GO_PROGRAMS };
+    let x86 = if none { &[][..] } else { USER_PROGRAMS_X86 };
     for program in programs.iter().chain(others).chain(x86) {
         copy(&built_program(program), &boot.join(format!("{program}.exe")))?;
+        modules += &format!("    module_path: boot():/boot/{program}.exe\n");
+    }
+    let arm64_programs = if arm64 && tree.is_none() { USER_PROGRAMS_ARM64 } else { &[][..] };
+    for program in arm64_programs {
+        copy(&built_program_arm64(program), &boot.join(format!("{program}.exe")))?;
         modules += &format!("    module_path: boot():/boot/{program}.exe\n");
     }
     for (file, dir) in extra {
@@ -10907,6 +10959,13 @@ fn make_iso_unchecked(
         };
         let (source, name) = match file.rsplit_once('/') {
             Some((_, name)) => (root().join(file), name),
+            None if arm64 => {
+                // A DLL with no ARM64 build is not shipped there.
+                if USER_DLLS.iter().any(|d| d.file == file && NOT_ARM64_DLLS.contains(&d.package)) {
+                    continue;
+                }
+                (built_dll_arm64(file), file)
+            }
             None => (built_dll(file), file),
         };
         let name = renamed.unwrap_or(name);
@@ -12091,6 +12150,7 @@ const AARCH64_SCENARIOS: &[&str] = &[
     "arm_clock",
     "arm_smp_missed",
     "arm_watchdog",
+    "arm_hello",
     "arm_sched",
     "arm_fault_ud",
     "arm_fault_pagefault",
@@ -12324,6 +12384,19 @@ const SCENARIOS: &[Scenario] = &[
             "net: link up, ",
             "manifest: release ",
             "boot: stopping after boot phase manifest (stop_after), the tick running",
+        ],
+    },
+    Scenario {
+        // User mode on aarch64 (ROADMAP AR): hello.exe built for ARM64
+        // (ntrt's ARM64 runtime: `svc #N` stubs, the TEB in x18) prints
+        // through NtWriteFile and exits, as x86-64's `hello`.
+        name: "arm_hello",
+        cmdline: "qemu_exit run=hello.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &[
+            "Hello from user mode!",
+            "process hello.exe (pid 4) exited with status 0x00000000",
+            BOOT_OK_MARKER,
         ],
     },
     Scenario {
@@ -27254,6 +27327,13 @@ fn export_tests() -> Result {
     }
     for (file, exported_as) in EXPORTED_TEST_DATA {
         copy(&root().join(file), &dir.join(exported_as))?;
+    }
+    // ARM64 builds under arm64/ (run-all.ps1 runs only the x64 ones beside
+    // it; an ARM64 Windows runs these).
+    let arm64 = dir.join("arm64");
+    fs::create_dir_all(&arm64).map_err(|e| format!("creating {arm64:?}: {e}"))?;
+    for program in USER_PROGRAMS_ARM64 {
+        copy(&built_program_arm64(program), &arm64.join(format!("{program}.exe")))?;
     }
     eprintln!("xtask: exported {} test programs to {}", USER_PROGRAMS.len(), dir.display());
     // pk_install_test's package source zips user/bin/hello.exe, so it is
