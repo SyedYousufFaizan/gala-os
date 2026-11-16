@@ -19,9 +19,6 @@ import {
 import { Flow, LayerStack, Progress, TestLoop, WindowPaths } from "./Diagrams";
 import { Section } from "./Section";
 
-const REPO = "https://github.com/bjorn-ali-goransson/gala-os";
-const DOCS = `${REPO}/tree/main/docs`;
-const doc = (name: string) => `${REPO}/blob/main/docs/${name}`;
 
 const nav = [
   { id: "how", label: "How it works" },
@@ -108,9 +105,6 @@ export function App() {
                 {n.label}
               </a>
             ))}
-            <a href={REPO} className="top-src">
-              Source
-            </a>
           </nav>
         </div>
       </header>
@@ -131,8 +125,8 @@ export function App() {
             <a className="btn" href="#how">
               How it works
             </a>
-            <a className="btn btn-quiet" href={DOCS}>
-              Documentation
+            <a className="btn btn-quiet" href="#runs">
+              What runs on it
             </a>
           </p>
           <figure className="hero-shot">
@@ -281,7 +275,7 @@ export function App() {
           <Section
             id="components"
             title="The components"
-            intro="Each component below is a subsystem described in docs/ARCHITECTURE.md. The path shows where its code lives in the repository."
+            intro="The pieces gala is built from, layer by layer. Where a piece is partly done, the done part and the rest are listed apart."
           >
             {componentGroups.map((g) => (
               <div className="group" key={g.id} id={`c-${g.id}`}>
@@ -356,10 +350,6 @@ export function App() {
                 </li>
               ))}
             </ul>
-            <p className="aside">
-              The full plan, item by item, is in the{" "}
-              <a href={doc("ROADMAP.md")}>roadmap</a>.
-            </p>
           </Section>
 
           <Section
@@ -415,10 +405,6 @@ export function App() {
                 </dl>
               </div>
             </div>
-            <p className="aside">
-              Every command, with its options and pitfalls, is in{" "}
-              <a href={doc("WORKFLOW.md")}>WORKFLOW.md</a>.
-            </p>
           </Section>
 
           <Section
@@ -448,16 +434,15 @@ export function App() {
             </span>
           </p>
           <nav aria-label="Links">
-            <a href={REPO}>Source</a>
-            <a href={DOCS}>Documentation</a>
-            <a href={doc("ARCHITECTURE.md")}>Architecture</a>
-            <a href={doc("ROADMAP.md")}>Roadmap</a>
-            <a href={doc("CLEAN_ROOM.md")}>Clean-room rules</a>
+            {nav.map((n) => (
+              <a key={n.id} href={`#${n.id}`}>
+                {n.label}
+              </a>
+            ))}
           </nav>
           <p className="foot-note">
             The name is the Arabic <i lang="ar-Latn">qal&rsquo;a</i>,
-            fortress. The source is public so that it can be read; no
-            licence is granted.
+            fortress. No licence is granted to its code.
           </p>
         </div>
       </footer>
