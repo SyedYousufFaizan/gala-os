@@ -7199,6 +7199,10 @@ const WRITABLE_TREES: &[&str] = &["sql/data", "fzs", "ftp"];
 /// string).
 const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("startup_test", "ntdll.dll", "Windows/System32"),
+    ("arm_startup", "ntdll.dll", "Windows/System32"),
+    ("arm_import", "ntdll.dll", "Windows/System32"),
+    ("arm_import", "testdll.dll", "gala"),
+    ("arm_sync", "ntdll.dll", "Windows/System32"),
     ("exception_test", "ntdll.dll", "Windows/System32"),
     ("seh_test", "ntdll.dll", "Windows/System32"),
     ("guard_test", "ntdll.dll", "Windows/System32"),
@@ -9930,7 +9934,8 @@ const USER_PROGRAMS_X86: &[&str] = &[
 /// Test programs built for ARM64 too (`user/<name>`, ntrt's ARM64
 /// runtime), shipped in the aarch64 kernel's images in place of the x64
 /// ones and exported to user/bin/arm64.
-const USER_PROGRAMS_ARM64: &[&str] = &["hello"];
+const USER_PROGRAMS_ARM64: &[&str] =
+    &["hello", "startup_test", "import_test", "thread_test", "sync_test", "wait_test"];
 
 /// Where the build puts the ARM64 build of test program `program`.
 fn built_program_arm64(program: &str) -> PathBuf {
@@ -12164,6 +12169,11 @@ const AARCH64_SCENARIOS: &[&str] = &[
     "arm_smp_missed",
     "arm_watchdog",
     "arm_hello",
+    "arm_startup",
+    "arm_import",
+    "arm_thread",
+    "arm_sync",
+    "arm_wait",
     "arm_sched",
     "arm_fault_ud",
     "arm_fault_pagefault",
@@ -12415,6 +12425,46 @@ const SCENARIOS: &[Scenario] = &[
             "process hello.exe (pid 4) exited with status 0x00000000",
             BOOT_OK_MARKER,
         ],
+    },
+    Scenario {
+        // An ARM64 process started through gala's ntdll (startup_test's
+        // ARM64 build, as `startup_test`): the kernel enters
+        // LdrInitializeThunk with the program's ARM64 CONTEXT, the
+        // thunk binds imports and resumes it with NtContinue.
+        name: "arm_startup",
+        cmdline: "qemu_exit run=startup_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["startup_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // An ARM64 program importing an ARM64 DLL (import_test's ARM64
+        // build, as `import_test`): gala's ntdll binds its imports by name
+        // and ordinal, forwarders included, and runs testdll's DllMain.
+        name: "arm_import",
+        cmdline: "qemu_exit run=import_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["import_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // thread_test's ARM64 build (as `thread_test`).
+        name: "arm_thread",
+        cmdline: "qemu_exit run=thread_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["thread_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // sync_test's ARM64 build (as `sync_test`).
+        name: "arm_sync",
+        cmdline: "qemu_exit run=sync_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["sync_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
+    },
+    Scenario {
+        // wait_test's ARM64 build (as `wait_test`).
+        name: "arm_wait",
+        cmdline: "qemu_exit run=wait_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["wait_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
     },
     Scenario {
         // The hang watchdog on aarch64 (as `watchdog`): CPU 1 spins in its

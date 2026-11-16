@@ -1811,11 +1811,15 @@ kernel32 through `raw-dylib`), run under gala and under Windows
 ### ARM64 test programs (the aarch64 kernel)
 
 The aarch64 kernel's scenarios (`AARCH64_SCENARIOS`) run ARM64 builds:
-the same program sources, built for `aarch64-pc-windows-msvc` on ntrt's
-ARM64 runtime (`user/ntrt/src/arm64.rs`: system call stubs shaped as
-Windows ARM64's ntdll, `svc #N; ret`, the pinned build's numbers as
-x64's; the TEB from x18, the PEB at TEB+0x60; it grows with the
-programs that need more).
+the same program sources, built for `aarch64-pc-windows-msvc` on ntrt.
+ntrt's 64-bit runtime (`user/ntrt/src/nt64.rs`: the services' wrappers,
+the 64-bit PEB) is x64's and ARM64's alike; what differs is each one's
+own file (`x64.rs`, `arm64.rs`): the stub's shape (ARM64's is Windows
+ARM64's ntdll's, `svc #N; ret`, the pinned build's numbers as x64's),
+the TEB's register (x18), CONTEXT, the memory intrinsics. A new service
+goes in nt64.rs's `stubs!` list once, for both. gala's ntdll
+(`testntdll`) is built for ARM64 too: a scenario that ships it starts
+its program through LdrInitializeThunk (`arm_startup`).
 
 - List the program in `USER_PROGRAMS_ARM64` (beside its x64 entry in
   USER_PROGRAMS): `build_kernel_aarch64` builds that list and USER_DLLS

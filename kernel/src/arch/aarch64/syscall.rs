@@ -194,9 +194,16 @@ pub fn init_cpu() {}
 /// exception unmasked.
 const USER_PSTATE: u64 = 0xf000_0000;
 
-/// `regs` as user mode may have them: EL0t, its condition flags only.
-pub(super) fn sanitized(mut regs: UserRegs) -> UserRegs {
+/// `regs` as user mode resumes with them, whatever set them (a system
+/// call's NtContinue, an exception dispatched to user mode, a hook):
+/// EL0t with its condition flags only, and an NT thread's x18 its TEB
+/// (Windows' ARM64 ABI reserves x18 for it; a CONTEXT's X18 does not
+/// move it). Every return to EL0 goes through here.
+pub(super) fn for_user(mut regs: UserRegs) -> UserRegs {
     regs.pstate &= USER_PSTATE;
+    if super::percpu::personality() == Personality::Nt {
+        regs.x[18] = super::percpu::user_gs_base();
+    }
     regs
 }
 
@@ -217,7 +224,7 @@ pub(super) fn from_svc(frame: &mut super::interrupts::TrapFrame) {
     let mut regs = crate::sched::take_pending_continue().unwrap_or(call.regs);
     run_user_return_hook(&mut regs);
     super::cpu::disable_interrupts();
-    frame.set_user_regs(sanitized(regs));
+    frame.set_user_regs(for_user(regs));
 }
 
 fn dispatch(personality: Personality, call: &mut SyscallFrame) {
@@ -260,17 +267,14 @@ pub fn enter_user_regs(regs: &UserRegs) -> ! {
     assert!(regs.is_valid(), "user entry outside user space");
     let top = super::percpu::kernel_stack();
     assert!(top != 0, "no kernel stack for user entry");
-    let mut r = sanitized(*regs);
-    match super::percpu::personality() {
-        Personality::Nt => r.x[18] = super::percpu::user_gs_base(),
-        Personality::Linux => {
-            let tls = super::percpu::user_fs_base();
-            // SAFETY: TPIDR_EL0 is user mode's thread pointer; only its
-            // value changes.
-            unsafe {
-                core::arch::asm!("msr tpidr_el0, {}", in(reg) tls, options(nomem, nostack, preserves_flags))
-            };
-        }
+    let r = for_user(*regs);
+    if super::percpu::personality() == Personality::Linux {
+        let tls = super::percpu::user_fs_base();
+        // SAFETY: TPIDR_EL0 is user mode's thread pointer; only its value
+        // changes.
+        unsafe {
+            core::arch::asm!("msr tpidr_el0, {}", in(reg) tls, options(nomem, nostack, preserves_flags))
+        };
     }
     let frame = super::interrupts::TrapFrame::to_user(r);
     let at = top - super::interrupts::TRAP_FRAME_SIZE as u64;
