@@ -163,10 +163,13 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
     if let Err(e) = sched::init() {
         panic!("scheduler: {e:?}");
     }
-    phase(&cmdline, "sched");
     // The frames' owner counts (a fork's copy-on-write pages), from the heap.
     mm::init_sharing();
     info!("sched: boot thread {} running, idle thread started", sched::current());
+    if cmdline.flag("schedtest") {
+        sched_selftest();
+    }
+    phase(&cmdline, "sched");
     arch::smp::init_bsp();
     phase(&cmdline, "smp_start");
     start_cpus(&info, &cmdline);
@@ -613,6 +616,89 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
 /// thread that halted in a loop instead stayed "in the kernel without
 /// blocking" forever: the flight recorder's watchdog reported it every
 /// 20 s and its reports pushed every real event out of the ring.)
+/// `schedtest`: the scheduler's own check, early (the aarch64 port's
+/// `arm_sched`, before anything else starts threads, on the boot CPU
+/// alone): two kernel threads yield to each other 100 rounds each; then
+/// each spins without yielding until the other has arrived, then again
+/// until the other has left: on one CPU only the tick's preemption moves
+/// them on, and the second spin needs a tick on the thread a tick switched
+/// to (an interrupt not yet ended at a switch from inside its handler
+/// would hold every further tick back); then each sleeps 10 ms (woken by
+/// the tick) and both are joined. Logged `schedtest: ok` only if they took
+/// turns (each round's runner differed from the last's almost every
+/// time), both got through both spins (within 2 s of the counter each),
+/// each slept at least its 10 ms in ticks (one clock: the tick's) and both
+/// ended; else what was seen, as an error.
+fn sched_selftest() {
+    use core::sync::atomic::AtomicUsize;
+    const ROUNDS: usize = 100;
+    static LAST: AtomicUsize = AtomicUsize::new(usize::MAX);
+    static TURNS: AtomicUsize = AtomicUsize::new(0);
+    static DONE: AtomicUsize = AtomicUsize::new(0);
+    /// The shortest sleep seen, in ticks.
+    static SLEPT: AtomicUsize = AtomicUsize::new(usize::MAX);
+    const SLEEP_TICKS: usize = (10 * time::TICK_HZ / 1000) as usize;
+    /// Each thread's arrival at the spins and leaving them; how many
+    /// threads got through both.
+    static ARRIVED: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
+    static LEFT: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
+    static PREEMPTED: AtomicUsize = AtomicUsize::new(0);
+    /// Spins until `flag` is set, at most 2 s of the counter: whether it
+    /// was set.
+    fn spin_until(flag: &AtomicUsize) -> bool {
+        let until = time::raw_monotonic_ns() + 2_000_000_000;
+        while flag.load(Ordering::Acquire) == 0 && time::raw_monotonic_ns() < until {
+            core::hint::spin_loop();
+        }
+        flag.load(Ordering::Acquire) != 0
+    }
+    fn worker(me: usize) {
+        for _ in 0..ROUNDS {
+            if LAST.swap(me, Ordering::Relaxed) != me {
+                TURNS.fetch_add(1, Ordering::Relaxed);
+            }
+            sched::yield_now();
+        }
+        ARRIVED[me].store(1, Ordering::Release);
+        let arrived = spin_until(&ARRIVED[1 - me]);
+        LEFT[me].store(1, Ordering::Release);
+        if arrived && spin_until(&LEFT[1 - me]) {
+            PREEMPTED.fetch_add(1, Ordering::Relaxed);
+        }
+        let before = time::raw_ticks();
+        sched::sleep_ms(10);
+        SLEPT.fetch_min((time::raw_ticks() - before) as usize, Ordering::Relaxed);
+        DONE.fetch_add(1, Ordering::Relaxed);
+    }
+    let start = time::raw_monotonic_ns();
+    let spawned = [sched::spawn("schedtest0", worker, 0), sched::spawn("schedtest1", worker, 1)];
+    for id in spawned.iter().flatten() {
+        let _ = sched::join(*id);
+    }
+    let ms = (time::raw_monotonic_ns() - start) / 1_000_000;
+    let (turns, done) = (TURNS.load(Ordering::Relaxed), DONE.load(Ordering::Relaxed));
+    let slept = SLEPT.load(Ordering::Relaxed);
+    let preempted = PREEMPTED.load(Ordering::Relaxed);
+    if spawned.iter().all(Result::is_ok)
+        && done == 2
+        && turns >= ROUNDS
+        && preempted == 2
+        && slept >= SLEEP_TICKS
+    {
+        info!(
+            "schedtest: ok: 2 threads took {turns} turns in {ROUNDS} rounds each, both through spins \
+             only preemption ends, slept {slept} ticks (asked {SLEEP_TICKS}), joined ({ms} ms)"
+        );
+    } else {
+        error!(
+            "schedtest: failed: spawned {:?}, {done} of 2 ended, {turns} turns in {ROUNDS} rounds \
+             each, {preempted} of 2 through the spins, shortest sleep {slept} ticks of {SLEEP_TICKS} \
+             asked, {ms} ms",
+            spawned.map(|r| r.is_ok())
+        );
+    }
+}
+
 /// Marks boot phase `name` (`arch::bootphase`). With `stop_after=<name>`
 /// on the command line the boot ends there: logged, then QEMU exits with
 /// success under `qemu_exit` (else the CPU halts). For scenarios that
@@ -622,7 +708,26 @@ pub fn kernel_main(handover: Option<boot::HandoverEntry>) -> ! {
 fn phase(cmdline: &Cmdline, name: &str) {
     arch::bootphase::mark(name);
     if cmdline.value("stop_after") == Some(name) {
-        info!("boot: stopping after boot phase {name} (stop_after)");
+        // With interrupts on, the line says whether the tick runs: three
+        // ticks waited for (2 s of the counter at most).
+        if arch::cpu::interrupts_enabled() {
+            let until = time::raw_monotonic_ns() + 2_000_000_000;
+            while time::ticks() < 3 && time::raw_monotonic_ns() < until {
+                core::hint::spin_loop();
+            }
+            let ticks = time::ticks();
+            if ticks >= 3 {
+                info!(
+                    "boot: stopping after boot phase {name} (stop_after), the tick running ({ticks} ticks)"
+                );
+            } else {
+                warn!(
+                    "boot: stopping after boot phase {name} (stop_after), {ticks} ticks in 2 s: the tick does not run"
+                );
+            }
+        } else {
+            info!("boot: stopping after boot phase {name} (stop_after)");
+        }
         if QEMU_EXIT.load(Ordering::Relaxed) {
             qemu::exit(QemuExitCode::Success);
         }
@@ -882,8 +987,9 @@ fn start_cpus(info: &BootInfo, cmdline: &Cmdline) {
     }
     if let Some(id) = report.first_failed {
         error!(
-            "smp: {} CPU(s) of the MADT's did not start (first: APIC id {id}); running on {n}",
-            report.failed
+            "smp: {} CPU(s) of the MADT's did not start (first: {} {id}); running on {n}",
+            report.failed,
+            arch::smp::HW_ID_NAME
         );
     }
     handover::report_cpus(info, n);
@@ -927,17 +1033,17 @@ fn log_processors(info: &BootInfo) {
             for id in fw.ids() {
                 let _ = write!(line, " {id}");
             }
-            let missing = fw
-                .ids()
-                .iter()
-                .filter(|id| !info.processors.iter().any(|p| p.hw_id() == u64::from(**id)));
+            let missing =
+                fw.ids().iter().filter(|id| !info.processors.iter().any(|p| p.hw_id() == **id));
             let mut first = true;
             for id in missing {
-                let _ = write!(
-                    line,
-                    "{} {id}",
-                    if first { "; not started by the bootloader: APIC id" } else { "," }
-                );
+                if first {
+                    let _ =
+                        write!(line, "; not started by the bootloader: {}", arch::smp::HW_ID_NAME);
+                } else {
+                    let _ = write!(line, ",");
+                }
+                let _ = write!(line, " {id}");
                 first = false;
             }
             info!("{}", line.as_str());

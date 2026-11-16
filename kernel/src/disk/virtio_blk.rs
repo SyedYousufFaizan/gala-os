@@ -1,21 +1,26 @@
-//! virtio-blk over the legacy PCI interface (`arch::virtio`; the virtio
-//! 1.x specification's block device chapter, OASIS, see THIRD_PARTY.md).
+//! virtio-blk over the modern PCI interface (`arch::virtio::ModernDevice`;
+//! the virtio 1.x specification's block device chapter, OASIS, see
+//! THIRD_PARTY.md).
 //! One request queue with one slot: a request is the 16-byte header
 //! (type, reserved, sector), the data, and the status byte; the device
 //! reads the header (and a write's data) and writes the status (and a
 //! read's data), so each request is a two-descriptor chain.
 
 use crate::arch::pci::{self, Function};
-use crate::arch::virtio::{InitError, LegacyDevice};
+use crate::arch::virtio::{InitError, ModernDevice};
 
 const VENDOR_VIRTIO: u16 = 0x1af4;
-/// Transitional virtio-blk (the legacy interface is available).
+/// Transitional virtio-blk (its subsystem id says block), and the
+/// modern-only id (0x1040 + device type 2): both have the modern
+/// interface.
 const DEVICE_BLK_TRANSITIONAL: u16 = 0x1001;
 const SUBSYSTEM_BLK: u16 = 2;
+const DEVICE_BLK_MODERN: u16 = 0x1042;
 
-const F_RO: u32 = 1 << 5;
-const F_FLUSH: u32 = 1 << 9;
-const F_ANY_LAYOUT: u32 = 1 << 27;
+const F_RO: u64 = 1 << 5;
+const F_FLUSH: u64 = 1 << 9;
+/// The features asked for (VERSION_1 is always: `ModernDevice`).
+const WANTED: u64 = F_RO | F_FLUSH;
 
 const T_IN: u32 = 0;
 const T_OUT: u32 = 1;
@@ -58,8 +63,10 @@ enum InFlight {
 }
 
 pub struct VirtioBlk {
-    dev: LegacyDevice,
+    dev: ModernDevice,
     pub at: pci::Address,
+    /// Its PCI device id (transitional 0x1001, or modern-only 0x1042).
+    pub device_id: u16,
     pub sectors: u64,
     pub read_only: bool,
     flush: bool,
@@ -67,19 +74,20 @@ pub struct VirtioBlk {
 }
 
 impl VirtioBlk {
-    /// Finds the first transitional virtio-blk function and starts it.
+    /// Finds the first virtio-blk function and starts it.
     pub fn probe() -> Result<Self, Error> {
         let mut found: Option<Function> = None;
         pci::for_each(|f| {
             let blk = f.vendor == VENDOR_VIRTIO
-                && f.device == DEVICE_BLK_TRANSITIONAL
-                && f.subsystem == SUBSYSTEM_BLK;
+                && (f.device == DEVICE_BLK_MODERN
+                    || (f.device == DEVICE_BLK_TRANSITIONAL && f.subsystem == SUBSYSTEM_BLK));
             if blk && found.is_none() {
                 found = Some(*f);
             }
         });
         let function = found.ok_or(Error::NotFound)?;
-        let (mut dev, features) = LegacyDevice::new(&function, F_RO | F_FLUSH | F_ANY_LAYOUT)?;
+        let mut dev = ModernDevice::new(&function, WANTED)?;
+        let features = dev.features();
         // Configuration: capacity (u64, in 512-byte sectors) first.
         let sectors = u64::from(dev.config_u32(0)) | u64::from(dev.config_u32(4)) << 32;
         dev.setup_chained_queue(QUEUE, 1, SLOT)?;
@@ -87,6 +95,7 @@ impl VirtioBlk {
         Ok(Self {
             dev,
             at: function.address,
+            device_id: function.device,
             sectors,
             read_only: features & F_RO != 0,
             flush: features & F_FLUSH != 0,
@@ -109,7 +118,7 @@ impl VirtioBlk {
     pub fn reset(&mut self) -> Result<(), Error> {
         // In place: a second device value would reset the device again
         // when the old one is dropped.
-        self.dev.reinit(F_RO | F_FLUSH | F_ANY_LAYOUT);
+        self.dev.reinit()?;
         self.dev.setup_chained_queue(QUEUE, 1, SLOT)?;
         self.dev.start();
         self.in_flight = InFlight::None;

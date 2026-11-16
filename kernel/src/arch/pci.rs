@@ -19,7 +19,6 @@ impl core::fmt::Display for Address {
 }
 
 const COMMAND: u8 = 0x04;
-const COMMAND_IO: u16 = 1 << 0;
 const COMMAND_MEMORY: u16 = 1 << 1;
 const COMMAND_BUS_MASTER: u16 = 1 << 2;
 /// The status register's "capabilities list" bit (in the dword at 0x04).
@@ -38,20 +37,6 @@ pub struct Function {
 }
 
 impl Function {
-    /// The I/O port base of BAR `index`, if it is an I/O BAR the firmware
-    /// assigned.
-    pub fn io_bar(&self, index: u8) -> Option<u16> {
-        let bar = read_u32(self.address, 0x10 + 4 * index);
-        let base = bar & !3;
-        (bar & 1 == 1 && base != 0).then_some(base as u16)
-    }
-
-    /// Turns on I/O decoding and bus mastering (DMA).
-    pub fn enable_io_and_dma(&self) {
-        let command = read_u32(self.address, COMMAND) as u16;
-        write_u16(self.address, COMMAND, command | COMMAND_IO | COMMAND_BUS_MASTER);
-    }
-
     /// Turns on memory decoding and bus mastering (DMA).
     pub fn enable_memory_and_dma(&self) {
         let command = read_u32(self.address, COMMAND) as u16;

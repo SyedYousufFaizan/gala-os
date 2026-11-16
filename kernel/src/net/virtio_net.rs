@@ -1,25 +1,28 @@
-//! virtio-net over the legacy PCI interface (`arch::virtio`), as a smoltcp
-//! `Device`. Queue 0 receives, queue 1 transmits; every buffer starts with
-//! the 10-byte legacy `virtio_net_hdr` (no offloads negotiated, so it is
-//! all zeros on transmit and ignored on receive).
+//! virtio-net over the modern PCI interface (`arch::virtio::ModernDevice`),
+//! as a smoltcp `Device`. Queue 0 receives, queue 1 transmits; every
+//! buffer starts with the 12-byte `virtio_net_hdr` VERSION_1 gives it
+//! (with `num_buffers`; no offloads negotiated, so it is all zeros on
+//! transmit and ignored on receive).
 
 use crate::arch::pci::{self, Function};
-use crate::arch::virtio::{InitError, LegacyDevice};
+use crate::arch::virtio::{InitError, ModernDevice};
 use core::sync::atomic::{AtomicU64, Ordering};
 use smoltcp::phy::{self, DeviceCapabilities, Medium};
 use smoltcp::time::Instant;
 
 const VENDOR_VIRTIO: u16 = 0x1af4;
-/// Transitional virtio-net (the legacy interface is available).
+/// Transitional virtio-net (its subsystem id says network), and the
+/// modern-only id (0x1040 + device type 1): both have the modern
+/// interface.
 const DEVICE_NET_TRANSITIONAL: u16 = 0x1000;
 const SUBSYSTEM_NET: u16 = 1;
+const DEVICE_NET_MODERN: u16 = 0x1041;
 
-const F_MAC: u32 = 1 << 5;
-const F_ANY_LAYOUT: u32 = 1 << 27;
+const F_MAC: u64 = 1 << 5;
 
 const RX: u16 = 0;
 const TX: u16 = 1;
-const HEADER: usize = 10;
+const HEADER: usize = 12;
 /// Header plus the largest Ethernet frame without FCS.
 const SLOT: usize = 2048;
 const MTU: usize = 1514;
@@ -38,9 +41,11 @@ pub static RESET_AT: AtomicU64 = AtomicU64::new(0);
 pub static RESETS: AtomicU64 = AtomicU64::new(0);
 
 pub struct VirtioNet {
-    dev: LegacyDevice,
+    dev: ModernDevice,
     pub mac: [u8; 6],
     pub at: pci::Address,
+    /// Its PCI device id (transitional 0x1000, or modern-only 0x1041).
+    pub device_id: u16,
 }
 
 #[derive(Debug)]
@@ -57,27 +62,27 @@ impl From<InitError> for Error {
 }
 
 impl VirtioNet {
-    /// Finds the first transitional virtio-net function and starts it.
+    /// Finds the first virtio-net function and starts it.
     pub fn probe() -> Result<Self, Error> {
         let mut found: Option<Function> = None;
         pci::for_each(|f| {
             let net = f.vendor == VENDOR_VIRTIO
-                && f.device == DEVICE_NET_TRANSITIONAL
-                && f.subsystem == SUBSYSTEM_NET;
+                && (f.device == DEVICE_NET_MODERN
+                    || (f.device == DEVICE_NET_TRANSITIONAL && f.subsystem == SUBSYSTEM_NET));
             if net && found.is_none() {
                 found = Some(*f);
             }
         });
         let function = found.ok_or(Error::NotFound)?;
-        let (dev, features) = LegacyDevice::new(&function, F_MAC | F_ANY_LAYOUT)?;
-        if features & F_MAC == 0 {
+        let dev = ModernDevice::new(&function, F_MAC)?;
+        if dev.features() & F_MAC == 0 {
             return Err(Error::NoMac);
         }
         let mut mac = [0; 6];
         for (i, byte) in mac.iter_mut().enumerate() {
             *byte = dev.config_u8(i as u16);
         }
-        let mut net = Self { dev, mac, at: function.address };
+        let mut net = Self { dev, mac, at: function.address, device_id: function.device };
         net.setup()?;
         Ok(net)
     }
@@ -104,8 +109,8 @@ impl VirtioNet {
             return;
         }
         crate::warn!("net: the device was reset or gave up; setting it up again");
-        let features = self.dev.reinit(F_MAC | F_ANY_LAYOUT);
-        if features & F_MAC == 0 || self.setup().is_err() {
+        let again = self.dev.reinit();
+        if again.is_err() || self.dev.features() & F_MAC == 0 || self.setup().is_err() {
             crate::warn!("net: the device could not be set up again");
             return;
         }

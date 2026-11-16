@@ -811,11 +811,13 @@ pub fn yield_now() {
 
 /// Blocks the current thread for at least `ms` milliseconds of real time
 /// (raw ticks: clock control does not stretch the kernel's own sleeps).
+/// The wake is one tick later than `ms` asks: the current tick period is
+/// partly over, so `n` ticks from now can be just over `n - 1` periods.
 pub fn sleep_ms(ms: u64) {
     let ticks = ms.saturating_mul(time::TICK_HZ).div_ceil(1000).max(1);
     with(|s| {
         let id = s.current();
-        s.thread(id).state = State::Sleeping { until_tick: time::raw_ticks() + ticks };
+        s.thread(id).state = State::Sleeping { until_tick: time::raw_ticks() + ticks + 1 };
     });
     schedule();
 }

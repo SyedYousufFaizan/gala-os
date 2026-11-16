@@ -187,8 +187,8 @@ cargo xtask export-tests    # refresh user/bin (CI compares)
   `cpu::cycles`, `arch::timer`, ...); what is Windows' or Linux's ABI on
   x86-64 goes in `nt/abi/x64/` or `lx/machine/x86_64.rs`, with a stub in
   their aarch64 counterpart. The aarch64 check enforces it: `cargo clippy
-  -p kernel --target aarch64-unknown-none -- -D warnings` (CI; `rustup
-  target add aarch64-unknown-none` if the toolchain lacks it). A new
+  -p kernel --target aarch64-unknown-none-softfloat -- -D warnings` (CI; `rustup
+  target add aarch64-unknown-none-softfloat` if the toolchain lacks it). A new
   arch function used outside `arch` needs its aarch64 stub (it may end
   in `unported`).
 - **gala's DLLs build for ARM64** (`aarch64-pc-windows-msvc`, CI's
@@ -550,7 +550,7 @@ what it may take on the host, what xtask writes into the fresh raw
 image, what the image must hold afterwards).
 
 - The image is `target/.../<scenario>.disk.img` next to the ISO,
-  attached as a legacy virtio-blk device; such scenarios boot alone and
+  attached as a virtio-blk device; such scenarios boot alone and
   not in gala-um.
 - Raw disk access needs an administrator, so their programs run
   `as=system`.
@@ -919,9 +919,8 @@ XTASK_HOTSWAP_WHY=1 cargo xtask hotswap-diff ...   # why each function counts as
 A scenario in `GPU_SCENARIOS` boots with `-vga none -device
 virtio-gpu-pci,xres=1280,yres=800,edid=on` (UEFI) and its command line
 says `display=virtio`; QEMU's `screendump` then shows the virtio-gpu
-scanout, so the usual `SCREEN_SCENARIOS` checks work. The device is
-modern-only (no `disable-legacy=off` as for virtio-blk/net): its driver
-uses `arch::virtio::ModernDevice`. With such a display the boot splash
+scanout, so the usual `SCREEN_SCENARIOS` checks work. Its driver uses
+`arch::virtio::ModernDevice`, as the disk's and the network's do. With such a display the boot splash
 is not visible (the firmware's framebuffer is no longer shown): read the
 serial log. The kernel flag `gputrace` logs every command; `events=display`
 the modes, resets and errors.
@@ -1061,7 +1060,7 @@ Vulkan-Headers) Vulkan on lavapipe through the Khronos loader (PREBUILT
 ROADMAP AR's scenarios (`AARCH64_SCENARIOS` in xtask: `arm_boot`,
 `arm_fault_ud`, `arm_fault_pagefault`) run in `cargo xtask boot-test`
 like the others (`boot-test arm_`). xtask builds the kernel for
-`aarch64-unknown-none` (`kernel/linker-aarch64.ld`) when one is
+`aarch64-unknown-none-softfloat` (`kernel/linker-aarch64.ld`) when one is
 selected, puts it in the scenario's ISO instead of x86-64's, and boots
 it with `qemu-system-aarch64 -machine virt` (`qemu_aarch64`): the pinned
 QEMU's own `edk2-aarch64-code.fd` (or Ubuntu's AAVMF, `qemu-efi-aarch64`,
@@ -1072,7 +1071,7 @@ ARM64 host); about 8 s to the kernel, most of it the firmware.
 - The serial log and verdicts are as x86-64's. There is no event stream
   and no firmware or phase log (no ISA debug consoles on `virt`).
 - A kernel address in a panic or exception line: `llvm-addr2line -f -C
-  -e target/aarch64-unknown-none/debug/kernel <address>`.
+  -e target/aarch64-unknown-none-softfloat/debug/kernel <address>`.
 - Every kernel ELF (both architectures) is stripped for the image and
   rid of its debug relocations by LLVM's objcopy: the toolchain's
   `llvm-tools` component (rust-toolchain.toml), else `llvm-objcopy` on

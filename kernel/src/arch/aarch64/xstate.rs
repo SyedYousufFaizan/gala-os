@@ -27,7 +27,11 @@ pub fn size() -> usize {
     MAX_SIZE
 }
 
+/// The save area's layout (the context switch's): V0-V31 (16 bytes
+/// each), then FPCR and FPSR (8 bytes each); 16-byte aligned for the
+/// pairs of Q registers.
 #[derive(Clone)]
+#[repr(C, align(16))]
 pub struct XState([u8; MAX_SIZE]);
 
 impl core::fmt::Debug for XState {

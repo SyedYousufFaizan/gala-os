@@ -42,8 +42,9 @@ pub fn init() {
     match VirtioBlk::probe() {
         Ok(dev) => {
             info!(
-                "disk: virtio-blk at {}, {} sectors ({} MiB){}",
+                "disk: virtio-blk at {} (device {:#06x}, modern interface), {} sectors ({} MiB){}",
                 dev.at,
+                dev.device_id,
                 dev.sectors,
                 (dev.sectors * SECTOR as u64) >> 20,
                 if dev.read_only { ", read-only" } else { "" }

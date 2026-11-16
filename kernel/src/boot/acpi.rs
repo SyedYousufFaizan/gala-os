@@ -1,5 +1,7 @@
-//! The firmware's processor list: the ACPI MADT's local APIC entries
-//! (ACPI specification, "Multiple APIC Description Table"), so the kernel
+//! The firmware's processor list: the ACPI MADT's processor entries
+//! (ACPI specification, "Multiple APIC Description Table": x86-64's local
+//! APIC and x2APIC entries, aarch64's GIC CPU interface (GICC) entries,
+//! whichever the table has), so the kernel
 //! knows how many CPUs the machine has even when the bootloader started
 //! fewer (ARCHITECTURE "Processors": an AP that does not answer Limine in
 //! time is left out of its MP response).
@@ -14,10 +16,12 @@
 /// At most this many processors are listed (as `arch::smp::MAX_CPUS`).
 pub const MAX_FIRMWARE_CPUS: usize = 64;
 
-/// The local APIC ids of the processors the MADT lists as enabled.
+/// The hardware ids of the processors the MADT lists as enabled (as
+/// `boot::MpInfo::hw_id`: x86-64's local APIC ids, aarch64's MPIDR
+/// affinity).
 #[derive(Clone, Copy, Debug)]
 pub struct FirmwareCpus {
-    ids: [u32; MAX_FIRMWARE_CPUS],
+    ids: [u64; MAX_FIRMWARE_CPUS],
     count: usize,
 }
 
@@ -34,11 +38,11 @@ impl FirmwareCpus {
         self.count == 0
     }
 
-    pub fn ids(&self) -> &[u32] {
+    pub fn ids(&self) -> &[u64] {
         &self.ids[..self.count]
     }
 
-    fn push(&mut self, id: u32) {
+    fn push(&mut self, id: u64) {
         if self.count < MAX_FIRMWARE_CPUS && !self.ids().contains(&id) {
             self.ids[self.count] = id;
             self.count += 1;
@@ -60,6 +64,10 @@ const MADT_ENTRIES: usize = SDT_HEADER_LEN + 8;
 /// MADT local APIC flags: bit 0 enabled (bit 1, online capable, is a CPU
 /// that may be hot-added later: not one that runs now).
 const LAPIC_ENABLED: u32 = 1;
+/// MADT GICC flags: bit 0 enabled.
+const GICC_ENABLED: u32 = 1;
+/// MPIDR_EL1's affinity fields (Aff3 at 32, Aff2-Aff0 at 16, 8, 0).
+const MPIDR_AFFINITY: u64 = 0xff_00ff_ffff;
 
 fn u32_at(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
@@ -107,8 +115,8 @@ pub fn root_entries(root: &[u8], xsdt: bool) -> Result<impl Iterator<Item = u64>
     }))
 }
 
-/// The enabled processors of a MADT (types 0, local APIC, and 9, local
-/// x2APIC).
+/// The enabled processors of a MADT (types 0, local APIC, 9, local
+/// x2APIC, and 0x0b, GIC CPU interface).
 pub fn parse_madt(madt: &[u8]) -> Result<FirmwareCpus, AcpiError> {
     if madt.get(..4) != Some(b"APIC") || !checksum_ok(madt) {
         return Err(AcpiError::BadTable("MADT"));
@@ -125,7 +133,7 @@ pub fn parse_madt(madt: &[u8]) -> Result<FirmwareCpus, AcpiError> {
             // Processor UID (1), APIC id (1), flags (4).
             0 if len >= 8 => {
                 if u32_at(entry, 4).is_some_and(|f| f & LAPIC_ENABLED != 0) {
-                    cpus.push(u32::from(entry[3]));
+                    cpus.push(u64::from(entry[3]));
                 }
             }
             // Reserved (2), x2APIC id (4), flags (4), UID (4).
@@ -133,7 +141,16 @@ pub fn parse_madt(madt: &[u8]) -> Result<FirmwareCpus, AcpiError> {
                 if let (Some(id), Some(flags)) = (u32_at(entry, 4), u32_at(entry, 8))
                     && flags & LAPIC_ENABLED != 0
                 {
-                    cpus.push(id);
+                    cpus.push(u64::from(id));
+                }
+            }
+            // Reserved (2), CPU interface number (4), UID (4), flags (4:
+            // bit 0 enabled), ..., MPIDR (8) at 68: its affinity fields.
+            0x0b if len >= 76 => {
+                if let (Some(flags), Some(mpidr)) = (u32_at(entry, 12), u64_at(entry, 68))
+                    && flags & GICC_ENABLED != 0
+                {
+                    cpus.push(mpidr & MPIDR_AFFINITY);
                 }
             }
             _ => {}
@@ -286,6 +303,25 @@ mod tests {
         body.extend_from_slice(&[0, 0]); // zero length: stop
         let madt = table(b"APIC", &body);
         assert_eq!(parse_madt(&madt).unwrap().ids(), &[0]);
+    }
+
+    /// GICC entries (aarch64): enabled ones' MPIDR affinity.
+    #[test]
+    fn madt_lists_enabled_gic_cpu_interfaces() {
+        let gicc = |mpidr: u64, flags: u32| {
+            let mut e = vec![0u8; 80];
+            e[0] = 0x0b;
+            e[1] = 80;
+            e[12..16].copy_from_slice(&flags.to_le_bytes());
+            e[68..76].copy_from_slice(&mpidr.to_le_bytes());
+            e
+        };
+        let mut body = vec![0u8; 8];
+        body.extend(gicc(0, 1));
+        body.extend(gicc(0x1_0000_0101, 1)); // Aff3 1, Aff1 1, Aff0 1
+        body.extend(gicc(2, 0)); // disabled
+        let madt = table(b"APIC", &body);
+        assert_eq!(parse_madt(&madt).unwrap().ids(), &[0, 0x1_0000_0101]);
     }
 
     #[test]

@@ -606,7 +606,8 @@ pub fn start_aps(
     let bsp = bsp_lapic_id;
     let by_bootloader = &by_bootloader[..bootloader_count];
     let mut missed =
-        firmware.ids().iter().copied().filter(|id| *id != bsp && !by_bootloader.contains(id));
+        // APIC ids fit 32 bits (x2APIC's): the firmware's hardware ids were.
+        firmware.ids().iter().map(|&id| id as u32).filter(|id| *id != bsp && !by_bootloader.contains(id));
     let Some(first) = missed.next() else {
         report.online = online_count();
         return Ok(report);

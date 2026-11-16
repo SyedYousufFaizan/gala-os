@@ -2,17 +2,20 @@
 //!
 //! Limine (base revision 6) enters at EL1, or at EL2 with VHE, with the
 //! MMU on, interrupts masked, a 64 KiB stack and FP/SIMD trapped
-//! (`CPACR_EL1` = 0): Rust code may use the SIMD registers at any
-//! instruction, so the entry turns FP/SIMD on before the first one, then
-//! calls `kmain` (its arguments zero: not a kernel handover), on the boot
-//! stack moved to SP_EL1 (the protocol does not say which SP is in use,
-//! and an exception at EL1 runs on SP_EL1: a kernel on SP_EL0 would take
-//! its first exception on a stale stack). With VHE the `_EL1` names reach
-//! the EL2 registers, so the same code serves both.
+//! (`CPACR_EL1` = 0). The kernel is soft-float
+//! (`aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE): it
+//! never touches the FP/SIMD registers, so an interrupt need not save
+//! them and they are user mode's alone; the entry turns FP/SIMD on for
+//! EL0. It calls `kmain` (its arguments zero: not a kernel handover) on
+//! the boot stack moved to SP_EL1 (the protocol does not say which SP is
+//! in use, and an exception at EL1 runs on SP_EL1: a kernel on SP_EL0
+//! would take its first exception on a stale stack). With VHE the `_EL1`
+//! names reach the EL2 registers, so the same code serves both.
 //!
-//! The vectors (`VBAR_EL1`, 16 entries of 128 bytes): every exception is
-//! reported and stops the kernel for now (`trap`); the port gives them
-//! their handlers (IRQs, system calls, user faults).
+//! The vectors (`VBAR_EL1`, 16 entries of 128 bytes): the IRQ entries
+//! (each origin's second) save a `TrapFrame` on the stack, call
+//! `interrupts::irq` and return to the interrupted code (`eret`); every
+//! other exception is reported and stops the kernel for now (`trap`).
 
 core::arch::global_asm!(
     ".section .text.entry, \"ax\"",
@@ -39,9 +42,75 @@ core::arch::global_asm!(
     "gala_aarch64_vectors:",
     ".irp n, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15",
     ".balign 128",
+    ".if (\\n % 4) == 1",
+    "b gala_aarch64_irq_entry",
+    ".else",
     "mov x0, #\\n",
     "b gala_aarch64_trap_entry",
+    ".endif",
     ".endr",
+    "",
+    // An IRQ: the frame (`TrapFrame`, 288 bytes) below the interrupted
+    // SP_EL1; the interrupted SP is SP_EL0 from EL0, else the one above
+    // the frame.
+    "gala_aarch64_irq_entry:",
+    "sub sp, sp, #288",
+    "stp x0, x1, [sp, #0]",
+    "stp x2, x3, [sp, #16]",
+    "stp x4, x5, [sp, #32]",
+    "stp x6, x7, [sp, #48]",
+    "stp x8, x9, [sp, #64]",
+    "stp x10, x11, [sp, #80]",
+    "stp x12, x13, [sp, #96]",
+    "stp x14, x15, [sp, #112]",
+    "stp x16, x17, [sp, #128]",
+    "stp x18, x19, [sp, #144]",
+    "stp x20, x21, [sp, #160]",
+    "stp x22, x23, [sp, #176]",
+    "stp x24, x25, [sp, #192]",
+    "stp x26, x27, [sp, #208]",
+    "stp x28, x29, [sp, #224]",
+    "mrs x2, spsr_el1",
+    "add x0, sp, #288",
+    "tst x2, #0xf",
+    "b.ne 1f",
+    "mrs x0, sp_el0",
+    "1:",
+    "stp x30, x0, [sp, #240]",
+    "mrs x1, elr_el1",
+    "stp x1, x2, [sp, #256]",
+    "mrs x3, esr_el1",
+    "mrs x4, far_el1",
+    "stp x3, x4, [sp, #272]",
+    "mov x0, sp",
+    "bl {irq}",
+    // Back: ELR, SPSR and (to EL0) SP_EL0 as the frame now holds them.
+    "ldp x1, x2, [sp, #256]",
+    "msr elr_el1, x1",
+    "msr spsr_el1, x2",
+    "tst x2, #0xf",
+    "b.ne 2f",
+    "ldr x0, [sp, #248]",
+    "msr sp_el0, x0",
+    "2:",
+    "ldp x0, x1, [sp, #0]",
+    "ldp x2, x3, [sp, #16]",
+    "ldp x4, x5, [sp, #32]",
+    "ldp x6, x7, [sp, #48]",
+    "ldp x8, x9, [sp, #64]",
+    "ldp x10, x11, [sp, #80]",
+    "ldp x12, x13, [sp, #96]",
+    "ldp x14, x15, [sp, #112]",
+    "ldp x16, x17, [sp, #128]",
+    "ldp x18, x19, [sp, #144]",
+    "ldp x20, x21, [sp, #160]",
+    "ldp x22, x23, [sp, #176]",
+    "ldp x24, x25, [sp, #192]",
+    "ldp x26, x27, [sp, #208]",
+    "ldp x28, x29, [sp, #224]",
+    "ldr x30, [sp, #240]",
+    "add sp, sp, #288",
+    "eret",
     "",
     "gala_aarch64_trap_entry:",
     "mrs x1, esr_el1",
@@ -50,7 +119,10 @@ core::arch::global_asm!(
     "mrs x4, spsr_el1",
     "bl {trap}",
     trap = sym trap,
+    irq = sym super::interrupts::irq,
 );
+
+const _: () = assert!(super::interrupts::TRAP_FRAME_SIZE == 288);
 
 unsafe extern "C" {
     static gala_aarch64_vectors: u8;

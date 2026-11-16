@@ -6856,7 +6856,7 @@ const LINUX_ROOTS: &[LinuxRoot] = &[
 
 const KERNEL_TARGET: &str = "x86_64-unknown-none";
 /// The aarch64 kernel's target (ROADMAP AR: `AARCH64_SCENARIOS`).
-const KERNEL_TARGET_AARCH64: &str = "aarch64-unknown-none";
+const KERNEL_TARGET_AARCH64: &str = "aarch64-unknown-none-softfloat";
 /// Freestanding Windows test programs in `user/`, shipped as boot modules.
 const USER_TARGET: &str = "x86_64-pc-windows-msvc";
 /// 32-bit (x86) test programs, run through WOW64 (ARCHITECTURE "Plan:
@@ -12082,8 +12082,9 @@ const SINGLE_THREAD_TCG: &[&str] = &[
 
 /// The scenarios of the aarch64 kernel (ROADMAP AR), booted on QEMU's
 /// `virt` machine (`Boot::UefiAarch64`): its kernel is built for
-/// `aarch64-unknown-none` and put in their image instead of x86-64's.
-const AARCH64_SCENARIOS: &[&str] = &["arm_boot", "arm_fault_ud", "arm_fault_pagefault"];
+/// `aarch64-unknown-none-softfloat` and put in their image instead of x86-64's.
+const AARCH64_SCENARIOS: &[&str] =
+    &["arm_boot", "arm_sched", "arm_fault_ud", "arm_fault_pagefault"];
 
 /// Whether the image `name` (`test-<scenario>`) is an aarch64 scenario's.
 fn aarch64_image(name: &str) -> bool {
@@ -12280,18 +12281,48 @@ const SCENARIOS: &[Scenario] = &[
     Scenario {
         // The aarch64 kernel (ROADMAP AR) on QEMU's `virt` machine,
         // booted by UEFI and Limine's BOOTAA64.EFI (`AARCH64_SCENARIOS`):
-        // its PL011 console, the bootloader's handoff, the memory map and
-        // the frame allocator, then the boot ends where the port has got
-        // to (`stop_after`) and the kernel exits through semihosting.
+        // its PL011 console, the bootloader's handoff, the memory map, the
+        // frame allocator, its own page tables (the console still writing
+        // after the switch), the GIC and the generic timer's tick (IRQs
+        // taken and returned from), the second CPU, the NT layer's start,
+        // then the boot ends where the port has got to (`stop_after`) and
+        // the kernel exits through semihosting.
         name: "arm_boot",
-        cmdline: "qemu_exit stop_after=frames",
+        cmdline: "qemu_exit stop_after=drivers",
         exit_status: QEMU_EXIT_SUCCESS,
         expect: &[
             "gala-os kernel",
             "firmware: UEFI aarch64",
             "memory map (",
-            "boot: stopping after boot phase frames (stop_after)",
+            "frames: ",
+            "paging: own tables at ",
+            "timer: generic timer (virtual channel, PPI 27), counter at ",
+            "gic: CPU 0: GICv3",
+            "interrupts enabled, tick ",
+            "smp: bootloader: 2 CPU(s), BSP MPIDR 0: 0 1",
+            "smp: MADT: 2 enabled CPU(s): 0 1",
+            "gic: CPU 1: GICv3",
+            "smp: 2 CPUs online (2 reported by the bootloader, 2 in the MADT",
+            "syscall: personality nt dispatches to nt::syscalls",
+            "pci: no configuration space on aarch64 yet",
+            "boot: stopping after boot phase drivers (stop_after), the tick running",
         ],
+    },
+    Scenario {
+        // The aarch64 kernel's scheduler (`schedtest`): two kernel threads
+        // switched between on yields, woken from a sleep by the tick, and
+        // joined; the context switch's every register saved and restored.
+        name: "arm_sched",
+        cmdline: "qemu_exit schedtest stop_after=sched",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["schedtest: ok: 2 threads took ", "boot: stopping after boot phase sched"],
+    },
+    Scenario {
+        // The same check of the scheduler on x86-64 (`schedtest`).
+        name: "sched_selftest",
+        cmdline: "qemu_exit schedtest stop_after=sched",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["schedtest: ok: 2 threads took ", "boot: stopping after boot phase sched"],
     },
     Scenario {
         // The aarch64 kernel's exception vectors (`early_fault`): an
@@ -23064,7 +23095,7 @@ fn add_net_with(cmd: &mut Command, port: u16, guest: u16, extra: &str) {
             "user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:{guest},hostfwd=udp:127.0.0.1:{port}-:{guest}{extra}"
         ))
         // The legacy (0.9.5) interface: one I/O BAR (see docs/ARCHITECTURE.md).
-        .args(["-device", "virtio-net-pci,netdev=n0,disable-legacy=off"]);
+        .args(["-device", "virtio-net-pci,netdev=n0"]);
 }
 
 /// Scenarios whose guest fetches `http://10.0.2.100/` from the host
@@ -23084,7 +23115,7 @@ fn add_host_page_net(cmd: &mut Command, log: &Path) -> Result {
     let guestfwd = host_page_fwd(cmd, log)?;
     cmd.arg("-netdev")
         .arg(format!("user,id=n0{guestfwd}"))
-        .args(["-device", "virtio-net-pci,netdev=n0,disable-legacy=off"]);
+        .args(["-device", "virtio-net-pci,netdev=n0"]);
     Ok(())
 }
 
@@ -23201,7 +23232,7 @@ fn add_disk(cmd: &mut Command, path: &Path) {
             "if=none,id=d0,format={format},werror=report,rerror=report,file={}",
             path.display()
         ))
-        .args(["-device", "virtio-blk-pci,drive=d0,disable-legacy=off"]);
+        .args(["-device", "virtio-blk-pci,drive=d0"]);
 }
 
 /// A scenario that gets a disk.

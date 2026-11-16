@@ -90,7 +90,7 @@ Everything that depends on the processor architecture is in
 `kernel/src/arch`, behind one interface each architecture implements in
 its own module, selected by `target_arch` (x86_64; aarch64, a stub).
 The kernel's aarch64 check (CI's Clippy step: `cargo clippy -p kernel
---target aarch64-unknown-none`) builds everything else against the stub,
+--target aarch64-unknown-none-softfloat`) builds everything else against the stub,
 so code outside `arch` that names an x86-64 type, register, instruction,
 `asm!` or `core::arch::x86_64` fails to build. What an architecture
 provides (the module names neutral code uses):
@@ -145,8 +145,7 @@ process's signal contexts; `compile_error!` elsewhere). WOW64's NT part
 every architecture; it runs only where the platform can enter 32-bit
 code (`set_teb32`: x86-64's compatibility mode).
 
-Limits (ROADMAP PT): `mm::paging` is x86-64's page-table format (generic
-over table access for host tests); the user thread-pointer bases keep
+Limits (ROADMAP PT): the user thread-pointer bases keep
 x86-64's names (`gs_base`, `fs_base`, `teb32`) and the FP control
 register MXCSR's. `boot` reads Limine's protocol for both: the MP
 response's layout is per architecture (`boot::MpInfo::hw_id`: x86-64's
@@ -174,21 +173,47 @@ ROADMAP AR, under way on QEMU's `virt` machine (GICv3, a PL011, virtio
 over PCIe), booted by UEFI (QEMU's own edk2 build, or AAVMF) and
 Limine's `BOOTAA64.EFI` from the same kind of ISO as x86-64's (Limine's
 EFI image carries both loaders; the ISO holds the aarch64 kernel). The
-kernel boots to its frame allocator: scenarios `arm_boot` (to
-`stop_after=frames`), `arm_fault_ud` and `arm_fault_pagefault` (the
-vectors' report); `paging::init` is the next unported step.
+kernel boots through its drivers phase: scenarios `arm_boot` (to
+`stop_after=drivers`: both CPUs online, the NT layer's start, the tick
+seen running), `arm_sched` (`schedtest`: kernel threads switched, woken,
+joined), `arm_fault_ud` and `arm_fault_pagefault` (the vectors' report).
+PCI is not reached yet (no ECAM: `pci: no configuration space on aarch64
+yet`, so no disk, network or GPU); the manifest and the boot files are
+the next phase.
 
+- **Soft-float**: the kernel is built for
+  `aarch64-unknown-none-softfloat`, as x86-64's kernel uses no SSE: it
+  never touches the FP/SIMD registers, so interrupts save only the
+  general registers and the FP/SIMD state is user mode's alone.
 - **Entry** (`arch/aarch64/entry.rs`): Limine (base revision 6) enters
   at EL1, or at EL2 with VHE (the `_EL1` register names then reach EL2's),
-  with the MMU on, IRQs masked and FP/SIMD trapped (`CPACR_EL1` = 0). Rust
-  code may touch the SIMD registers at any instruction, so the entry
-  turns FP/SIMD on first. It also moves the boot stack to SP_EL1: Limine
+  with the MMU on, IRQs masked and FP/SIMD trapped (`CPACR_EL1` = 0); the
+  entry turns FP/SIMD on (for EL0). It also moves the boot stack to SP_EL1: Limine
   left the kernel on SP_EL0, and an exception at EL1 runs on SP_EL1, so
   the first exception ran on a stale stack and faulted again inside the
   handler (what `arm_fault_*` caught).
 - **Vectors**: `VBAR_EL1` is undefined at entry; `init_boot_cpu` installs
-  the kernel's. Every exception is reported for now (the vector's kind
-  and origin, ESR's class named, ELR, FAR, SPSR) and ends the kernel.
+  the kernel's. An IRQ (each origin's second vector) saves a `TrapFrame`
+  on the stack (x0-x30, the interrupted SP, ELR, SPSR: `UserRegs`'
+  layout, then ESR and FAR; 288 bytes), runs `gic::dispatch` and returns
+  with `eret`. Every other exception is reported for now (the vector's
+  kind and origin, ESR's class named, ELR, FAR, SPSR) and ends the kernel.
+- **Interrupts** (`gic.rs`): a GICv3 (QEMU `virt`'s distributor at
+  0x0800_0000, redistributors from 0x080a_0000: the board's layout),
+  brought up with its first source: the distributor (affinity routing,
+  group 1), this CPU's redistributor (found by GICR_TYPER's affinity,
+  woken), the CPU interface by its system registers (ICC_SRE, PMR,
+  IGRPEN1). An IRQ is acknowledged (ICC_IAR1) and ended (ICC_EOIR1)
+  before its handler runs. Invariant: the end comes first because a
+  handler may switch threads (the tick's preemption), and until the EOI
+  the CPU's running priority holds back every interrupt of that priority:
+  the thread switched to would run without ticks (`schedtest`'s second
+  spin caught it). Private interrupts (SGIs, PPIs) have handlers.
+- **Time** (`timer.rs`): the generic timer's virtual channel (PPI 27).
+  Its counter's rate is CNTFRQ_EL0's, architected: nothing is calibrated
+  (`timer: generic timer ... counter at <n> kHz`). The tick is periodic by
+  compare value (CNTV_CVAL moved on one period per tick, not drifting
+  with the handler's latency).
 - **Devices before the kernel's page tables** (`early_map`): the
   bootloader's higher half maps the kernel and the HHDM of memory, no
   device. A device page is added to its TTBR1 tables, in the 2 MiB below
@@ -196,14 +221,56 @@ vectors' report); `paging::init` is the next unported step.
   2-7 are guaranteed unused); missing tables come from a pool in .bss.
   The console's PL011 (QEMU `virt`'s at 0x0900_0000, the board's fixed
   layout) is mapped this way by `serial::init`.
+- **Page tables** (`arch/aarch64/paging.rs`): the kernel's higher half
+  (TTBR1_EL1) is `mm::paging::Mapper` with the `Vmsa` encoding, built as
+  x86-64's (the HHDM of the regions Limine maps, the image per segment,
+  and the early device pages again at their addresses), then TTBR1 and
+  MAIR_EL1 are switched and EL1's TLB invalidated. MAIR holds one
+  attribute per `CacheMode` at its value (the leaves' AttrIndx); slot 0
+  stays write-back and slot 2 Device-nGnRE, so the bootloader's and
+  `early_map`'s entries keep their meaning across the switch. Device
+  mappings go in a window at 0xffff_e000_0000_0000 (`map_mmio`); a kernel
+  page's unmap invalidates it everywhere (`tlbi vaae1is`). User spaces
+  (TTBR0) are not ported.
 - **Exit**: semihosting's SYS_EXIT_EXTENDED (`hlt #0xf000`; xtask runs
   QEMU with `-semihosting-config enable=on`), with x86-64's statuses (33
   success, 35 failure). There is no ISA bus: no debug console (no event
   stream yet) and no phase port (`bootphase` marks are no-ops).
-- **Limits**: the UART's address is the board's, not read from the
-  firmware (SPCR or the device tree: the port); one CPU (the others stay
-  in Limine's wait loop); no timer, interrupts, scheduler, user mode; the
-  image is not sealed for BOOTAA64.EFI (R8's enrollment is BOOTX64.EFI's).
+- **Threads** (`context.rs`, `percpu.rs`): kernel stacks in a window of
+  guard-paged slots, as x86-64's. The switch saves x19-x30 on the
+  outgoing stack and its SP in the context, and the FP/SIMD registers
+  (V0-V31, FPCR, FPSR: user mode's, the kernel being soft-float) in the
+  context's save area; a new thread starts at a trampoline calling its
+  entry (x19). TPIDR_EL1 points at this CPU's block (index, the running
+  thread's kernel stack, client, personality, the user thread-pointer
+  bases). There is no NMI yet: the state dump's handler is kept and the
+  log says a dump at a timeout is not taken (the GIC's pseudo-NMI comes
+  with the port).
+- **Other CPUs** (`smp.rs`): Limine started them; each waits at EL1 on
+  the bootloader's tables for its `goto_address`. `start_aps` gives each a
+  kernel stack and its index (`extra_argument`) and sends it to the AP
+  entry: FP/SIMD on, the stack as SP_EL1, the kernel's MAIR and TTBR1
+  (the TLB invalidated), then its per-CPU block, vectors and GIC part
+  (`gic::init_cpu`: its redistributor, found by affinity, with the
+  private interrupts already handled), online, and `sched::run_ap`
+  (its tick). IPIs are SGIs (SGI 0 reschedules); a TLB flush everywhere
+  is a broadcast `tlbi vmalle1is`, no IPI. Hardware ids are MPIDR's
+  affinity fields everywhere (Limine's MP response, the MADT's GICC
+  entries, `smp::online_cpus`); the GIC packs them for GICR_TYPER and
+  ICC_SGI1R itself.
+- **What the NT layer registers at its start**: the personalities'
+  system call dispatchers (`syscall::set_handler`, the neutral
+  `personality::Dispatchers`), the user-return hook and the user
+  exception handler are kept for user mode's paths; KUSER_SHARED_DATA is
+  a kernel frame written through the HHDM (`paging::SharedPage`).
+- **Limits**: the UART's and the GIC's addresses are the board's, not read
+  from the firmware (SPCR, the MADT's GICD/GICR entries or the device
+  tree: the port); CPUs the bootloader did not start are not started
+  (PSCI CPU_ON); SGIs reach an Aff0 below 16 only; no NMI (the GIC's
+  pseudo-NMI: no state dump at a timeout, no `stop_others`); no user
+  mode; no RTC read (the PL031); entered at EL2 with VHE the timer would
+  be EL2's (PPI 28); the image is not sealed for BOOTAA64.EFI (R8's
+  enrollment is BOOTX64.EFI's).
 
 ## Boot
 
@@ -300,7 +367,8 @@ Whitespace-separated `flag` and `key=value` words (`kernel/src/cmdline.rs`).
 | `nomigrate` | a thread that runs user code stays on the CPU it first ran on (tells migration bugs from others) |
 | `framecheck` | user mappings of each frame are counted; freeing a frame a user space still maps panics |
 | `eagercommit` | committed private pages get their frames at once instead of at the first touch (no demand-zero faults in user code) |
-| `stop_after=<phase>` | end the boot after that boot phase (`memory_map`, `frames`, `paging`, `timer`, `sched`, `smp_start`, `smp_done`, `drivers`, `manifest`): logged (`boot: stopping after boot phase <phase> (stop_after)`), then QEMU exits with success under `qemu_exit` (else the CPU halts). The aarch64 port's scenarios use it while the phases after are unported |
+| `stop_after=<phase>` | end the boot after that boot phase (`memory_map`, `frames`, `paging`, `timer`, `sched`, `smp_start`, `smp_done`, `drivers`, `manifest`): logged (`boot: stopping after boot phase <phase> (stop_after)`; once interrupts are on, with whether the tick runs: three ticks waited for, at most 2 s), then QEMU exits with success under `qemu_exit` (else the CPU halts). The aarch64 port's scenarios use it while the phases after are unported |
+| `schedtest` | the scheduler's check, just after it starts: two kernel threads yield to each other 100 rounds each, spin until each other arrives and leaves (only the tick's preemption moves them on, also on the thread a tick switched to), sleep 10 ms and are joined; `schedtest: ok: ...` if they took turns and ended, else `schedtest: failed: ...` (scenarios `arm_sched`, `sched_selftest`) |
 | `early_fault=<ud\|pagefault\|stackoverflow>` | provoke that fault right after the exception vectors are installed, before anything else is up (`fault=` is the same later, on a scheduler thread); scenarios `arm_fault_ud`, `arm_fault_pagefault` |
 | `calwrong`, `calstall` | clock-calibration tests: the first TSC calibration 20x low (the RTC check must catch it), or the boot CPU stalled inside the calibration (scenarios `clockcal_*`; "Interrupts and time") |
 | `failpoint=<point>:<mode>:<n>[,...]` | fault injection while the `start=`/`run=` programs run (debug builds; "Fault injection"). Points `heap`, `frame`, `disk_io`, `net_tx`, `pageout`; modes `every:<n>` (the n-th, 2n-th, ... occurrence fails), `nth:<n>` (only the n-th), `random:<per-mille>` (from `failseed=`). Example: `failpoint=heap:every:97,net_tx:random:50` |
@@ -375,9 +443,16 @@ address.
 The kernel's own address space; processes' address spaces are in
 "Virtual memory of processes" under the NT personality.
 
-`mm::paging::Mapper` implements 4-level tables (4K/2M/1G leaves, NX, PAT
-cache modes) over a `TableMemory` trait; the host tests use a fake, the
-kernel uses `arch::paging::HhdmTables`. At boot `arch::paging::init`
+`mm::paging::Mapper` implements 4-level tables (4K/2M/1G leaves) over a
+`TableMemory` trait (the host tests use a fake, the kernel
+`arch::paging::HhdmTables`) and a `Format`, the entry encoding: x86-64's
+(`X86`, the default: NX, PAT cache modes) or VMSAv8-64's with the 4 KiB
+granule (`Vmsa`: AttrIndx into MAIR, AP, PXN/UXN; aarch64, "The aarch64
+port"). Both index 48-bit addresses 9 bits a level and map blocks at
+levels 2 and 3, so the walk, the large pages and their tests are one;
+what is valid to map differs (`Format::valid_virt`: x86-64's canonical
+form, aarch64's two halves from 0 and from 0xffff_0000_0000_0000). On
+x86-64, at boot `arch::paging::init`
 programs the PAT (WB, WT, UC-, UC, WP, WC, UC-, UC), enables NXE and
 PGE, builds the kernel address space and switches CR3:
 
@@ -552,6 +627,9 @@ of the time, and the HPET still advanced exactly with host time). So:
   no less than 4 GHz: a low calibration makes them longer, never shorter.
 - Invariant: no timeout or delay may be computed from `raw_monotonic_ns`
   alone where ending early is harmful.
+- A sleep of `n` ticks wakes `n + 1` ticks from now (`sched::sleep_ms`):
+  the current tick period is partly over, so `n` ticks from now can be
+  just over `n - 1` periods, and a sleep promises at least its time.
 
 ## Threads and scheduling
 
@@ -6014,8 +6092,9 @@ processor number; also NtGetCurrentProcessorNumber), then enters
 boot CPU), at most 64.
 
 - `boot::acpi` reads the MADT (RSDP from Limine's RSDP request, XSDT or
-  RSDT; enabled local APIC and x2APIC entries; host-tested parser) into
-  `BootInfo::firmware_cpus`. `start_aps` starts the CPUs Limine
+  RSDT; enabled local APIC and x2APIC entries, and on aarch64 GICC
+  entries' MPIDR; host-tested parser) into `BootInfo::firmware_cpus`, as
+  hardware ids (`boot::MpInfo::hw_id`'s). `start_aps` starts the CPUs Limine
   reported, then every MADT CPU it did not report with the kernel's own
   trampoline (next section).
 - The CPUs Limine started get a second to reach `ap_main`, then (with a
@@ -6137,19 +6216,26 @@ only. ROADMAP N1 (TCP/IP and sockets) and N2 (Nginx) are the items.
 - `arch::pci`: configuration space through ports 0xcf8/0xcfc,
   brute-force enumeration (bus 0-255, functions 1-7 only for
   multifunction devices). The firmware (SeaBIOS or OVMF) has assigned
-  the BARs; the kernel only turns on I/O decoding and bus mastering.
-- `arch::virtio`: the virtio *legacy* PCI interface (registers in I/O
-  BAR 0; QEMU gets `disable-legacy=off`). It is in `arch` because the
-  device DMAs: `LegacyDevice` owns its queues and resets the device in
-  `drop` before the queue memory is freed (fields drop after `drop`).
+  the BARs; the kernel only turns on memory decoding and bus mastering.
+- `arch::virtio`: virtio's modern PCI interface only (`ModernDevice`:
+  the common, notify and device-configuration structures in memory
+  BARs, found through vendor capabilities), for every driver (disk,
+  network, GPU) on every architecture: it needs no port I/O, which
+  aarch64 has none of. QEMU's devices are transitional (ids 0x1000,
+  0x1001: the legacy registers are there, unused) or modern-only (0x1041,
+  0x1042); the drivers take either. It is in `arch` because the device
+  DMAs: `ModernDevice` owns its queues and resets the device in `drop`
+  before the queue memory is freed (fields drop after `drop`). A
+  queue's ring is sized for the buffers the driver asks for (twice for
+  chained requests), as far as the device allows.
   Each `Virtqueue` has physically contiguous ring memory and a buffer
   region of up to 64 fixed slots; slot *i* is descriptor *i*, and a bit
   mask tracks which slots the device owns (chained slots for block
   requests: "Disk"). Drivers poll (the available ring asks for no
   interrupts).
 - `net::virtio_net`: queue 0 receive, 1 transmit, 32 slots of 2 KiB
-  each, the 10-byte legacy header in front of every frame (no
-  offloads). It is a smoltcp `Device`; a received frame is copied out
+  each, the 12-byte `virtio_net_hdr` VERSION_1 gives every frame (with
+  `num_buffers`; no offloads); features MAC (and VERSION_1). It is a smoltcp `Device`; a received frame is copied out
   and its slot reposted at once, a sent frame is copied into a free
   transmit slot (counted as dropped when none is free; TCP retransmits).
 - `net::loopback`: a smoltcp `Device` (medium IP, MTU 16 KiB) whose
@@ -6764,9 +6850,9 @@ clusters of a data area, a disk-backed C: (D4). gala-um has no disk.
   2*i*+1 (the device writes: a read's data and the status), over
   consecutive parts of the slot (`post_chain`), which is what a block
   request needs.
-- `disk::virtio_blk`: the first transitional virtio-blk function (legacy
-  interface, `disable-legacy=off`), capacity from its configuration,
-  features RO, FLUSH and ANY_LAYOUT; one queue with one slot of 64 KiB
+- `disk::virtio_blk`: the first virtio-blk function (modern interface),
+  capacity from its configuration, features RO and FLUSH (and VERSION_1,
+  which implies any layout); one queue with one slot of 64 KiB
   of data. A request is the 16-byte header (type IN/OUT/FLUSH, sector),
   the data and a status byte.
 - `disk` (the kernel's API, independent of NT): `read`/`write` of whole
@@ -14058,9 +14144,7 @@ The first GPU driver (G1). Code: `kernel/src/arch/virtio.rs`
 (`ModernDevice`), `kernel/src/display/` (`mod.rs`, `pci.rs`,
 `virtio_gpu/{mod,proto,tests}.rs`).
 
-- **Transport** (`arch::virtio::ModernDevice`): virtio-gpu has no legacy
-  interface (virtio-blk and -net use the legacy one), so this is the
-  modern one: the PCI capability list (`pci::Function::capabilities`),
+- **Transport** (`arch::virtio::ModernDevice`, every virtio driver's): the PCI capability list (`pci::Function::capabilities`),
   vendor capabilities for the common, notify and device-configuration
   structures (`find_layout`: the first of each), memory BARs (32/64-bit)
   mapped uncached once per device (`paging::map_mmio`); reset,
@@ -15009,7 +15093,7 @@ New code follows them; old code is brought in line (ROADMAP R1).
    and resubmit what was in flight.
    - virtio-blk: a request whose device gave up (FAILED, NEEDS_RESET)
      or lost DRIVER_OK (reset under the driver) re-initializes it in
-     place (`LegacyDevice::reinit`: a second device value would reset it
+     place (`ModernDevice::reinit`: a second device value would reset it
      again when dropped) and posts the request again, up to 3 times
      (scenario `disk_reset`).
    - virtio-net: before receiving or sending it checks the device and
