@@ -294,6 +294,10 @@ impl Process {
         kind: AccessKind,
         mut op: impl FnMut(&mut UserSpace) -> Result<(), UserFault>,
     ) -> Result<(), UserFault> {
+        // A page that is not there is made below, which waits for the
+        // file or the disk: no lock may be held here (lockdep says which,
+        // at every copy, not only at those that have to wait).
+        crate::sync::lockdep::none_held_at_user_memory();
         let space = self.space_now().ok_or(UserFault { address: at })?;
         loop {
             let result = op(&mut space.lock());
@@ -311,6 +315,19 @@ impl Process {
     /// Copies `buf.len()` bytes from user address `addr`.
     pub fn read(&self, addr: u64, buf: &mut [u8]) -> Result<(), UserFault> {
         self.with_faults(addr, AccessKind::Read, |s| s.read(addr, buf))
+    }
+
+    /// Copies `buf.len()` bytes from user address `addr` if the pages
+    /// are there, and gives None if one is not, having made nothing and
+    /// waited for nothing (what it copied before it stopped is in
+    /// `buf`): for a caller that holds a lock and so may not wait for a
+    /// page. It lets its lock go, reads the same bytes with `read`
+    /// (which makes the page) and tries again -- `lx::futex`'s
+    /// compare-and-requeue, the one caller, as Linux's own reads the
+    /// word under `pagefault_disable` and retries. Every other copy uses
+    /// `read`.
+    pub fn read_if_there(&self, addr: u64, buf: &mut [u8]) -> Option<()> {
+        self.space_now()?.lock().read(addr, buf).ok()
     }
 
     pub fn read_u64(&self, addr: u64) -> Result<u64, UserFault> {

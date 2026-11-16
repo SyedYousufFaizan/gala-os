@@ -1291,22 +1291,27 @@ pub fn dump() {
         // the inverse of `resume`'s order).
         let sched = *t.sched_id.lock();
         let suspended = *t.suspend_count.lock();
-        let name = t.name.lock();
-        info!(
-            "thread: pid {} tid {} (sched {:?}) start {:#x}{} suspend {} exited {} in a system call {} \
-             session {} personality {} ({})",
-            t.process.id,
-            t.id,
-            sched,
-            t.win32_start,
-            NameField(&name),
-            suspended,
-            t.has_exited(),
-            in_syscall.is_some(),
-            t.process.session,
-            t.process.personality,
-            t.process.name_now()
-        );
+        {
+            // The name's guard ends with the line it prints: what follows
+            // copies user memory, which waits for a page that is not
+            // there, and no lock may be held across a wait.
+            let name = t.name.lock();
+            info!(
+                "thread: pid {} tid {} (sched {:?}) start {:#x}{} suspend {} exited {} \
+                 in a system call {} session {} personality {} ({})",
+                t.process.id,
+                t.id,
+                sched,
+                t.win32_start,
+                NameField(&name),
+                suspended,
+                t.has_exited(),
+                in_syscall.is_some(),
+                t.process.session,
+                t.process.personality,
+                t.process.name_now()
+            );
+        }
         let Some((number, regs)) = in_syscall else {
             // Running user code: where a tick last caught it.
             if let Some(rip) = (*t.sched_id.lock()).and_then(platform::last_user_rip) {
@@ -1343,7 +1348,11 @@ pub fn dump() {
         }
         // The first argument, as a handle: what a wait is on.
         let handle = super::object::Handle(arg(0));
-        if let Some(e) = t.process.handles.lock().get(handle) {
+        // The entry leaves the table on this line (`get` clones it): the
+        // lines below copy user memory, which waits for a page that is
+        // not there, and no lock may be held across a wait.
+        let entry = t.process.handles.lock().get(handle);
+        if let Some(e) = entry {
             if let ObjectBody::IoCompletion(c) = &e.object.body {
                 // A port is ready while it holds packets (its dispatcher
                 // flag is set by a post and never cleared: not a sign).

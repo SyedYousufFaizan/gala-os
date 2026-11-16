@@ -705,6 +705,14 @@ fn layout_of(process: &Process) -> Layout {
 /// handle, and each completes when its own socket is ready.
 fn try_complete(state: &EndpointState) {
     let mut pending = state.pending.lock();
+    // Not turned around yet: a request is served with this endpoint's
+    // lock held, and serving it copies the program's memory (`attempt`
+    // its buffers, `finish` its IO_STATUS_BLOCK). ROADMAP OF carries the
+    // work of serving with the lock let go; until then the copies here
+    // are outside the deterministic check (`UserMemoryUnchecked`).
+    let _unchecked = crate::sync::lockdep::UserMemoryUnchecked::new(
+        "afd: a request served under its endpoint's lock",
+    );
     let mut blocked = [false; 5];
     let mut i = 0;
     while i < pending.len() {
@@ -808,6 +816,14 @@ fn submit(state: &EndpointState, mut op: Op, mut io: Io) -> NtStatus {
     // The calling thread's request (looked up before the endpoint's lock).
     let issuer = super::thread::IoPending::current();
     let mut pending = state.pending.lock();
+    // Not turned around yet: a request is served with this endpoint's
+    // lock held, and serving it copies the program's memory (`attempt`
+    // its buffers, `finish` its IO_STATUS_BLOCK). ROADMAP OF carries the
+    // work of serving with the lock let go; until then the copies here
+    // are outside the deterministic check (`UserMemoryUnchecked`).
+    let _unchecked = crate::sync::lockdep::UserMemoryUnchecked::new(
+        "afd: a request served under its endpoint's lock",
+    );
     io.reserved = match reserve(state, &io, issuer) {
         Ok(r) => r,
         Err(status) => return status,
@@ -875,6 +891,14 @@ fn submit(state: &EndpointState, mut op: Op, mut io: Io) -> NtStatus {
 /// IO_STATUS_BLOCK is `iosb` (any if None); returns how many.
 pub fn cancel(state: &EndpointState, process: Option<&KArc<Process>>, iosb: Option<u64>) -> usize {
     let mut pending = state.pending.lock();
+    // Not turned around yet: a request is served with this endpoint's
+    // lock held, and serving it copies the program's memory (`attempt`
+    // its buffers, `finish` its IO_STATUS_BLOCK). ROADMAP OF carries the
+    // work of serving with the lock let go; until then the copies here
+    // are outside the deterministic check (`UserMemoryUnchecked`).
+    let _unchecked = crate::sync::lockdep::UserMemoryUnchecked::new(
+        "afd: a request served under its endpoint's lock",
+    );
     let mut n = 0;
     let mut i = 0;
     while i < pending.len() {
