@@ -40,6 +40,15 @@
 //!   SysWOW64 directory, IsWow64Process and IsWow64Process2 of this
 //!   process and of a 32-bit child (wow64_test.exe).
 //!
+//! - What Office's MFC runtime (`mfc140u.dll`) imports (`mfc`): the
+//!   dialog-item helpers (CheckRadioButton, IsDlgButtonChecked,
+//!   Get/SetDlgItemInt, SendDlgItemMessageA, GetNextDlgGroupItem), menus
+//!   (GetMenuCheckMarkDimensions, GetMenuDefaultItem, SetMenuItemBitmaps,
+//!   LoadMenuW from an RT_MENU resource), LockWindowUpdate,
+//!   RealChildWindowFromPoint, InvalidateRgn, IsCharLowerW, the tabbed
+//!   text functions, GrayStringW, the window's context help id, the DDE
+//!   packing helpers and WinHelpW's HELP_QUIT.
+//!
 //! Prints `win32_misc_test: ok` or exits with the number of the failing
 //! check.
 
@@ -47,6 +56,7 @@
 #![no_main]
 
 use core::ffi::c_void;
+use core::sync::atomic::Ordering;
 
 type Bool = i32;
 type Handle = *mut c_void;
@@ -1463,6 +1473,559 @@ fn vcl(c: &mut Checks) -> Result<(), u32> {
     Ok(())
 }
 
+// What Office's MFC runtime imports (`mfc`), and the windows, menus,
+// device contexts and bitmaps its checks need.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+/// MENUITEMINFOW.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MenuItemInfo {
+    size: u32,
+    mask: u32,
+    kind: u32,
+    state: u32,
+    id: u32,
+    submenu: Handle,
+    checked: Handle,
+    unchecked: Handle,
+    data: usize,
+    text: *mut u16,
+    text_len: u32,
+    item_bitmap: Handle,
+}
+
+#[link(name = "user32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn CreateWindowExW(
+        ex: u32,
+        class: *const u16,
+        title: *const u16,
+        style: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        parent: Handle,
+        menu: Handle,
+        instance: Handle,
+        param: *mut c_void,
+    ) -> Handle;
+    fn DestroyWindow(hwnd: Handle) -> Bool;
+    fn SetWindowTextW(hwnd: Handle, text: *const u16) -> Bool;
+    fn GetWindowTextW(hwnd: Handle, buf: *mut u16, n: i32) -> i32;
+    fn GetDC(hwnd: Handle) -> Handle;
+    fn ReleaseDC(hwnd: Handle, dc: Handle) -> i32;
+    fn GetSystemMetrics(index: i32) -> i32;
+    fn GetUpdateRect(hwnd: Handle, rect: *mut [i32; 4], erase: Bool) -> Bool;
+    fn ValidateRect(hwnd: Handle, rect: *const [i32; 4]) -> Bool;
+    fn CreateMenu() -> Handle;
+    fn CreatePopupMenu() -> Handle;
+    fn AppendMenuW(menu: Handle, flags: u32, id: usize, text: *const u16) -> Bool;
+    fn DestroyMenu(menu: Handle) -> Bool;
+    fn EnableMenuItem(menu: Handle, item: u32, flags: u32) -> i32;
+    fn GetMenuItemCount(menu: Handle) -> i32;
+    fn GetMenuItemID(menu: Handle, position: i32) -> u32;
+    fn GetSubMenu(menu: Handle, position: i32) -> Handle;
+    fn GetMenuStringW(menu: Handle, item: u32, buf: *mut u16, n: i32, flags: u32) -> i32;
+    fn SetMenuDefaultItem(menu: Handle, item: u32, by_position: u32) -> Bool;
+    fn GetMenuItemInfoW(
+        menu: Handle,
+        item: u32,
+        by_position: Bool,
+        info: *mut MenuItemInfo,
+    ) -> Bool;
+    // The 21 mfc140u.dll imports.
+    fn CheckRadioButton(dialog: Handle, first: i32, last: i32, check: i32) -> Bool;
+    fn IsDlgButtonChecked(dialog: Handle, id: i32) -> u32;
+    fn GetDlgItemInt(dialog: Handle, id: i32, translated: *mut Bool, signed: Bool) -> u32;
+    fn SetDlgItemInt(dialog: Handle, id: i32, value: u32, signed: Bool) -> Bool;
+    fn SendDlgItemMessageA(
+        dialog: Handle,
+        id: i32,
+        msg: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize;
+    fn GetNextDlgGroupItem(dialog: Handle, control: Handle, previous: Bool) -> Handle;
+    fn GetMenuCheckMarkDimensions() -> i32;
+    fn GetMenuDefaultItem(menu: Handle, by_position: u32, flags: u32) -> u32;
+    fn SetMenuItemBitmaps(
+        menu: Handle,
+        item: u32,
+        flags: u32,
+        unchecked: Handle,
+        checked: Handle,
+    ) -> Bool;
+    fn LoadMenuW(instance: Handle, name: *const u16) -> Handle;
+    fn LockWindowUpdate(hwnd: Handle) -> Bool;
+    fn RealChildWindowFromPoint(parent: Handle, point: Point) -> Handle;
+    fn InvalidateRgn(hwnd: Handle, region: Handle, erase: Bool) -> Bool;
+    fn IsCharLowerW(c: u16) -> Bool;
+    fn GetTabbedTextExtentW(
+        dc: Handle,
+        text: *const u16,
+        len: i32,
+        tabs: i32,
+        stops: *const i32,
+    ) -> u32;
+    fn TabbedTextOutW(
+        dc: Handle,
+        x: i32,
+        y: i32,
+        text: *const u16,
+        len: i32,
+        tabs: i32,
+        stops: *const i32,
+        origin: i32,
+    ) -> i32;
+    fn GrayStringW(
+        dc: Handle,
+        brush: Handle,
+        output: *mut c_void,
+        data: isize,
+        len: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Bool;
+    fn SetWindowContextHelpId(hwnd: Handle, id: u32) -> Bool;
+    fn GetWindowContextHelpId(hwnd: Handle) -> u32;
+    fn PackDDElParam(msg: u32, low: usize, high: usize) -> isize;
+    fn UnpackDDElParam(msg: u32, lparam: isize, low: *mut usize, high: *mut usize) -> Bool;
+    fn ReuseDDElParam(lparam: isize, msg_in: u32, msg_out: u32, low: usize, high: usize) -> isize;
+    fn FreeDDElParam(msg: u32, lparam: isize) -> Bool;
+    fn WinHelpW(hwnd: Handle, file: *const u16, command: u32, data: usize) -> Bool;
+}
+
+#[link(name = "gdi32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn CreateCompatibleBitmap(dc: Handle, width: i32, height: i32) -> Handle;
+    fn CreateBitmap(width: i32, height: i32, planes: u32, bits: u32, data: *const c_void)
+    -> Handle;
+    fn SelectObject(dc: Handle, object: Handle) -> Handle;
+    fn GetPixel(dc: Handle, x: i32, y: i32) -> u32;
+    fn PatBlt(dc: Handle, x: i32, y: i32, width: i32, height: i32, rop: u32) -> Bool;
+    fn TextOutW(dc: Handle, x: i32, y: i32, text: *const u16, len: i32) -> Bool;
+    fn GetTextExtentPoint32W(dc: Handle, text: *const u16, len: i32, size: *mut [i32; 2]) -> Bool;
+    fn CreateRectRgn(left: i32, top: i32, right: i32, bottom: i32) -> Handle;
+}
+
+/// How many characters the output function of GrayStringW was given.
+static DREW: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// An output function for GrayStringW: draws the text itself.
+extern "system" fn gray_out(dc: Handle, data: isize, len: i32) -> Bool {
+    DREW.store(len as u32, Ordering::Relaxed);
+    // SAFETY: the string GrayStringW was given, of `len` characters.
+    unsafe { TextOutW(dc, 0, 0, data as *const u16, len) }
+}
+
+/// What Office's MFC runtime (`mfc140u.dll`) imports, with the results
+/// real Windows gives (documented contracts, measured on 26100): the
+/// dialog-item helpers, menus, invalidation by region, tabbed and grayed
+/// text, the context help id, the DDE packing helpers and WinHelp.
+fn mfc(c: &mut Checks) -> Result<(), u32> {
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_VISIBLE: u32 = 0x1000_0000;
+    const WS_GROUP: u32 = 0x0002_0000;
+    const WS_OVERLAPPEDWINDOW: u32 = 0x00cf_0000;
+    const BS_AUTORADIOBUTTON: u32 = 0x0000_0009;
+    const WM_GETTEXTLENGTH: u32 = 0x000e;
+    const MF_BYCOMMAND: u32 = 0x0000;
+    const MF_GRAYED: u32 = 0x0001;
+    const MF_POPUP: u32 = 0x0010;
+    const MF_BYPOSITION: u32 = 0x0400;
+    const MIIM_CHECKMARKS: u32 = 0x0008;
+    const SM_CXMENUCHECK: i32 = 71;
+    const SM_CYMENUCHECK: i32 = 72;
+    const GMDI_USEDISABLED: u32 = 0x0001;
+    const GMDI_GOINTOPOPUPS: u32 = 0x0002;
+    const NO_ITEM: u64 = 0xffff_ffff;
+    const WHITENESS: u32 = 0x00ff_0062;
+    const WM_DDE_INITIATE: u32 = 0x03e0;
+    const WM_DDE_ACK: u32 = 0x03e4;
+    const WM_DDE_DATA: u32 = 0x03e5;
+    const WM_DDE_POKE: u32 = 0x03e7;
+    const WM_DDE_EXECUTE: u32 = 0x03e8;
+    const HELP_QUIT: u32 = 0x0002;
+    const WHITE: u32 = 0x00ff_ffff;
+
+    let (static_class, button_class, edit_class) = (w("STATIC"), w("BUTTON"), w("EDIT"));
+    let (one, two, three) = (w("One"), w("Two"), w("Three"));
+    let (title, empty) = (w("mfc"), w(""));
+    let null = core::ptr::null_mut();
+
+    // SAFETY: windows, menus and device contexts this test owns, with
+    // buffers of its own; every call is the documented one.
+    unsafe {
+        let instance = GetModuleHandleW(core::ptr::null());
+        // A top-level window of a system class is enough: the dialog-item
+        // functions ask the parent for its children by id, they do not
+        // need a dialog made from a template. It is visible because
+        // Windows keeps an update region only for a visible window.
+        let parent = CreateWindowExW(
+            0,
+            static_class.as_ptr(),
+            title.as_ptr(),
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            0,
+            0,
+            320,
+            240,
+            null,
+            null,
+            instance,
+            null,
+        );
+        c.ok(!parent.is_null(), GetLastError().into())?;
+        let child = |class: &[u16; 64], text: &[u16; 64], style: u32, y: i32, id: usize| {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                text.as_ptr(),
+                WS_CHILD | WS_VISIBLE | style,
+                0,
+                y,
+                120,
+                24,
+                parent,
+                id as Handle,
+                instance,
+                null,
+            )
+        };
+        // Three radio buttons in one group (WS_GROUP starts it), then an
+        // edit that starts the next group.
+        let r1 = child(&button_class, &one, BS_AUTORADIOBUTTON | WS_GROUP, 0, 101);
+        let r2 = child(&button_class, &two, BS_AUTORADIOBUTTON, 24, 102);
+        let r3 = child(&button_class, &three, BS_AUTORADIOBUTTON, 48, 103);
+        let edit = child(&edit_class, &empty, WS_GROUP, 72, 201);
+        c.ok(!r1.is_null() && !r2.is_null() && !r3.is_null() && !edit.is_null(), 0)?;
+
+        // CheckRadioButton checks one button of a range and clears the
+        // others; IsDlgButtonChecked is BST_CHECKED (1) or BST_UNCHECKED.
+        c.ok(CheckRadioButton(parent, 101, 103, 102) != 0, GetLastError().into())?;
+        c.eq(IsDlgButtonChecked(parent, 102).into(), 1)?;
+        c.eq(IsDlgButtonChecked(parent, 101).into(), 0)?;
+        c.eq(IsDlgButtonChecked(parent, 103).into(), 0)?;
+        c.ok(CheckRadioButton(parent, 101, 103, 103) != 0, 0)?;
+        c.eq(IsDlgButtonChecked(parent, 103).into(), 1)?;
+        c.eq(IsDlgButtonChecked(parent, 102).into(), 0)?;
+        // A control the parent does not have.
+        c.eq(IsDlgButtonChecked(parent, 999).into(), 0)?;
+
+        // SetDlgItemInt writes the number as text; GetDlgItemInt reads it
+        // back and says whether the text was a number at all.
+        let mut text = [0u16; 32];
+        let mut translated: Bool = 0;
+        c.ok(SetDlgItemInt(parent, 201, 1234, 0) != 0, GetLastError().into())?;
+        c.eq(GetWindowTextW(edit, text.as_mut_ptr(), 32) as u64, 4)?;
+        let want = w("1234");
+        c.ok(same(text.as_ptr(), want.as_ptr()), 0)?;
+        c.eq(GetDlgItemInt(parent, 201, &mut translated, 0).into(), 1234)?;
+        c.ok(translated != 0, 0)?;
+        // Signed, the minus sign is written and read.
+        c.ok(SetDlgItemInt(parent, 201, (-5i32) as u32, 1) != 0, 0)?;
+        c.eq(GetWindowTextW(edit, text.as_mut_ptr(), 32) as u64, 2)?;
+        let minus = w("-5");
+        c.ok(same(text.as_ptr(), minus.as_ptr()), 0)?;
+        c.eq(GetDlgItemInt(parent, 201, &mut translated, 1).into(), u64::from((-5i32) as u32))?;
+        c.ok(translated != 0, 0)?;
+        // Unsigned, the same text is no number: 0, not translated.
+        c.eq(GetDlgItemInt(parent, 201, &mut translated, 0).into(), 0)?;
+        c.ok(translated == 0, 0)?;
+        // Text that is only partly a number: the digits it starts with,
+        // but not translated (what follows them is no number).
+        let partly = w("12abc");
+        c.ok(SetWindowTextW(edit, partly.as_ptr()) != 0, 0)?;
+        c.eq(GetDlgItemInt(parent, 201, &mut translated, 0).into(), 12)?;
+        c.ok(translated == 0, 0)?;
+        let spaced = w("  42");
+        c.ok(SetWindowTextW(edit, spaced.as_ptr()) != 0, 0)?;
+        c.eq(GetDlgItemInt(parent, 201, &mut translated, 0).into(), 42)?;
+        c.ok(translated != 0, 0)?;
+        // More than a UINT holds.
+        let huge = w("4294967296");
+        c.ok(SetWindowTextW(edit, huge.as_ptr()) != 0, 0)?;
+        c.eq(GetDlgItemInt(parent, 201, &mut translated, 0).into(), 0)?;
+        c.ok(translated == 0, 0)?;
+
+        // Text that is no number, and a control that is not there.
+        let abc = w("abc");
+        c.ok(SetWindowTextW(edit, abc.as_ptr()) != 0, 0)?;
+        c.eq(GetDlgItemInt(parent, 201, &mut translated, 0).into(), 0)?;
+        c.ok(translated == 0, 0)?;
+        c.eq(GetDlgItemInt(parent, 999, &mut translated, 0).into(), 0)?;
+        c.ok(translated == 0, 0)?;
+
+        // SendDlgItemMessageA reaches the control by id; an id nothing
+        // answers gives 0.
+        let five = w("12345");
+        c.ok(SetWindowTextW(edit, five.as_ptr()) != 0, 0)?;
+        c.eq(SendDlgItemMessageA(parent, 201, WM_GETTEXTLENGTH, 0, 0) as u64, 5)?;
+        c.eq(SendDlgItemMessageA(parent, 999, WM_GETTEXTLENGTH, 0, 0) as u64, 0)?;
+
+        // GetNextDlgGroupItem walks the group and wraps inside it; the
+        // edit's WS_GROUP keeps it out.
+        c.ok(GetNextDlgGroupItem(parent, r1, 0) == r2, 0)?;
+        c.ok(GetNextDlgGroupItem(parent, r2, 0) == r3, 0)?;
+        c.ok(GetNextDlgGroupItem(parent, r3, 0) == r1, 0)?;
+        c.ok(GetNextDlgGroupItem(parent, r2, 1) == r1, 0)?;
+        c.ok(GetNextDlgGroupItem(parent, r1, 1) == r3, 0)?;
+
+        // GetMenuCheckMarkDimensions is the check mark's size: the width
+        // in the low word, the height in the high one (15 by 15 at 96
+        // dpi, SM_CXMENUCHECK and SM_CYMENUCHECK).
+        let (cx, cy) = (GetSystemMetrics(SM_CXMENUCHECK), GetSystemMetrics(SM_CYMENUCHECK));
+        c.eq(cx as u64, 15)?;
+        c.eq(cy as u64, 15)?;
+        c.eq(
+            GetMenuCheckMarkDimensions() as u32 as u64,
+            u64::from(((cy as u32) << 16) | cx as u32),
+        )?;
+
+        // Menus: the default item, by position and by command, and what
+        // a disabled one answers.
+        let (menu, popup) = (CreateMenu(), CreatePopupMenu());
+        let (file, new, open, help) = (w("&File"), w("&New"), w("&Open"), w("&Help"));
+        c.ok(!menu.is_null() && !popup.is_null(), 0)?;
+        c.ok(AppendMenuW(popup, 0, 101, new.as_ptr()) != 0, 0)?;
+        c.ok(AppendMenuW(popup, 0, 102, open.as_ptr()) != 0, 0)?;
+        c.ok(AppendMenuW(menu, MF_POPUP, popup as usize, file.as_ptr()) != 0, 0)?;
+        c.ok(AppendMenuW(menu, 0, 103, help.as_ptr()) != 0, 0)?;
+        c.eq(GetMenuDefaultItem(menu, 0, 0).into(), NO_ITEM)?;
+        c.ok(SetMenuDefaultItem(menu, 1, 1) != 0, GetLastError().into())?;
+        c.eq(GetMenuDefaultItem(menu, 1, 0).into(), 1)?;
+        c.eq(GetMenuDefaultItem(menu, 0, 0).into(), 103)?;
+        c.ok(EnableMenuItem(menu, 103, MF_BYCOMMAND | MF_GRAYED) >= 0, 0)?;
+        c.eq(GetMenuDefaultItem(menu, 0, 0).into(), NO_ITEM)?;
+        c.eq(GetMenuDefaultItem(menu, 0, GMDI_USEDISABLED).into(), 103)?;
+        c.ok(EnableMenuItem(menu, 103, MF_BYCOMMAND) >= 0, 0)?;
+        // A popup as the default item: asked for a command, Windows
+        // answers with the submenu's handle, and GMDI_GOINTOPOPUPS asks
+        // for its submenu's default instead.
+        c.ok(SetMenuDefaultItem(menu, 0, 1) != 0, 0)?;
+        c.eq(GetMenuDefaultItem(menu, 1, 0).into(), 0)?;
+        c.eq(GetMenuDefaultItem(menu, 0, 0).into(), popup as u32 as u64)?;
+        c.ok(SetMenuDefaultItem(popup, 102, 0) != 0, 0)?;
+        c.eq(GetMenuDefaultItem(menu, 0, GMDI_GOINTOPOPUPS).into(), 102)?;
+        c.eq(GetMenuDefaultItem(menu, 1, GMDI_GOINTOPOPUPS).into(), 1)?;
+
+        // SetMenuItemBitmaps puts bitmaps where the check mark goes; the
+        // item keeps them (MIIM_CHECKMARKS), and NULL puts the check mark
+        // back.
+        let (checked, unchecked) = (
+            CreateBitmap(cx, cy, 1, 1, core::ptr::null()),
+            CreateBitmap(cx, cy, 1, 1, core::ptr::null()),
+        );
+        c.ok(!checked.is_null() && !unchecked.is_null(), 0)?;
+        c.ok(SetMenuItemBitmaps(menu, 103, MF_BYCOMMAND, unchecked, checked) != 0, 0)?;
+        let mut info = MenuItemInfo {
+            size: core::mem::size_of::<MenuItemInfo>() as u32,
+            mask: MIIM_CHECKMARKS,
+            kind: 0,
+            state: 0,
+            id: 0,
+            submenu: null,
+            checked: null,
+            unchecked: null,
+            data: 0,
+            text: core::ptr::null_mut(),
+            text_len: 0,
+            item_bitmap: null,
+        };
+        c.ok(GetMenuItemInfoW(menu, 103, 0, &mut info) != 0, GetLastError().into())?;
+        c.ok(info.checked == checked, info.checked as u64)?;
+        c.ok(info.unchecked == unchecked, info.unchecked as u64)?;
+        c.ok(SetMenuItemBitmaps(menu, 103, MF_BYCOMMAND, null, null) != 0, 0)?;
+        c.ok(GetMenuItemInfoW(menu, 103, 0, &mut info) != 0, 0)?;
+        c.ok(info.checked.is_null() && info.unchecked.is_null(), 0)?;
+        c.ok(DestroyMenu(menu) != 0, 0)?;
+
+        // LoadMenuW builds a menu from the RT_MENU resource (build.rs):
+        // a "&File" popup holding "&New" (101) and "&Open" (102), then
+        // "&Help" (103).
+        let loaded = LoadMenuW(instance, core::ptr::without_provenance(2));
+        c.ok(!loaded.is_null(), GetLastError().into())?;
+        c.eq(GetMenuItemCount(loaded) as u64, 2)?;
+        let mut name = [0u16; 32];
+        c.eq(GetMenuStringW(loaded, 0, name.as_mut_ptr(), 32, MF_BYPOSITION) as u64, 5)?;
+        c.ok(same(name.as_ptr(), file.as_ptr()), 0)?;
+        let sub = GetSubMenu(loaded, 0);
+        c.ok(!sub.is_null(), 0)?;
+        c.eq(GetMenuItemCount(sub) as u64, 2)?;
+        c.eq(GetMenuItemID(sub, 0).into(), 101)?;
+        c.eq(GetMenuItemID(sub, 1).into(), 102)?;
+        c.eq(GetMenuItemID(loaded, 1).into(), 103)?;
+        c.ok(DestroyMenu(loaded) != 0, 0)?;
+        // The same from a MENUEX template (resource 3): an "&Edit" popup
+        // holding "&Cut" (201) and "&Copy" (202), then "&View" (203).
+        let ex = LoadMenuW(instance, core::ptr::without_provenance(3));
+        c.ok(!ex.is_null(), GetLastError().into())?;
+        c.eq(GetMenuItemCount(ex) as u64, 2)?;
+        let edit_menu = w("&Edit");
+        c.eq(GetMenuStringW(ex, 0, name.as_mut_ptr(), 32, MF_BYPOSITION) as u64, 5)?;
+        c.ok(same(name.as_ptr(), edit_menu.as_ptr()), 0)?;
+        let ex_sub = GetSubMenu(ex, 0);
+        c.ok(!ex_sub.is_null(), 0)?;
+        c.eq(GetMenuItemCount(ex_sub) as u64, 2)?;
+        c.eq(GetMenuItemID(ex_sub, 0).into(), 201)?;
+        c.eq(GetMenuItemID(ex_sub, 1).into(), 202)?;
+        c.eq(GetMenuItemID(ex, 1).into(), 203)?;
+        c.ok(DestroyMenu(ex) != 0, 0)?;
+        // A resource that is not there.
+        c.ok(LoadMenuW(instance, core::ptr::without_provenance(77)).is_null(), 0)?;
+
+        // InvalidateRgn invalidates, as InvalidateRect does with a
+        // rectangle; ValidateRect takes it back. This comes before
+        // LockWindowUpdate: unlocking a window invalidates all of it.
+        // What the update rectangle encloses is not checked: gala
+        // invalidates whole windows (ARCHITECTURE "Painting").
+        let region = CreateRectRgn(0, 0, 50, 50);
+        c.ok(!region.is_null(), 0)?;
+        c.ok(ValidateRect(parent, core::ptr::null()) != 0, 0)?;
+        let mut update = [0i32; 4];
+        c.ok(GetUpdateRect(parent, &mut update, 0) == 0, 0)?;
+        c.ok(InvalidateRgn(parent, region, 0) != 0, 0)?;
+        c.ok(GetUpdateRect(parent, &mut update, 0) != 0, 0)?;
+        c.ok(ValidateRect(parent, core::ptr::null()) != 0, 0)?;
+        c.ok(GetUpdateRect(parent, &mut update, 0) == 0, 0)?;
+        c.ok(DeleteObject(region) != 0, 0)?;
+
+        // LockWindowUpdate locks one window at a time; NULL unlocks.
+        c.ok(LockWindowUpdate(parent) != 0, GetLastError().into())?;
+        c.ok(LockWindowUpdate(edit) == 0, 0)?;
+        c.ok(LockWindowUpdate(null) != 0, 0)?;
+        c.ok(LockWindowUpdate(edit) != 0, 0)?;
+        c.ok(LockWindowUpdate(null) != 0, 0)?;
+
+        // RealChildWindowFromPoint finds the immediate child at a point
+        // in the parent's client coordinates; a point over no child is
+        // the parent itself.
+        c.ok(RealChildWindowFromPoint(parent, Point { x: 10, y: 10 }) == r1, 0)?;
+        c.ok(RealChildWindowFromPoint(parent, Point { x: 10, y: 30 }) == r2, 0)?;
+        c.ok(RealChildWindowFromPoint(parent, Point { x: 200, y: 100 }) == parent, 0)?;
+
+        // IsCharLowerW.
+        c.ok(IsCharLowerW(0x0061) != 0, 0)?;
+        c.ok(IsCharLowerW(0x0041) == 0, 0)?;
+        c.ok(IsCharLowerW(0x0039) == 0, 0)?;
+        c.ok(IsCharLowerW(0x00e9) != 0, 0)?;
+        c.ok(IsCharLowerW(0x00c9) == 0, 0)?;
+
+        // Tabbed text, in a memory device context of the screen's depth.
+        let screen = GetDC(null);
+        let dc = CreateCompatibleDC(screen);
+        let bitmap = CreateCompatibleBitmap(screen, 300, 60);
+        c.ok(!dc.is_null() && !bitmap.is_null(), 0)?;
+        SelectObject(dc, bitmap);
+        ReleaseDC(null, screen);
+        let plain = w("abcd");
+        let mut size = [0i32; 2];
+        c.ok(GetTextExtentPoint32W(dc, plain.as_ptr(), 4, &mut size) != 0, 0)?;
+        // Text without a tab measures as it does without tab stops.
+        let extent = GetTabbedTextExtentW(dc, plain.as_ptr(), 4, 0, core::ptr::null());
+        c.eq((extent & 0xffff).into(), size[0] as u64)?;
+        c.eq((extent >> 16).into(), size[1] as u64)?;
+        // With a tab stop at 100, what follows the tab starts there.
+        let mut tabbed = w("ab?cd");
+        tabbed[2] = 9;
+        let tail = w("cd");
+        let mut tail_size = [0i32; 2];
+        c.ok(GetTextExtentPoint32W(dc, tail.as_ptr(), 2, &mut tail_size) != 0, 0)?;
+        let stops = [100i32];
+        let tabbed_extent = GetTabbedTextExtentW(dc, tabbed.as_ptr(), 5, 1, stops.as_ptr());
+        c.eq((tabbed_extent & 0xffff).into(), (100 + tail_size[0]) as u64)?;
+        c.eq((tabbed_extent >> 16).into(), size[1] as u64)?;
+        // TabbedTextOutW draws it and answers the same extent.
+        c.ok(PatBlt(dc, 0, 0, 300, 60, WHITENESS) != 0, 0)?;
+        let drawn = TabbedTextOutW(dc, 0, 0, tabbed.as_ptr(), 5, 1, stops.as_ptr(), 0);
+        c.eq(drawn as u32 as u64, tabbed_extent.into())?;
+        let painted = |x0: i32, x1: i32| {
+            let mut any = false;
+            for x in x0..x1 {
+                for y in 0..size[1] {
+                    any |= GetPixel(dc, x, y) != WHITE;
+                }
+            }
+            any
+        };
+        c.ok(painted(100, 100 + tail_size[0]), 0)?;
+
+        // GrayStringW draws the text grayed with the current font when it
+        // is given no drawing function of its own.
+        c.ok(PatBlt(dc, 0, 0, 300, 60, WHITENESS) != 0, 0)?;
+        c.ok(
+            GrayStringW(dc, null, core::ptr::null_mut(), plain.as_ptr() as isize, 4, 0, 0, 0, 0)
+                != 0,
+            GetLastError().into(),
+        )?;
+        c.ok(painted(0, size[0]), 0)?;
+        // With an output function of its own, GrayString calls that
+        // instead of drawing the text itself.
+        c.ok(PatBlt(dc, 0, 0, 300, 60, WHITENESS) != 0, 0)?;
+        DREW.store(0, Ordering::Relaxed);
+        c.ok(
+            GrayStringW(dc, null, gray_out as *mut c_void, plain.as_ptr() as isize, 4, 0, 0, 0, 0)
+                != 0,
+            GetLastError().into(),
+        )?;
+        c.eq(DREW.load(Ordering::Relaxed).into(), 4)?;
+        c.ok(DeleteDC(dc) != 0, 0)?;
+        c.ok(DeleteObject(bitmap) != 0, 0)?;
+
+        // The window's context help id, as MFC keeps it for F1.
+        c.ok(SetWindowContextHelpId(parent, 4242) != 0, 0)?;
+        c.eq(GetWindowContextHelpId(parent).into(), 4242)?;
+        c.eq(GetWindowContextHelpId(edit).into(), 0)?;
+
+        // The DDE packing helpers: a packed lParam carries two values,
+        // and ReuseDDElParam gives the same storage to the answer.
+        let packed = PackDDElParam(WM_DDE_ACK, 0x1111, 0x2222);
+        let (mut low, mut high) = (0usize, 0usize);
+        c.ok(UnpackDDElParam(WM_DDE_ACK, packed, &mut low, &mut high) != 0, 0)?;
+        c.eq(low as u64, 0x1111)?;
+        c.eq(high as u64, 0x2222)?;
+        let reused = ReuseDDElParam(packed, WM_DDE_ACK, WM_DDE_DATA, 0x3333, 0x4444);
+        c.ok(UnpackDDElParam(WM_DDE_DATA, reused, &mut low, &mut high) != 0, 0)?;
+        c.eq(low as u64, 0x3333)?;
+        c.eq(high as u64, 0x4444)?;
+        c.ok(FreeDDElParam(WM_DDE_DATA, reused) != 0, 0)?;
+        // WM_DDE_POKE is packed as well.
+        let poked = PackDDElParam(WM_DDE_POKE, 0x7777, 0x8888);
+        c.ok(UnpackDDElParam(WM_DDE_POKE, poked, &mut low, &mut high) != 0, 0)?;
+        c.eq(low as u64, 0x7777)?;
+        c.eq(high as u64, 0x8888)?;
+        c.ok(FreeDDElParam(WM_DDE_POKE, poked) != 0, 0)?;
+        // WM_DDE_EXECUTE carries one handle: the packed lParam is the
+        // high half alone.
+        let executed = PackDDElParam(WM_DDE_EXECUTE, 0x1111, 0x2222);
+        c.eq(executed as u32 as u64, 0x2222)?;
+        c.ok(UnpackDDElParam(WM_DDE_EXECUTE, executed, &mut low, &mut high) != 0, 0)?;
+        c.eq(low as u64, 0)?;
+        c.eq(high as u64, 0x2222)?;
+        // A message that carries no packed parameter: the halves of the
+        // lParam itself.
+        c.ok(UnpackDDElParam(WM_DDE_INITIATE, 0x5555_6666, &mut low, &mut high) != 0, 0)?;
+        c.eq(low as u64, 0x6666)?;
+        c.eq(high as u64, 0x5555)?;
+
+        // WinHelpW: with no help window of this process started, quitting
+        // help is nothing to do and shows nothing.
+        c.ok(WinHelpW(parent, core::ptr::null(), HELP_QUIT, 0) != 0, GetLastError().into())?;
+
+        c.ok(DestroyWindow(parent) != 0, 0)?;
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), u32> {
     let mut c = Checks(0);
     inno_startup(&mut c)?;
@@ -1474,7 +2037,8 @@ fn run() -> Result<(), u32> {
     shell(&mut c)?;
     shell_execute(&mut c)?;
     version(&mut c)?;
-    resources(&mut c)
+    resources(&mut c)?;
+    mfc(&mut c)
 }
 
 #[unsafe(no_mangle)]

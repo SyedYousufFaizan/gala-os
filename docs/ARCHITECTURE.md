@@ -8047,12 +8047,29 @@ SetCurrentProcessExplicitAppUserModelID) and `controls_test`.
   (recorded).
 - Hit testing and update areas: WindowFromPoint (the topmost visible
   top-level window at the point, then its topmost visible child,
-  recursively), GetUpdateRgn/GetUpdateRect (the client area while
-  invalid: gala invalidates whole windows); RedrawWindow over
+  recursively), RealChildWindowFromPoint (one level down, hidden and
+  disabled children included, the parent itself for a point over none),
+  GetUpdateRgn/GetUpdateRect (the client area while invalid: gala
+  invalidates whole windows); RedrawWindow and InvalidateRgn over
   InvalidateRect/ValidateRect/UpdateWindow (whole windows; regions and
   rectangles are not kept). ScrollWindow/ScrollWindowEx move the
   children (no rectangle / SW_SCROLLCHILDREN) and repaint the client
   area.
+- LockWindowUpdate holds one window at a time (NULL unlocks it, locking
+  a second window while one is locked fails) and invalidates the window
+  it unlocks, which is what makes held-back drawing appear. gala does
+  not hold the drawing back: what a program draws into a locked window
+  is shown, so a program locking a window against flicker still
+  flickers. Set/GetWindowContextHelpId keep the id per window.
+- The DDE packing helpers (`dde.rs`): WM_DDE_ACK, WM_DDE_ADVISE,
+  WM_DDE_DATA and WM_DDE_POKE carry two values in one lParam, as an
+  object in a table of 256 (PackDDElParam, UnpackDDElParam,
+  ReuseDDElParam reusing the object in place, FreeDDElParam);
+  WM_DDE_EXECUTE's lParam is the data handle alone and the other
+  messages carry the two halves of the lParam, as Windows answers
+  (`win32_misc_test`). An lParam that is no object of gala's reads as
+  those halves, so a parameter a program packed itself unpacks too. The
+  DDE messages themselves are the programs' own.
 - Deferred positioning: HDWP 0x2000 + 16 * list, eight lists of 256;
   EndDeferWindowPos applies them in order with SetWindowPos.
 - Not yet: WS_CLIPCHILDREN/CLIPSIBLINGS (overlapping siblings paint in
@@ -8160,11 +8177,25 @@ SetCurrentProcessExplicitAppUserModelID) and `controls_test`.
   bitmap), with the documented results of Append/Insert/Modify/Remove/
   DeleteMenu, Enable/Check(Radio)MenuItem (the previous state, -1 when
   absent), Get/SetMenuItemInfoW, GetMenuState, GetMenuStringW,
-  GetSubMenu, Set/GetMenuInfo (MENUINFO, MIM_APPLYTOSUBMENUS);
+  GetSubMenu, Set/GetMenuInfo (MENUINFO, MIM_APPLYTOSUBMENUS),
+  Set/GetMenuDefaultItem (the default by position or command, -1 when it
+  is disabled unless GMDI_USEDISABLED, a popup's submenu handle as its
+  command and GMDI_GOINTOPOPUPS going into it),
+  GetMenuCheckMarkDimensions (SM_CXMENUCHECK by SM_CYMENUCHECK, 15 x 15);
   MF_BYCOMMAND searches submenus; DeleteMenu and DestroyMenu destroy
-  submenus. SetMenu/GetMenu and GetSystemMenu (Restore, Move, Size,
-  Minimize, Maximize, Close) per window, destroyed with it (also
-  CreateWindowEx's hMenu for a top-level window).
+  submenus. SetMenuItemBitmaps' bitmaps are kept per item (MIIM_CHECKMARKS
+  reads them back) but **not drawn**: `track` draws its own check mark,
+  and a program setting bitmaps of its own is recorded in the ledger. SetMenu/GetMenu and
+  GetSystemMenu (Restore, Move, Size, Minimize, Maximize, Close) per
+  window, destroyed with it (also CreateWindowEx's hMenu for a top-level
+  window).
+- **From a resource** (`menu.rs`): LoadMenuW reads an RT_MENU template of
+  either version into a menu -- version 0 (flags, id and text per item,
+  MF_END ending a list) and version 1, MENUEX (type, state, id and flags,
+  each item on a DWORD boundary, a popup's help id after its text) --
+  with submenus up to eight deep and 64 items each; what MENUEX adds
+  beyond the MF_ flags (an item's own help id) is dropped. A template
+  gala cannot read leaves no menu and is recorded.
 - **The menu bar** (`track.rs`): a top-level window with a menu has a
   bar of MENU_BAR (20, SM_CYMENU) rows between the desktop's caption and
   its client area. Its buffer holds the bar's rows first (`Window::bar`;
@@ -8261,6 +8292,17 @@ allocator (`gala_heap`).
   ERROR_MESSAGE_SYNC_ONLY.
 - **DrawTextW** (`text.rs`) splits, wraps, ellipsizes and aligns lines
   over gdi32's ExtTextOutW (1024 characters at most).
+- **Tabbed text and GrayStringW** (`tabbed.rs`), over gdi32's TextOutW
+  and GetTextExtentPoint32W: GetTabbedTextExtentW and TabbedTextOutW
+  expand the tabs to the stops measured from the tab origin (none: every
+  eighth average character width; one: its multiples; several: the stops
+  given, and the default width past the last) and answer the width and
+  height in one DWORD. Negative stops (right-aligned text) are taken as
+  distances, and the text is drawn from its left edge whatever
+  SetTextAlign asked for. GrayStringW draws the text in COLOR_GRAYTEXT
+  instead of Windows' half-tone pattern over a bitmap of it, and gives
+  an output function of the caller's the device context itself (not a
+  bitmap of its own), so what that function draws is where it puts it.
 
 #### Dialogs
 
@@ -8279,6 +8321,16 @@ allocator (`gala_heap`).
   DWLP_MSGRESULT/DLGPROC/USER (0 and one and two pointers on: 8 and 16
   on x64, 4 and 8 on x86) live in the dialog table; a dialog class's
   other extra bytes are the window's. EndDialog hides a modeless dialog.
+- The dialog's items (`tree.rs`): GetDlgItem and GetDlgCtrlID,
+  Get/SetDlgItemTextW and Get/SetDlgItemInt, SendDlgItemMessageA/W,
+  CheckDlgButton, CheckRadioButton and IsDlgButtonChecked (BM_SETCHECK
+  and BM_GETCHECK on the control), GetNextDlgTabItem (WS_TABSTOP) and
+  GetNextDlgGroupItem (the children between the WS_GROUP that starts the
+  group and the next one, wrapping inside it, hidden and disabled ones
+  skipped). GetDlgItemInt reads the number the text starts with after
+  any leading spaces, as Windows does: the digits read are the result
+  either way, and `lpTranslated` is TRUE only when the whole text was
+  that number and it fits (0 and FALSE when it does not).
 - IsDialogMessageW: Tab/Shift+Tab between WS_TABSTOP children via
   GetNextDlgTabItem, Enter: DM_GETDEFID's button or IDOK, Esc: IDCANCEL,
   unless WM_GETDLGCODE asks for the key; the dialog's other messages are

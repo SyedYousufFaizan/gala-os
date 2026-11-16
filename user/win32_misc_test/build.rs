@@ -129,6 +129,66 @@ fn message_table() -> Vec<u8> {
     out
 }
 
+/// One MENUITEMTEMPLATE: its option flags, the id of a command item (a
+/// popup has none) and its title.
+fn menu_item(out: &mut Vec<u8>, option: u16, id: Option<u16>, title: &str) {
+    out.extend_from_slice(&option.to_le_bytes());
+    if let Some(id) = id {
+        out.extend_from_slice(&id.to_le_bytes());
+    }
+    for c in title.encode_utf16().chain([0]) {
+        out.extend_from_slice(&c.to_le_bytes());
+    }
+}
+
+/// An RT_MENU resource (a MENUITEMTEMPLATEHEADER and the items after it,
+/// "Resource File Formats"): a "&File" popup holding "&New" (101) and
+/// "&Open" (102, MF_END ends the popup), then "&Help" (103, MF_END ends
+/// the menu). What LoadMenuW makes of it is checked in main.rs.
+fn menu() -> Vec<u8> {
+    let mut out = vec![0u8; 4]; // versionNumber 0, offset 0
+    menu_item(&mut out, 0x0010, None, "&File"); // MF_POPUP
+    menu_item(&mut out, 0x0000, Some(101), "&New");
+    menu_item(&mut out, 0x0080, Some(102), "&Open"); // MF_END
+    menu_item(&mut out, 0x0080, Some(103), "&Help"); // MF_END
+    out
+}
+
+/// One MENUEX_TEMPLATE_ITEM: the items start on a DWORD boundary, and a
+/// popup has a help id after its text and then its own items.
+fn menuex_item(out: &mut Vec<u8>, id: u32, flags: u16, title: &str) {
+    while !out.len().is_multiple_of(4) {
+        out.push(0);
+    }
+    out.extend_from_slice(&0u32.to_le_bytes()); // dwType
+    out.extend_from_slice(&0u32.to_le_bytes()); // dwState
+    out.extend_from_slice(&id.to_le_bytes());
+    out.extend_from_slice(&flags.to_le_bytes());
+    for c in title.encode_utf16().chain([0]) {
+        out.extend_from_slice(&c.to_le_bytes());
+    }
+    if flags & 0x01 != 0 {
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+        out.extend_from_slice(&0u32.to_le_bytes()); // the popup help id
+    }
+}
+
+/// A MENUEX template: an "&Edit" popup holding "&Cut" (201) and "&Copy"
+/// (202), then "&View" (203). MFR_POPUP is 0x01 and MFR_END 0x80.
+fn menuex() -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&1u16.to_le_bytes()); // wVersion
+    out.extend_from_slice(&4u16.to_le_bytes()); // wOffset
+    out.extend_from_slice(&0u32.to_le_bytes()); // dwHelpId
+    menuex_item(&mut out, 0, 0x01, "&Edit");
+    menuex_item(&mut out, 201, 0x00, "&Cut");
+    menuex_item(&mut out, 202, 0x80, "&Copy");
+    menuex_item(&mut out, 203, 0x80, "&View");
+    out
+}
+
 fn main() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let mut res = Vec::new();
@@ -137,6 +197,8 @@ fn main() {
     entry(&mut res, Id::Num(16), Id::Num(1), &version()); // RT_VERSION
     entry(&mut res, Id::Num(10), Id::Text("GALADATA"), b"hello resource"); // RT_RCDATA
     entry(&mut res, Id::Num(11), Id::Num(1), &message_table()); // RT_MESSAGETABLE
+    entry(&mut res, Id::Num(4), Id::Num(2), &menu()); // RT_MENU
+    entry(&mut res, Id::Num(4), Id::Num(3), &menuex()); // RT_MENU, MENUEX
     let path = format!("{out_dir}/resources.res");
     std::fs::write(&path, res).unwrap();
     println!("cargo:rerun-if-changed=build.rs");

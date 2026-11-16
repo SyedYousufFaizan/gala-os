@@ -53,11 +53,24 @@ struct Item {
     submenu: usize,
     data: usize,
     bitmap: usize,
+    /// SetMenuItemBitmaps' bitmaps, drawn where the check mark goes
+    /// (0: the check mark itself).
+    checked: usize,
+    unchecked: usize,
     text: [u16; TEXT],
 }
 
-const NO_ITEM: Item =
-    Item { id: 0, kind: 0, state: 0, submenu: 0, data: 0, bitmap: 0, text: [0; TEXT] };
+const NO_ITEM: Item = Item {
+    id: 0,
+    kind: 0,
+    state: 0,
+    submenu: 0,
+    data: 0,
+    bitmap: 0,
+    checked: 0,
+    unchecked: 0,
+    text: [0; TEXT],
+};
 
 struct Menu {
     popup: bool,
@@ -233,6 +246,8 @@ fn item_of(flags: u32, id: usize, text: *const u16) -> Item {
         submenu: if popup { id } else { 0 },
         data: 0,
         bitmap: if flags & MF_BITMAP != 0 { text as usize } else { 0 },
+        checked: 0,
+        unchecked: 0,
         text: if kind & (MF_BITMAP | MF_OWNERDRAW | MF_SEPARATOR) == 0 {
             text_of(text)
         } else {
@@ -484,6 +499,7 @@ const MIIM_SUBMENU: u32 = 0x4;
 const MIIM_TYPE: u32 = 0x10;
 const MIIM_DATA: u32 = 0x20;
 const MIIM_STRING: u32 = 0x40;
+const MIIM_CHECKMARKS: u32 = 0x8;
 const MIIM_BITMAP: u32 = 0x80;
 const MIIM_FTYPE: u32 = 0x100;
 
@@ -506,6 +522,10 @@ fn apply(item: &mut Item, m: &MenuItemInfoW) {
     }
     if m.mask & MIIM_BITMAP != 0 {
         item.bitmap = m.bitmap;
+    }
+    if m.mask & MIIM_CHECKMARKS != 0 {
+        item.checked = m.checked;
+        item.unchecked = m.unchecked;
     }
     let string = m.mask & MIIM_STRING != 0
         || (m.mask & MIIM_TYPE != 0 && m.kind & (MF_BITMAP | MF_OWNERDRAW | MF_SEPARATOR) == 0);
@@ -598,6 +618,10 @@ pub extern "system" fn GetMenuItemInfoW(
     if m.mask & MIIM_BITMAP != 0 {
         m.bitmap = item.bitmap;
     }
+    if m.mask & MIIM_CHECKMARKS != 0 {
+        m.checked = item.checked;
+        m.unchecked = item.unchecked;
+    }
     if m.mask & (MIIM_STRING | MIIM_TYPE) != 0 {
         let len = text_len(&item.text);
         if !m.type_data.is_null() && m.cch > 0 {
@@ -627,6 +651,269 @@ pub extern "system" fn SetMenuDefaultItem(h: usize, which: u32, by_position: u32
             }
         }
         1
+    })
+}
+
+/// GetMenuCheckMarkDimensions: the size of a menu item's check mark, the
+/// width in the low word and the height in the high one (SM_CXMENUCHECK
+/// and SM_CYMENUCHECK).
+#[unsafe(no_mangle)]
+pub extern "system" fn GetMenuCheckMarkDimensions() -> i32 {
+    let (cx, cy) = (crate::window::GetSystemMetrics(71), crate::window::GetSystemMetrics(72));
+    (((cy as u32) << 16) | (cx as u32 & 0xffff)) as i32
+}
+
+const GMDI_USEDISABLED: u32 = 0x0001;
+const GMDI_GOINTOPOPUPS: u32 = 0x0002;
+/// What the menu functions answer for "no item".
+const NONE: u32 = u32::MAX;
+
+/// The item SetMenuDefaultItem marked, by position or by command.
+fn default_item(s: &mut State, h: usize, by_position: u32, flags: u32) -> u32 {
+    let Some(menu) = s.menu(h) else { return NONE };
+    let count = menu.count;
+    let Some(k) = menu.items.iter().take(count).position(|i| i.state & MF_DEFAULT != 0) else {
+        return NONE;
+    };
+    let item = menu.items[k];
+    if item.state & (MF_GRAYED | MF_DISABLED) != 0 && flags & GMDI_USEDISABLED == 0 {
+        return NONE;
+    }
+    if item.submenu != 0 {
+        // GMDI_GOINTOPOPUPS asks for the default of the popup's submenu
+        // instead; without it, a popup has no command of its own and
+        // Windows answers with the submenu's handle.
+        if flags & GMDI_GOINTOPOPUPS != 0 {
+            let inner = default_item(s, item.submenu, by_position, flags);
+            if inner != NONE {
+                return inner;
+            }
+        }
+        return if by_position != 0 { k as u32 } else { item.submenu as u32 };
+    }
+    if by_position != 0 { k as u32 } else { item.id }
+}
+
+/// GetMenuDefaultItem: the default item's position (`by_position`) or
+/// command; -1 when the menu has none, or when the default is disabled
+/// and GMDI_USEDISABLED was not given.
+#[unsafe(no_mangle)]
+pub extern "system" fn GetMenuDefaultItem(h: usize, by_position: u32, flags: u32) -> u32 {
+    with(|s| default_item(s, h, by_position, flags))
+}
+
+/// SetMenuItemBitmaps: the bitmaps drawn where the item's check mark
+/// goes, unchecked and checked (NULL for either puts the check mark
+/// back). The item keeps them (MIIM_CHECKMARKS); `track` draws the check
+/// mark, not the bitmaps, which is what the ledger records here.
+#[unsafe(no_mangle)]
+pub extern "system" fn SetMenuItemBitmaps(
+    h: usize,
+    which: u32,
+    flags: u32,
+    unchecked: usize,
+    checked: usize,
+) -> i32 {
+    if unchecked != 0 || checked != 0 {
+        crate::record(b"user32.dll!SetMenuItemBitmaps(not drawn)", which.into());
+    }
+    with(|s| {
+        let Some(at) = s.find(h, which, flags & MF_BYPOSITION != 0) else { return 0 };
+        let Some(item) = s.item(at) else { return 0 };
+        item.unchecked = unchecked;
+        item.checked = checked;
+        1
+    })
+}
+
+// ---- Menus from RT_MENU resources ----
+
+/// Reads a menu template.
+struct Reader {
+    at: *const u8,
+    /// The resource's first byte: MENUEX items start on a DWORD boundary
+    /// from it.
+    base: *const u8,
+}
+
+impl Reader {
+    /// # Safety
+    /// The template holds the bytes read, which a well-formed one does
+    /// up to the item that ends the outermost list.
+    unsafe fn u16(&mut self) -> u16 {
+        // SAFETY: the caller's promise.
+        let v = unsafe { self.at.cast::<u16>().read_unaligned() };
+        self.at = self.at.wrapping_add(2);
+        v
+    }
+
+    /// # Safety
+    /// As `u16`.
+    unsafe fn u32(&mut self) -> u32 {
+        // SAFETY: the caller's promise.
+        let v = unsafe { self.at.cast::<u32>().read_unaligned() };
+        self.at = self.at.wrapping_add(4);
+        v
+    }
+
+    /// The NUL-terminated string at the cursor (truncated to what an
+    /// item holds), the cursor left after its NUL.
+    ///
+    /// # Safety
+    /// As `u16`.
+    unsafe fn text(&mut self) -> [u16; TEXT] {
+        let mut out = [0u16; TEXT];
+        let mut k = 0;
+        loop {
+            // SAFETY: the caller's promise.
+            let c = unsafe { self.u16() };
+            if c == 0 {
+                return out;
+            }
+            if k < TEXT - 1 {
+                out[k] = c;
+                k += 1;
+            }
+        }
+    }
+
+    /// To the next DWORD boundary from the resource's start.
+    fn align(&mut self) {
+        let off = self.at as usize - self.base as usize;
+        self.at = self.at.wrapping_add((4 - off % 4) % 4);
+    }
+}
+
+/// MF_END in a template (MF_HILITE's bit, which a template does not
+/// carry).
+const MF_END: u32 = 0x80;
+/// MFR_POPUP and MFR_END in a MENUEX item.
+const MFR_POPUP: u16 = 0x01;
+const MFR_END: u16 = 0x80;
+/// How deep submenus are read.
+const MAX_DEPTH: u32 = 8;
+
+/// Reads the items of one menu (and its submenus) into `h`, version 0
+/// items when `ex` is false and MENUEX items when it is. Answers whether
+/// the template was well-formed as far as it was read.
+///
+/// # Safety
+/// `r` is on the first item of a template of that version.
+unsafe fn read_items(s: &mut State, r: &mut Reader, h: usize, ex: bool, depth: u32) -> bool {
+    if depth > MAX_DEPTH {
+        crate::record(b"user32.dll!LoadMenuW(nesting)", depth.into());
+        return false;
+    }
+    for _ in 0..MAX_ITEMS {
+        // SAFETY: the caller's promise.
+        let (flags, id, last) = unsafe {
+            if ex {
+                r.align();
+                let kind = r.u32();
+                let state = r.u32();
+                let id = r.u32() as usize;
+                let info = r.u16();
+                let mut flags = (kind & TYPE_FLAGS) | (state & STATE_FLAGS);
+                if info & MFR_POPUP != 0 {
+                    flags |= MF_POPUP;
+                }
+                (flags, id, info & MFR_END != 0)
+            } else {
+                let option = u32::from(r.u16());
+                let id = if option & MF_POPUP != 0 { 0 } else { usize::from(r.u16()) };
+                (option & !MF_END, id, option & MF_END != 0)
+            }
+        };
+        // SAFETY: the caller's promise.
+        let text = unsafe { r.text() };
+        let mut item = item_of(flags & !MF_POPUP, id, text.as_ptr());
+        if flags & MF_POPUP != 0 {
+            if ex {
+                r.align();
+                // SAFETY: the caller's promise: a popup's help id.
+                unsafe { r.u32() };
+            }
+            let sub = s.create(true);
+            // SAFETY: the caller's promise; the submenu's items follow.
+            if sub == 0 || !unsafe { read_items(s, r, sub, ex, depth + 1) } {
+                return false;
+            }
+            item.submenu = sub;
+            item.id = 0;
+        }
+        if !s.insert(h, MAX_ITEMS, item) {
+            return false;
+        }
+        if last {
+            return true;
+        }
+    }
+    crate::record(b"user32.dll!LoadMenuW(items)", MAX_ITEMS as u64);
+    false
+}
+
+#[cfg_attr(
+    target_arch = "x86",
+    link(name = "kernel32", kind = "raw-dylib", import_name_type = "undecorated")
+)]
+#[cfg_attr(not(target_arch = "x86"), link(name = "kernel32", kind = "raw-dylib"))]
+unsafe extern "system" {
+    fn FindResourceW(module: usize, name: usize, kind: usize) -> usize;
+    fn LoadResource(module: usize, res: usize) -> *const u16;
+}
+
+/// LoadMenuW: the menu of the module's RT_MENU resource `name` (an
+/// integer id in the low word, or a string); NULL when the module has no
+/// such resource, or when its template is not one gala can read (the
+/// ledger says which). Both template versions are read: version 0
+/// (flags, id and text per item) and version 1 (MENUEX: type, state, id
+/// and flags, each item on a DWORD boundary and a popup's help id after
+/// its text). What MENUEX adds beyond the MF_ flags (an item's own help
+/// id) is dropped.
+#[unsafe(no_mangle)]
+pub extern "system" fn LoadMenuW(instance: usize, name: *const u16) -> usize {
+    const RT_MENU: usize = 4;
+    // SAFETY: plain calls on the caller's module and resource name.
+    let data = unsafe {
+        let res = FindResourceW(instance, name as usize, RT_MENU);
+        if res == 0 {
+            return 0;
+        }
+        LoadResource(instance, res).cast::<u8>()
+    };
+    if data.is_null() {
+        return 0;
+    }
+    with(|s| {
+        let h = s.create(false);
+        if h == 0 {
+            return 0;
+        }
+        let mut r = Reader { at: data, base: data };
+        // SAFETY: the module's own resource, read as its version says.
+        let ok = unsafe {
+            let version = r.u16();
+            let offset = r.u16();
+            match version {
+                0 => {
+                    r.at = data.wrapping_add(4 + usize::from(offset));
+                    read_items(s, &mut r, h, false, 0)
+                }
+                1 => {
+                    r.at = data.wrapping_add(4 + usize::from(offset));
+                    read_items(s, &mut r, h, true, 0)
+                }
+                _ => {
+                    crate::record(b"user32.dll!LoadMenuW(version)", version.into());
+                    false
+                }
+            }
+        };
+        if !ok {
+            s.destroy(h);
+            return 0;
+        }
+        h
     })
 }
 

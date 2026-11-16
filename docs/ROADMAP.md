@@ -1687,10 +1687,14 @@ need gala's.
    AppV ISV shim's optional hooks (`EnsureFile`, `LoadRange`,
    `StreamFault`, `HandleLoadIconW`, ...), and the real `C2R64.dll` the
    ClickToRun directory holds exports none of the 25 either (101
-   exports, measured), so the same probes miss on Windows. A DLL that
-   is found and will not load is named in the ledger now (`what` "load
-   failed", its status the detail), so the next run names the DLL the
-   death is about. Two things, both next:
+   exports, measured), so the same probes miss on Windows. The ledger
+   names the DLL the death is about (`what` "load failed", its status
+   the detail): `appvisvsubsystems64.dll`, status 0xc0000142, recorded
+   last of all in the seconds before Word exits with that same status.
+   Out of gala's loader that status means the image was found, mapped
+   and bound and its DllMain answered FALSE: the AppV ISV shim itself
+   saying no. Word's run leaves no user32 gap in the ledger any more.
+   Two things, both next:
    - Under the Office root Windows has 16 reparse points (`C2R32.dll`,
      `C2R64.dll`, `AppvIsvSubsystems32.dll`, `AppvIsvSubsystems64.dll`,
      each in `\Client`, `\Office16`,
@@ -1703,21 +1707,43 @@ need gala's.
      the integration step that fails (`ConfigureMSIs`, "Final
      Extensions Publishing", 1603 and Integrator 0x643 below), which
      waits on PK's MSI engine.
-   - 21 of the 247 user32 functions `mfc140u.dll` imports are not
-     among gala's user32 exports: CheckRadioButton, GetDlgItemInt,
-     GetMenuCheckMarkDimensions, GetMenuDefaultItem,
-     GetNextDlgGroupItem, GetTabbedTextExtentW, GrayStringW,
-     InvalidateRgn, IsCharLowerW, IsDlgButtonChecked, LoadMenuW,
-     LockWindowUpdate, RealChildWindowFromPoint, ReuseDDElParam,
-     SendDlgItemMessageA, SetDlgItemInt, SetMenuItemBitmaps,
-     SetWindowContextHelpId, TabbedTextOutW, UnpackDDElParam and
-     WinHelpW. They are static imports, so none of them binds and
-     Office's MFC DLL does not load at all;
-     `GetMenuCheckMarkDimensions` is the last gap the ledger records
-     before Word dies. Test first, with Windows' results (measured:
-     `GetMenuCheckMarkDimensions` answers 0x000f000f, the check mark's
-     15 x 15, where gala's `GetSystemMetrics` answers 0 for
-     SM_CXMENUCHECK and SM_CYMENUCHECK).
+   - What `appvisvsubsystems64.dll`'s DllMain needs before it answers
+     TRUE. The 24 user32 functions `mfc140u.dll` imports statically
+     that gala lacked are exported now, Windows' results measured first
+     (`win32_misc_test`'s `mfc` section, 158 checks): the dialog-item
+     helpers (CheckRadioButton, IsDlgButtonChecked, Get/SetDlgItemInt,
+     SendDlgItemMessageA, GetNextDlgGroupItem), the menu functions
+     (GetMenuCheckMarkDimensions, GetMenuDefaultItem,
+     SetMenuItemBitmaps and LoadMenuW, which reads a template of
+     either version), LockWindowUpdate, RealChildWindowFromPoint,
+     InvalidateRgn, IsCharLowerW, GetTabbedTextExtentW, TabbedTextOutW,
+     GrayStringW, Set/GetWindowContextHelpId, the four DDE lParam
+     helpers and WinHelpW; what they approximate is in ARCHITECTURE
+     ("Menus", "Dialogs", "Controls" and the painting bullets) -- a
+     locked window's drawing is not held back, an item's check-mark
+     bitmaps are kept but not drawn, GrayStringW grays by colour, and
+     WinHelpW answers only HELP_QUIT. Of the 247, nine are `gala_stubs`
+     stubs, which bind (so MFC loads) and end the process when called:
+     ChildWindowFromPoint, CopyImage, DefFrameProcW, DefMDIChildProcW,
+     DrawStateW, GetDCEx, GetKeyNameTextW, HideCaret and
+     TranslateMDISysAccel. None is reached yet, and neither is
+     ChildWindowFromPointEx, which user32 does not export at all.
+     What the shim's DllMain does instead, with the kernel's `trace`
+     flag on (every system call logged): 171 NtCreateFile calls that
+     end 0xc0000034 (STATUS_OBJECT_NAME_NOT_FOUND), each raising
+     `rpcrt4.dll!NdrClientCall2` 1722 (RPC_S_SERVER_UNAVAILABLE) into
+     the ledger and retried after a wait, then a registry value read
+     and FALSE. There is no endpoint to open, and the service's own log
+     says why (`C2R::Orchestration::Initialize` in the dump):
+     `OISVAPI::Initialize Failed: [AppV Error: Code(0xc804525-0x7e)
+     ... File(swrpcserver.cpp : 552)], Error:0x7e`, error 126
+     (ERROR_MOD_NOT_FOUND) -- the AppV ISV API the service initializes
+     is the *server* side of that RPC, and it never came up, so Word's
+     client has nothing to reach. Both ends are the next step,
+     the server first, and the ledger needs the endpoint it failed to
+     reach: gala's rpcrt4 turns ERROR_FILE_NOT_FOUND into
+     RPC_S_SERVER_UNAVAILABLE (`transport.rs`) without recording the
+     name, so nothing today says which endpoint is missing.
    - The UCRT (the owner's decision: gala's own; also the answer to
      PK's AIChat UCRT question): gala's own `ucrtbase.dll` (the `api-ms-win-crt-*` sets
      resolve to it), x64 and x86, msvcrt's source with the UCRT's own

@@ -14,6 +14,7 @@ mod accel;
 mod clipboard;
 mod combo;
 mod controls;
+mod dde;
 mod dialog;
 mod dpi;
 mod effects;
@@ -35,6 +36,7 @@ mod scroll;
 mod session;
 mod spi;
 mod surface;
+mod tabbed;
 mod text;
 mod timer;
 mod track;
@@ -201,6 +203,7 @@ pub extern "system" fn CharNextExA(_code_page: u16, s: *const u8, _flags: u32) -
 )]
 #[cfg_attr(not(target_arch = "x86"), link(name = "kernel32", kind = "raw-dylib"))]
 unsafe extern "system" {
+    fn GetStringTypeW(kind: u32, s: *const u16, n: i32, out: *mut u16) -> i32;
     fn LCMapStringW(lcid: u32, flags: u32, src: *const u16, n: i32, dst: *mut u16, m: i32) -> i32;
 }
 
@@ -248,6 +251,18 @@ pub extern "system" fn CharUpperW(s: *mut u16) -> *mut u16 {
     }
     map_case(s, wide_len(s), LCMAP_UPPERCASE);
     s
+}
+
+/// IsCharLowerW: whether the character is a lower-case letter
+/// (C1_LOWER of GetStringTypeW).
+#[unsafe(no_mangle)]
+pub extern "system" fn IsCharLowerW(c: u16) -> i32 {
+    const CT_CTYPE1: u32 = 1;
+    const C1_LOWER: u16 = 0x0002;
+    let mut kind = 0u16;
+    // SAFETY: one character in, one class out.
+    let ok = unsafe { GetStringTypeW(CT_CTYPE1, &c, 1, &mut kind) };
+    i32::from(ok != 0 && kind & C1_LOWER != 0)
 }
 
 /// CharLowerW: as CharUpperW, to lower case.

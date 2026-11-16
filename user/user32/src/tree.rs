@@ -1861,6 +1861,186 @@ pub extern "system" fn GetNextDlgTabItem(dlg: Hwnd, control: Hwnd, previous: i32
     stops[i]
 }
 
+/// CheckRadioButton: of the buttons from `first` to `last`, `check` is
+/// the one checked (BM_SETCHECK on each that the parent has).
+#[unsafe(no_mangle)]
+pub extern "system" fn CheckRadioButton(dialog: Hwnd, first: i32, last: i32, check: i32) -> i32 {
+    const BM_SETCHECK: u32 = 0x00f1;
+    for id in first..=last {
+        let c = GetDlgItem(dialog, id);
+        if c != 0 {
+            SendMessageW(c, BM_SETCHECK, usize::from(id == check), 0);
+        }
+    }
+    1
+}
+
+/// IsDlgButtonChecked: the control's BM_GETCHECK (BST_UNCHECKED 0,
+/// BST_CHECKED 1, BST_INDETERMINATE 2); 0 when the dialog has no such
+/// control.
+#[unsafe(no_mangle)]
+pub extern "system" fn IsDlgButtonChecked(dialog: Hwnd, id: i32) -> u32 {
+    const BM_GETCHECK: u32 = 0x00f0;
+    match GetDlgItem(dialog, id) {
+        0 => {
+            set_last_error(1421); // ERROR_CONTROL_ID_NOT_FOUND
+            0
+        }
+        c => SendMessageW(c, BM_GETCHECK, 0, 0) as u32,
+    }
+}
+
+/// The number a control's text starts with, after any leading spaces (a
+/// sign too when `signed`): its value, and whether the whole text was
+/// that number and fits. Windows gives the digits it read either way,
+/// so "12abc" is 12 and untranslated, while a number too large is 0.
+fn parse_int(text: &[u16], signed: bool) -> (u32, bool) {
+    let mut at = text.iter().position(|&c| c != u16::from(b' ')).unwrap_or(text.len());
+    let negative = signed && text.get(at) == Some(&u16::from(b'-'));
+    if negative || (signed && text.get(at) == Some(&u16::from(b'+'))) {
+        at += 1;
+    }
+    let first = at;
+    let mut value: u64 = 0;
+    while let Some(&c) = text.get(at) {
+        if !(u16::from(b'0')..=u16::from(b'9')).contains(&c) {
+            break;
+        }
+        value = value.saturating_mul(10).saturating_add(u64::from(c - u16::from(b'0')));
+        at += 1;
+    }
+    let limit: u64 = match (signed, negative) {
+        (false, _) => u32::MAX.into(),
+        (true, false) => i32::MAX as u64,
+        (true, true) => i32::MAX as u64 + 1,
+    };
+    if at == first || value > limit {
+        return (0, false);
+    }
+    let v = value as u32;
+    (if negative { v.wrapping_neg() } else { v }, at == text.len())
+}
+
+/// GetDlgItemInt: the number in the control's text; `translated` says
+/// whether the text was a number (`parse_int`). A control the dialog
+/// does not have gives 0, untranslated.
+#[unsafe(no_mangle)]
+pub extern "system" fn GetDlgItemInt(
+    dialog: Hwnd,
+    id: i32,
+    translated: *mut i32,
+    signed: i32,
+) -> u32 {
+    let mut buf = [0u16; 64];
+    let n = GetDlgItemTextW(dialog, id, buf.as_mut_ptr(), buf.len() as i32) as usize;
+    let (value, whole) = parse_int(&buf[..n.min(buf.len())], signed != 0);
+    if !translated.is_null() {
+        // SAFETY: the caller's BOOL.
+        unsafe { *translated = i32::from(whole) };
+    }
+    value
+}
+
+/// SetDlgItemInt: the number as the control's text (with a minus sign
+/// when `signed` and it is negative).
+#[unsafe(no_mangle)]
+pub extern "system" fn SetDlgItemInt(dialog: Hwnd, id: i32, value: u32, signed: i32) -> i32 {
+    let negative = signed != 0 && (value as i32) < 0;
+    let mut v = u64::from(if negative { (value as i32).unsigned_abs() } else { value });
+    let mut digits = [0u16; 10];
+    let mut k = 0;
+    loop {
+        digits[k] = u16::from(b'0') + (v % 10) as u16;
+        v /= 10;
+        k += 1;
+        if v == 0 {
+            break;
+        }
+    }
+    let mut text = [0u16; 12];
+    let mut n = 0;
+    if negative {
+        text[0] = u16::from(b'-');
+        n = 1;
+    }
+    for i in 0..k {
+        text[n + i] = digits[k - 1 - i];
+    }
+    SetDlgItemTextW(dialog, id, text.as_ptr())
+}
+
+/// SendDlgItemMessageA: SendMessageA to the dialog's control `id` (0
+/// when it has no such control).
+#[unsafe(no_mangle)]
+pub extern "system" fn SendDlgItemMessageA(
+    dialog: Hwnd,
+    id: i32,
+    msg: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    match GetDlgItem(dialog, id) {
+        0 => {
+            set_last_error(1421); // ERROR_CONTROL_ID_NOT_FOUND
+            0
+        }
+        c => crate::window::SendMessageA(c, msg, wparam, lparam),
+    }
+}
+
+/// The group `control` is in: the dialog's children from the last one
+/// before it with WS_GROUP up to (not including) the next one with
+/// WS_GROUP, and where `control` is among them.
+fn group(dlg: Hwnd, control: Hwnd) -> ([Hwnd; 128], usize, usize, Option<usize>) {
+    const WS_GROUP: u32 = 0x0002_0000;
+    let mut all = [0; 128];
+    let mut n = 0;
+    let mut c = GetWindow(dlg, 5); // GW_CHILD
+    while c != 0 && n < all.len() {
+        all[n] = c;
+        n += 1;
+        c = GetWindow(c, 2); // GW_HWNDNEXT
+    }
+    let in_group = |h: Hwnd| GetWindowLongW(h, -16) as u32 & WS_GROUP != 0;
+    let Some(at) = all[..n].iter().position(|&h| h == control) else {
+        return (all, 0, n, None);
+    };
+    let start = (0..=at).rev().find(|&i| in_group(all[i])).unwrap_or(0);
+    let end = (at + 1..n).find(|&i| in_group(all[i])).unwrap_or(n);
+    (all, start, end, Some(at))
+}
+
+/// GetNextDlgGroupItem: the control after (or before) `control` in its
+/// group, wrapping inside it and skipping the hidden and disabled ones;
+/// `control` itself when there is no other. Without a control of the
+/// dialog, the first (or last) of the dialog's children.
+#[unsafe(no_mangle)]
+pub extern "system" fn GetNextDlgGroupItem(dlg: Hwnd, control: Hwnd, previous: i32) -> Hwnd {
+    const WS_VISIBLE: u32 = 0x1000_0000;
+    const WS_DISABLED: u32 = 0x0800_0000;
+    let (all, start, end, at) = group(dlg, control);
+    let Some(at) = at else {
+        if end == 0 {
+            return control;
+        }
+        return if previous != 0 { all[end - 1] } else { all[0] };
+    };
+    let len = end - start;
+    let usable = |h: Hwnd| {
+        let s = GetWindowLongW(h, -16) as u32;
+        s & WS_VISIBLE != 0 && s & WS_DISABLED == 0
+    };
+    let mut k = at;
+    for _ in 0..len {
+        let step = if previous != 0 { len - 1 } else { 1 };
+        k = start + (k - start + step) % len;
+        if k != at && usable(all[k]) {
+            return all[k];
+        }
+    }
+    control
+}
+
 /// IsDialogMessageW(dlg, msg): the dialog's keyboard: Tab (Shift+Tab)
 /// moves the focus between its WS_TABSTOP controls, Enter sends IDOK and
 /// Esc IDCANCEL (unless the focused control wants the key, by
@@ -1977,4 +2157,36 @@ pub extern "system" fn WindowFromPoint(point: Point) -> Hwnd {
         }
     })
     .unwrap_or(0)
+}
+
+/// RealChildWindowFromPoint: the child of `parent` at a point in its
+/// client coordinates (the topmost where they overlap), `parent` itself
+/// when no child is there, and NULL when the point is outside its client
+/// area. Unlike WindowFromPoint it looks one level down only, and unlike
+/// ChildWindowFromPointEx it does not skip hidden or disabled children.
+#[unsafe(no_mangle)]
+pub extern "system" fn RealChildWindowFromPoint(parent: Hwnd, point: Point) -> Hwnd {
+    let Point { x, y } = point;
+    let Some(p) = window(parent) else { return 0 };
+    if x < 0 || y < 0 || x >= p.cw || y >= p.ch {
+        return 0;
+    }
+    with(|s| {
+        let mut best: Option<usize> = None;
+        for i in 0..s.windows.len() {
+            let c = &s.windows[i];
+            if c.used
+                && c.visible
+                && c.parent == parent
+                && x >= c.x
+                && y >= c.y
+                && x < c.x + c.w
+                && y < c.y + c.h
+                && best.is_none_or(|b| c.z > s.windows[b].z)
+            {
+                best = Some(i);
+            }
+        }
+        best.map_or(parent, hwnd_of)
+    })
 }

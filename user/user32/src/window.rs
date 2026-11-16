@@ -73,6 +73,8 @@ pub const BORDER: i32 = 1;
 pub const CAPTION: i32 = 32;
 /// A menu bar's height (SM_CYMENU).
 pub const MENU_BAR: i32 = 20;
+/// The size of a menu item's check mark (SM_CXMENUCHECK, SM_CYMENUCHECK).
+const MENU_CHECK: i32 = 15;
 const MAX_CLASSES: usize = 32;
 pub(crate) const MAX_WINDOWS: usize = 512;
 const QUEUE: usize = 256;
@@ -214,6 +216,8 @@ pub(crate) struct Window {
     /// The class's extra bytes for this window (extra.rs; null for none).
     pub(crate) extra: *mut u8,
     pub(crate) extra_len: u32,
+    /// SetWindowContextHelpId's id (0: none).
+    pub(crate) help_id: u32,
 }
 
 /// WM_NCCALCSIZE.
@@ -415,6 +419,7 @@ pub(crate) const NO_WINDOW: Window = Window {
     hidden_with_owner: false,
     extra: core::ptr::null_mut(),
     extra_len: 0,
+    help_id: 0,
 };
 const NO_MSG: Msg =
     Msg { hwnd: 0, message: 0, wparam: 0, lparam: 0, time: 0, pt: [0; 2], private: 0 };
@@ -1169,6 +1174,7 @@ pub extern "system" fn CreateWindowExW(
         let i = s.windows.iter().position(|w| !w.used)?;
         s.windows[i] = Window {
             used: true,
+            help_id: 0,
             class,
             proc_: s.classes[class].proc_,
             desktop,
@@ -1564,6 +1570,83 @@ pub extern "system" fn ValidateRect(hwnd: Hwnd, _rect: *const [i32; 4]) -> i32 {
         s.windows[i].invalid = false;
         i32::from(s.windows[i].used)
     })
+}
+
+/// InvalidateRgn: InvalidateRect without a rectangle. gala invalidates
+/// the whole window either way: it keeps no update region (`invalid`,
+/// ARCHITECTURE "Painting"), which is also what GetUpdateRect and
+/// GetUpdateRgn answer with.
+#[unsafe(no_mangle)]
+pub extern "system" fn InvalidateRgn(hwnd: Hwnd, _region: usize, erase: i32) -> i32 {
+    InvalidateRect(hwnd, core::ptr::null(), erase)
+}
+
+/// The window LockWindowUpdate holds (0: none).
+static LOCKED: AtomicUsize = AtomicUsize::new(0);
+
+/// LockWindowUpdate: one window at a time can be locked, and NULL
+/// unlocks it; locking another while one is locked fails. Unlocking
+/// invalidates the window that was locked, which is what makes the
+/// drawing a program held back appear.
+///
+/// gala does not hold the drawing back: what is drawn while the window
+/// is locked is shown (a program locking a window to hide its flicker
+/// still flickers). The lock is kept so the calls answer as Windows'
+/// do; ROADMAP has the drawing side.
+#[unsafe(no_mangle)]
+pub extern "system" fn LockWindowUpdate(hwnd: Hwnd) -> i32 {
+    if hwnd == 0 {
+        let was = LOCKED.swap(0, Ordering::AcqRel);
+        if was != 0 {
+            InvalidateRect(was, core::ptr::null(), 1);
+        }
+        return 1;
+    }
+    if window(hwnd).is_none() {
+        crate::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    match LOCKED.compare_exchange(0, hwnd, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => 1,
+        Err(_) => 0,
+    }
+}
+
+/// SetWindowContextHelpId: the help context a window carries (MFC and
+/// the dialog manager keep it for F1, which WM_HELP then names).
+#[unsafe(no_mangle)]
+pub extern "system" fn SetWindowContextHelpId(hwnd: Hwnd, id: u32) -> i32 {
+    let Some(i) = index_of(hwnd) else { return 0 };
+    with(|s| {
+        if !s.windows[i].used {
+            return 0;
+        }
+        s.windows[i].help_id = id;
+        1
+    })
+}
+
+/// GetWindowContextHelpId: the id SetWindowContextHelpId gave the
+/// window (0: none).
+#[unsafe(no_mangle)]
+pub extern "system" fn GetWindowContextHelpId(hwnd: Hwnd) -> u32 {
+    window(hwnd).map_or(0, |w| w.help_id)
+}
+
+/// WinHelpW: gala has no help viewer, as Windows 11 has none for .hlp
+/// files either. Quitting help (HELP_QUIT) has nothing to close and
+/// succeeds; any other command is reported to the ledger with its
+/// number and fails with ERROR_CALL_NOT_IMPLEMENTED, which is what a
+/// program sees when no help is installed.
+#[unsafe(no_mangle)]
+pub extern "system" fn WinHelpW(_hwnd: Hwnd, _file: *const u16, command: u32, _data: usize) -> i32 {
+    const HELP_QUIT: u32 = 0x0002;
+    if command == HELP_QUIT {
+        return 1;
+    }
+    unsupported(b"user32.dll!WinHelpW", command.into());
+    crate::set_last_error(120); // ERROR_CALL_NOT_IMPLEMENTED
+    0
 }
 
 /// RedrawWindow(hwnd, rect, region, flags): RDW_INVALIDATE (1) or
@@ -3465,7 +3548,8 @@ pub extern "system" fn GetSystemMetrics(index: i32) -> i32 {
         17 => work[3] - CAPTION, // SM_CYFULLSCREEN
         80 => 1,                 // SM_CMONITORS
         4 => CAPTION,
-        15 => MENU_BAR, // SM_CYMENU
+        15 => MENU_BAR,        // SM_CYMENU
+        71 | 72 => MENU_CHECK, // SM_CXMENUCHECK, SM_CYMENUCHECK
         5 | 6 => BORDER,
         30 => 46,      // SM_CXSIZE: the desktop's caption buttons
         31 => CAPTION, // SM_CYSIZE
