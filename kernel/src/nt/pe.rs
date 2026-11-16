@@ -3,7 +3,7 @@
 //! Image sections also take 32-bit (PE32, i386) images, as 64-bit Windows
 //! maps them (WOW64, IL-only .NET assemblies); processes run only PE32+.
 //! Machines: x64 (AMD64), x86 (I386) and ARM64; which an executable may
-//! be is the architecture's (`arch::runs_machine`: x86-64 runs x64 and,
+//! be is the architecture's (`platform::runs_machine`: x86-64 runs x64 and,
 //! through WOW64, x86; aarch64 runs ARM64).
 
 use core::fmt;
@@ -123,13 +123,13 @@ pub struct PeImage<'a> {
 
 impl<'a> PeImage<'a> {
     /// Parses an executable (.exe) image of a machine this architecture
-    /// runs (`arch::runs_machine`).
+    /// runs (`platform::runs_machine`).
     pub fn parse(data: &'a [u8]) -> Result<Self, PeError> {
         let image = Self::parse_image(data)?;
         if image.is_dll {
             return Err(PeError::NotExecutable);
         }
-        if !crate::arch::runs_machine(image.machine) {
+        if !super::platform::runs_machine(image.machine) {
             return Err(PeError::UnsupportedMachine(image.machine));
         }
         Ok(image)
@@ -742,7 +742,7 @@ mod tests {
         // tests are x86-64's).
         assert_eq!(
             PeImage::parse(&d).map(|i| i.machine),
-            if crate::arch::runs_machine(IMAGE_FILE_MACHINE_ARM64) {
+            if crate::nt::platform::runs_machine(IMAGE_FILE_MACHINE_ARM64) {
                 Ok(IMAGE_FILE_MACHINE_ARM64)
             } else {
                 Err(PeError::UnsupportedMachine(IMAGE_FILE_MACHINE_ARM64))

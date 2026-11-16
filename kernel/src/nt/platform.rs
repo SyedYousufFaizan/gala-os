@@ -18,6 +18,8 @@ pub use crate::arch::interrupts::{FaultAccess, TrapFrame, TrapKind};
 pub use crate::arch::paging::{PagingError, UserFault};
 #[cfg(not(feature = "hosted"))]
 pub use crate::arch::paging::{SharedPage, SharedUserSpace, SpaceLock, UserSpace};
+/// Whether a process of a PE machine runs on this architecture.
+pub use crate::arch::runs_machine;
 pub use crate::arch::syscall::{Gpr, SyscallFrame, UserRegs};
 /// The XSAVE layout (components, sizes) and the state as a value.
 pub use crate::arch::xstate::{self, XState};
