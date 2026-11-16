@@ -169,8 +169,9 @@ pub fn init() {
         Ok(dev) => {
             let m = dev.mac;
             info!(
-                "net: virtio-net at {}, mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                dev.at, m[0], m[1], m[2], m[3], m[4], m[5]
+                "net: virtio-net at {} (device {:#06x}, modern interface), mac \
+                 {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                dev.at, dev.device_id, m[0], m[1], m[2], m[3], m[4], m[5]
             );
             Some(dev)
         }

@@ -538,7 +538,7 @@ what it may take on the host, what xtask writes into the fresh raw
 image, what the image must hold afterwards).
 
 - The image is `target/.../<scenario>.disk.img` next to the ISO,
-  attached as a legacy virtio-blk device; such scenarios boot alone and
+  attached as a virtio-blk device; such scenarios boot alone and
   not in gala-um.
 - Raw disk access needs an administrator, so their programs run
   `as=system`.
@@ -907,9 +907,8 @@ XTASK_HOTSWAP_WHY=1 cargo xtask hotswap-diff ...   # why each function counts as
 A scenario in `GPU_SCENARIOS` boots with `-vga none -device
 virtio-gpu-pci,xres=1280,yres=800,edid=on` (UEFI) and its command line
 says `display=virtio`; QEMU's `screendump` then shows the virtio-gpu
-scanout, so the usual `SCREEN_SCENARIOS` checks work. The device is
-modern-only (no `disable-legacy=off` as for virtio-blk/net): its driver
-uses `arch::virtio::ModernDevice`. With such a display the boot splash
+scanout, so the usual `SCREEN_SCENARIOS` checks work. Its driver uses
+`arch::virtio::ModernDevice`, as the disk's and the network's do. With such a display the boot splash
 is not visible (the firmware's framebuffer is no longer shown): read the
 serial log. The kernel flag `gputrace` logs every command; `events=display`
 the modes, resets and errors.

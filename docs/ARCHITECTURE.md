@@ -6188,19 +6188,26 @@ only. ROADMAP N1 (TCP/IP and sockets) and N2 (Nginx) are the items.
 - `arch::pci`: configuration space through ports 0xcf8/0xcfc,
   brute-force enumeration (bus 0-255, functions 1-7 only for
   multifunction devices). The firmware (SeaBIOS or OVMF) has assigned
-  the BARs; the kernel only turns on I/O decoding and bus mastering.
-- `arch::virtio`: the virtio *legacy* PCI interface (registers in I/O
-  BAR 0; QEMU gets `disable-legacy=off`). It is in `arch` because the
-  device DMAs: `LegacyDevice` owns its queues and resets the device in
-  `drop` before the queue memory is freed (fields drop after `drop`).
+  the BARs; the kernel only turns on memory decoding and bus mastering.
+- `arch::virtio`: virtio's modern PCI interface only (`ModernDevice`:
+  the common, notify and device-configuration structures in memory
+  BARs, found through vendor capabilities), for every driver (disk,
+  network, GPU) on every architecture: it needs no port I/O, which
+  aarch64 has none of. QEMU's devices are transitional (ids 0x1000,
+  0x1001: the legacy registers are there, unused) or modern-only (0x1041,
+  0x1042); the drivers take either. It is in `arch` because the device
+  DMAs: `ModernDevice` owns its queues and resets the device in `drop`
+  before the queue memory is freed (fields drop after `drop`). A
+  queue's ring is sized for the buffers the driver asks for (twice for
+  chained requests), as far as the device allows.
   Each `Virtqueue` has physically contiguous ring memory and a buffer
   region of up to 64 fixed slots; slot *i* is descriptor *i*, and a bit
   mask tracks which slots the device owns (chained slots for block
   requests: "Disk"). Drivers poll (the available ring asks for no
   interrupts).
 - `net::virtio_net`: queue 0 receive, 1 transmit, 32 slots of 2 KiB
-  each, the 10-byte legacy header in front of every frame (no
-  offloads). It is a smoltcp `Device`; a received frame is copied out
+  each, the 12-byte `virtio_net_hdr` VERSION_1 gives every frame (with
+  `num_buffers`; no offloads); features MAC (and VERSION_1). It is a smoltcp `Device`; a received frame is copied out
   and its slot reposted at once, a sent frame is copied into a free
   transmit slot (counted as dropped when none is free; TCP retransmits).
 - `net::loopback`: a smoltcp `Device` (medium IP, MTU 16 KiB) whose
@@ -6815,9 +6822,9 @@ clusters of a data area, a disk-backed C: (D4). gala-um has no disk.
   2*i*+1 (the device writes: a read's data and the status), over
   consecutive parts of the slot (`post_chain`), which is what a block
   request needs.
-- `disk::virtio_blk`: the first transitional virtio-blk function (legacy
-  interface, `disable-legacy=off`), capacity from its configuration,
-  features RO, FLUSH and ANY_LAYOUT; one queue with one slot of 64 KiB
+- `disk::virtio_blk`: the first virtio-blk function (modern interface),
+  capacity from its configuration, features RO and FLUSH (and VERSION_1,
+  which implies any layout); one queue with one slot of 64 KiB
   of data. A request is the 16-byte header (type IN/OUT/FLUSH, sector),
   the data and a status byte.
 - `disk` (the kernel's API, independent of NT): `read`/`write` of whole
@@ -14109,9 +14116,7 @@ The first GPU driver (G1). Code: `kernel/src/arch/virtio.rs`
 (`ModernDevice`), `kernel/src/display/` (`mod.rs`, `pci.rs`,
 `virtio_gpu/{mod,proto,tests}.rs`).
 
-- **Transport** (`arch::virtio::ModernDevice`): virtio-gpu has no legacy
-  interface (virtio-blk and -net use the legacy one), so this is the
-  modern one: the PCI capability list (`pci::Function::capabilities`),
+- **Transport** (`arch::virtio::ModernDevice`, every virtio driver's): the PCI capability list (`pci::Function::capabilities`),
   vendor capabilities for the common, notify and device-configuration
   structures (`find_layout`: the first of each), memory BARs (32/64-bit)
   mapped uncached once per device (`paging::map_mmio`); reset,
@@ -15060,7 +15065,7 @@ New code follows them; old code is brought in line (ROADMAP R1).
    and resubmit what was in flight.
    - virtio-blk: a request whose device gave up (FAILED, NEEDS_RESET)
      or lost DRIVER_OK (reset under the driver) re-initializes it in
-     place (`LegacyDevice::reinit`: a second device value would reset it
+     place (`ModernDevice::reinit`: a second device value would reset it
      again when dropped) and posts the request again, up to 3 times
      (scenario `disk_reset`).
    - virtio-net: before receiving or sending it checks the device and

@@ -1,10 +1,10 @@
-//! The virtio PCI legacy interface (virtio 1.x specification, "Legacy
-//! Interface: A Note on PCI Device Layout" and "Legacy Interfaces: A Note
-//! on Virtqueue Layout"; OASIS, see THIRD_PARTY.md): registers in I/O BAR 0,
-//! split virtqueues at a page-aligned guest-physical address. And the
-//! modern interface ("Virtio Over PCI Bus": the common, notify and device
-//! configuration structures found through vendor capabilities, in memory
-//! BARs) for devices that have no legacy one (virtio-gpu): `ModernDevice`.
+//! virtio over PCI (virtio 1.x specification, "Virtio Over PCI Bus";
+//! OASIS, see THIRD_PARTY.md): the modern interface only, `ModernDevice`:
+//! the common, notify and device configuration structures found through
+//! vendor capabilities, in memory BARs, and split virtqueues. Every
+//! driver uses it (disk, network, GPU) on every architecture: it needs no
+//! port I/O, which aarch64 does not have. Transitional devices (QEMU's
+//! defaults) offer it beside their legacy registers, which are not used.
 //!
 //! The device reads and writes guest memory (DMA) only through the buffers
 //! posted here, which is why this lives in `arch`: the queues own their
@@ -13,19 +13,8 @@
 //! No interrupts: drivers poll.
 
 use super::pci::Function;
-use super::port::{Port, PortValue};
 use crate::mm::frame::Frame;
 use core::sync::atomic::{Ordering, fence};
-
-const DEVICE_FEATURES: u16 = 0x00;
-const GUEST_FEATURES: u16 = 0x04;
-const QUEUE_ADDRESS: u16 = 0x08;
-const QUEUE_SIZE: u16 = 0x0c;
-const QUEUE_SELECT: u16 = 0x0e;
-const QUEUE_NOTIFY: u16 = 0x10;
-const DEVICE_STATUS: u16 = 0x12;
-/// Device-specific configuration (without MSI-X, which we never enable).
-const DEVICE_CONFIG: u16 = 0x14;
 
 const STATUS_ACKNOWLEDGE: u8 = 1;
 const STATUS_DRIVER: u8 = 2;
@@ -36,9 +25,6 @@ const DESC_F_NEXT: u16 = 1;
 const DESC_F_WRITE: u16 = 2;
 const AVAIL_F_NO_INTERRUPT: u16 = 1;
 const PAGE: usize = 4096;
-
-/// Legacy virtqueues are page-aligned at a 32-bit page number.
-const MAX_QUEUE_PHYS: u64 = 1 << 44;
 
 /// Queues per device (enough for a network card: receive and transmit).
 pub const MAX_QUEUES: usize = 2;
@@ -149,9 +135,6 @@ impl Virtqueue {
         let rings = DmaRegion::new(total)?;
         let slots = slots.min(if chained { size / 2 } else { size }).min(64);
         let buffers = DmaRegion::new(usize::from(slots) * slot_size)?;
-        if rings.phys() >= MAX_QUEUE_PHYS {
-            return None;
-        }
         let mut queue = Self {
             rings,
             buffers,
@@ -207,7 +190,7 @@ impl Virtqueue {
     }
 
     /// Gives slot `slot` (its first `len` bytes) to the device. The caller
-    /// then notifies the device (`LegacyDevice::notify`).
+    /// then notifies the device (`ModernDevice::notify`).
     pub fn post(&mut self, slot: u16, len: usize) -> bool {
         if self.chained || slot >= self.slots || self.posted(slot) || len > self.slot_size {
             return false;
@@ -289,16 +272,8 @@ impl Virtqueue {
     }
 }
 
-/// A virtio device driven through the legacy I/O interface.
-pub struct LegacyDevice {
-    io: u16,
-    // Dropped after `drop` has reset the device (fields drop last).
-    queues: [Option<Virtqueue>; MAX_QUEUES],
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitError {
-    NoIoBar,
     NoQueue(u16),
     OutOfMemory,
     /// No common or notify structure among the capabilities.
@@ -313,154 +288,12 @@ pub enum InitError {
     FeaturesRefused,
 }
 
-impl LegacyDevice {
-    /// Resets the device, negotiates `wanted & offered` features and
-    /// returns the device (status ACKNOWLEDGE | DRIVER); set up the queues
-    /// with `setup_queue`, then call `start`.
-    pub fn new(function: &Function, wanted: u32) -> Result<(Self, u32), InitError> {
-        let io = function.io_bar(0).ok_or(InitError::NoIoBar)?;
-        function.enable_io_and_dma();
-        let mut dev = Self { io, queues: [const { None }; MAX_QUEUES] };
-        dev.write(DEVICE_STATUS, 0u8);
-        dev.write(DEVICE_STATUS, STATUS_ACKNOWLEDGE);
-        dev.write(DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
-        let features = dev.read::<u32>(DEVICE_FEATURES) & wanted;
-        dev.write(GUEST_FEATURES, features);
-        Ok((dev, features))
-    }
-
-    fn port<T: PortValue>(&self, offset: u16) -> Port<T> {
-        // SAFETY: the registers of the device this value owns (I/O BAR 0).
-        // Writes can make the device DMA, but only to addresses this module
-        // gives it (queues it owns).
-        unsafe { Port::new(self.io + offset) }
-    }
-
-    fn read<T: PortValue>(&self, offset: u16) -> T {
-        self.port(offset).read()
-    }
-
-    fn write<T: PortValue>(&mut self, offset: u16, value: T) {
-        self.port(offset).write(value);
-    }
-
-    /// Byte `offset` of the device-specific configuration.
-    pub fn config_u8(&self, offset: u16) -> u8 {
-        self.read(DEVICE_CONFIG + offset)
-    }
-
-    /// The little-endian 32-bit field at `offset` of the configuration.
-    pub fn config_u32(&self, offset: u16) -> u32 {
-        self.read(DEVICE_CONFIG + offset)
-    }
-
-    /// Sets up queue `index` with up to `slots` buffers of `slot_size` bytes
-    /// (`device_writes`: receive buffers).
-    pub fn setup_queue(
-        &mut self,
-        index: u16,
-        slots: u16,
-        slot_size: usize,
-        device_writes: bool,
-    ) -> Result<(), InitError> {
-        self.setup(index, slots, slot_size, device_writes, false)
-    }
-
-    /// Sets up queue `index` for requests the device both reads and
-    /// writes (`Virtqueue::post_chain`), as a block device's are.
-    pub fn setup_chained_queue(
-        &mut self,
-        index: u16,
-        slots: u16,
-        slot_size: usize,
-    ) -> Result<(), InitError> {
-        self.setup(index, slots, slot_size, false, true)
-    }
-
-    fn setup(
-        &mut self,
-        index: u16,
-        slots: u16,
-        slot_size: usize,
-        device_writes: bool,
-        chained: bool,
-    ) -> Result<(), InitError> {
-        let i = usize::from(index);
-        if i >= MAX_QUEUES {
-            return Err(InitError::NoQueue(index));
-        }
-        self.write(QUEUE_SELECT, index);
-        let size: u16 = self.read(QUEUE_SIZE);
-        if size == 0 || !size.is_power_of_two() {
-            return Err(InitError::NoQueue(index));
-        }
-        let queue = Virtqueue::new(size, slots, slot_size, device_writes, chained)
-            .ok_or(InitError::OutOfMemory)?;
-        self.write(QUEUE_ADDRESS, (queue.rings.phys() / PAGE as u64) as u32);
-        self.queues[i] = Some(queue);
-        Ok(())
-    }
-
-    /// Tells the device the driver is ready.
-    pub fn start(&mut self) {
-        self.write(DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_DRIVER_OK);
-    }
-
-    /// Whether the device gave up (DEVICE_NEEDS_RESET / FAILED bits).
-    pub fn failed(&self) -> bool {
-        self.read::<u8>(DEVICE_STATUS) & (STATUS_FAILED | 0x40) != 0
-    }
-
-    /// Whether the device must be set up again: it gave up, or it was
-    /// reset under the driver (DRIVER_OK gone: its queues are forgotten).
-    pub fn needs_reset(&self) -> bool {
-        let status = self.read::<u8>(DEVICE_STATUS);
-        status & (STATUS_FAILED | 0x40) != 0 || status & STATUS_DRIVER_OK == 0
-    }
-
-    /// Sets the device up again in place (after it gave up or was reset):
-    /// reset, the old queues freed (the device no longer uses them),
-    /// `wanted & offered` features negotiated again; set up the queues and
-    /// `start` again. The negotiated features.
-    pub fn reinit(&mut self, wanted: u32) -> u32 {
-        self.write(DEVICE_STATUS, 0u8);
-        self.queues = [const { None }; MAX_QUEUES];
-        self.write(DEVICE_STATUS, STATUS_ACKNOWLEDGE);
-        self.write(DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
-        let features = self.read::<u32>(DEVICE_FEATURES) & wanted;
-        self.write(GUEST_FEATURES, features);
-        features
-    }
-
-    /// Resets the device now (status 0), as a test of the driver's
-    /// recovery does (`diskreset=`): what was in flight is lost.
-    pub fn reset_now(&mut self) {
-        self.write(DEVICE_STATUS, 0u8);
-    }
-
-    pub fn queue(&mut self, index: u16) -> Option<&mut Virtqueue> {
-        self.queues.get_mut(usize::from(index))?.as_mut()
-    }
-
-    /// Tells the device that queue `index` has new buffers.
-    pub fn notify(&mut self, index: u16) {
-        self.write(QUEUE_NOTIFY, index);
-    }
-}
-
-impl Drop for LegacyDevice {
-    fn drop(&mut self) {
-        // Reset: the device stops using the queues before they are freed.
-        self.write(DEVICE_STATUS, 0u8);
-    }
-}
-
 /// Resets every virtio device on the PCI bus (status 0), whichever driver
 /// owns it, so that none reads or writes memory any more: before a kernel
 /// handover, when this kernel's memory is about to be reused. The drivers
 /// are not told (no CPU runs them any more). Returns how many were reset.
-/// Modern devices are reset through the status register their driver
-/// registered (`MODERN_STATUS`): no mapping is made here.
+/// Devices are reset through the status register their driver registered
+/// (`MODERN_STATUS`): no mapping is made here.
 pub fn reset_all() -> u32 {
     let mut count = 0;
     for slot in &MODERN_STATUS {
@@ -476,17 +309,6 @@ pub fn reset_all() -> u32 {
             count += 1;
         }
     }
-    super::pci::for_each(|f| {
-        if f.vendor != 0x1af4 {
-            return;
-        }
-        if let Some(io) = f.io_bar(0) {
-            // SAFETY: the device's legacy status register; writing 0 resets
-            // the device, which then stops using its queues.
-            unsafe { Port::<u8>::new(io + DEVICE_STATUS) }.write(0);
-            count += 1;
-        }
-    });
     count
 }
 
@@ -764,9 +586,10 @@ impl ModernDevice {
         if max == 0 {
             return Err(InitError::NoQueue(index));
         }
-        // A small ring is enough: we keep few requests in flight (the
-        // largest power of two up to 16 the device allows).
-        let most = max.min(16);
+        // A ring for the buffers asked for (a chained request takes two
+        // descriptors), as far as the device allows: a power of two.
+        let needed = if chained { slots.saturating_mul(2) } else { slots };
+        let most = max.min(needed.max(1).checked_next_power_of_two().unwrap_or(1 << 15));
         let size = 1u16 << (15 - most.leading_zeros());
         let queue = Virtqueue::new(size, slots, slot_size, device_writes, chained)
             .ok_or(InitError::OutOfMemory)?;
@@ -787,6 +610,11 @@ impl ModernDevice {
     /// Tells the device the driver is ready.
     pub fn start(&mut self) {
         self.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
+    }
+
+    /// Whether the device gave up (DEVICE_NEEDS_RESET, FAILED).
+    pub fn failed(&self) -> bool {
+        self.status() & (STATUS_FAILED | STATUS_NEEDS_RESET) != 0
     }
 
     /// Whether the device must be set up again: it gave up
@@ -829,6 +657,17 @@ impl ModernDevice {
         // multiplier so that it lies inside); writing the queue's index
         // makes the device read that queue, which this value owns.
         unsafe { addr.write_volatile(index) };
+    }
+
+    /// The byte at `offset` of the device configuration (0 outside it).
+    pub fn config_u8(&self, offset: u16) -> u8 {
+        if self.device == 0 || u32::from(offset) + 1 > self.device_len.max(1) {
+            return 0;
+        }
+        let addr =
+            core::ptr::with_exposed_provenance::<u8>((self.device + u64::from(offset)) as usize);
+        // SAFETY: inside the device configuration this value mapped.
+        unsafe { addr.read_volatile() }
     }
 
     /// The little-endian u32 at `offset` of the device configuration (0

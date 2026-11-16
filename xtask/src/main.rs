@@ -22963,7 +22963,7 @@ fn add_net_with(cmd: &mut Command, port: u16, guest: u16, extra: &str) {
             "user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:{guest},hostfwd=udp:127.0.0.1:{port}-:{guest}{extra}"
         ))
         // The legacy (0.9.5) interface: one I/O BAR (see docs/ARCHITECTURE.md).
-        .args(["-device", "virtio-net-pci,netdev=n0,disable-legacy=off"]);
+        .args(["-device", "virtio-net-pci,netdev=n0"]);
 }
 
 /// Scenarios whose guest fetches `http://10.0.2.100/` from the host
@@ -22983,7 +22983,7 @@ fn add_host_page_net(cmd: &mut Command, log: &Path) -> Result {
     let guestfwd = host_page_fwd(cmd, log)?;
     cmd.arg("-netdev")
         .arg(format!("user,id=n0{guestfwd}"))
-        .args(["-device", "virtio-net-pci,netdev=n0,disable-legacy=off"]);
+        .args(["-device", "virtio-net-pci,netdev=n0"]);
     Ok(())
 }
 
@@ -23100,7 +23100,7 @@ fn add_disk(cmd: &mut Command, path: &Path) {
             "if=none,id=d0,format={format},werror=report,rerror=report,file={}",
             path.display()
         ))
-        .args(["-device", "virtio-blk-pci,drive=d0,disable-legacy=off"]);
+        .args(["-device", "virtio-blk-pci,drive=d0"]);
 }
 
 /// A scenario that gets a disk.

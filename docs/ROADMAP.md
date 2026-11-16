@@ -3972,13 +3972,10 @@ on the seams item PT prepared: native ARM64 Windows programs
 **Next**:
 1. The kernel's `arch` for aarch64, in boot order, each phase's
    `stop_after` moving `arm_boot` on: PCI (the ECAM from the MCFG, a
-   host-tested parser like the MADT's) and its devices. The disk and
-   network drivers use virtio's legacy interface through I/O BARs, and
-   ARM has no port I/O: either aarch64's `port` goes through the host
-   bridge's memory-mapped I/O window (its address is in the DSDT's AML,
-   or the board's), or the drivers move to virtio's modern interface
-   (memory BARs, as the GPU's already does) on both architectures, the
-   consistent choice. Then the boot files and the manifest, the GIC's pseudo-NMI
+   host-tested parser like the MADT's) and its devices, which the
+   drivers already reach through memory BARs only (virtio's modern
+   interface, on both architectures). Then the boot files and the
+   manifest, the GIC's pseudo-NMI
    (state dumps, `stop_others`), PSCI CPU_ON for CPUs the bootloader did
    not start; the UART's and the GIC's addresses from the firmware (SPCR,
    MADT or the device tree); the RTC (PL031). Then
