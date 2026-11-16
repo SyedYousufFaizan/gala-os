@@ -5469,6 +5469,32 @@ Wanted, not scheduled. Each becomes an item with a section when it is.
   `fpu_test` failed in gala-um; the cause was elsewhere (a new thread's
   first entry took the host's SSE registers: docs/GALA_UM.md).
 
+- **gala on Windows, without virtualization** (the owner): gala-um's
+  shape on a Windows host: the kernel as an ordinary Windows process
+  (a hosted platform beside `kernel/src/hosted`'s Linux one), Windows
+  programs run inside it, their memory in its address space. The hard
+  part is the system calls: Linux gives gala-um the program's system
+  calls (seccomp's SIGSYS), Windows has no such interception, so a raw
+  `syscall` instruction would reach the host's own kernel. Programs
+  that enter the kernel through ntdll only (most do) reach gala with
+  gala's ntdll in the host's place (calls, not traps); the rest need
+  their `syscall` instructions found and redirected, by patching
+  decoded code or by translation (XT's machinery). Other questions:
+  address-space layout (the host's DLLs and gala's programs in one
+  process; fixed-base images), exceptions (vectored handlers for the
+  program's faults), threads (host threads as gala's), and the host's
+  window for the desktop (as U5's on Linux). Today gala-um already
+  runs on Windows through WSL2 (a lightweight VM).
+- **gala in a web browser (WebAssembly)** (the owner): the kernel built
+  for `wasm32` on a hosted platform of its own (no MMU: user memory
+  through the CPU emulator's own translation; threads as Web Workers
+  over shared memory; the screen a canvas; storage in the browser), and
+  the programs' x86-64 code run by XT's step 1 interpreter built for
+  wasm, then a JIT that emits WebAssembly modules per hot block (as
+  browser-based x86 emulators do). The interpreter is the shared piece:
+  written once for XT (x64 on ARM64), it serves here unchanged.
+  Interpreted speed first; correctness against the existing x64 test
+  programs, as XT's.
 - **Self-hosting**: building gala's own test programs (then Nginx) on
   gala. H1-H10 built the base (pipes, child processes, busybox, TinyCC
   building itself, make, Lua and SQLite built on gala); what is left is

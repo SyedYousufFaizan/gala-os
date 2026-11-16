@@ -115,10 +115,11 @@ jobs:
       - name: Take every package from the plain amd64 archive, not amd64v3
         run: |
           echo "where the image sets an architecture variant:"
-          sudo grep -rn 'Architecture-Variants' /etc/apt/apt.conf /etc/apt/apt.conf.d || echo "  nowhere"
+          sudo grep -rn 'Architecture-Variants' /etc/apt/ || echo "  nowhere"
           printf '#clear APT::Architecture-Variants;\n' | sudo tee /etc/apt/apt.conf.d/zz-plain-amd64
           if [ -f /etc/apt/apt.conf ]; then sudo sed -i '/Architecture-Variants/d' /etc/apt/apt.conf; fi
-          if apt-config dump | grep -i 'Architecture-Variants'; then
+          # Cleared, the dump shows the option empty (`... "";`).
+          if apt-config dump | grep -i 'Architecture-Variants "[^"]'; then
             echo "::error::apt still selects an architecture variant (above) after the clear; the files that set it are listed above"
             exit 1
           fi
