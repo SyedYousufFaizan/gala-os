@@ -7211,6 +7211,7 @@ const EXTRA_MODULES: &[(&str, &str, &str)] = &[
     ("arm_apc", "ntdll.dll", "Windows/System32"),
     ("arm_crash_dispatched", "ntdll.dll", "Windows/System32"),
     ("arm_crash_filtered", "ntdll.dll", "Windows/System32"),
+    ("arm_seh", "ntdll.dll", "Windows/System32"),
     ("seh_test", "ntdll.dll", "Windows/System32"),
     ("guard_test", "ntdll.dll", "Windows/System32"),
     ("import_test", "ntdll.dll", "Windows/System32"),
@@ -9952,6 +9953,7 @@ const USER_PROGRAMS_ARM64: &[&str] = &[
     "tls_test",
     "apc_test",
     "crash",
+    "seh_test",
 ];
 
 /// Where the build puts the ARM64 build of test program `program`.
@@ -12197,6 +12199,7 @@ const AARCH64_SCENARIOS: &[&str] = &[
     "arm_crash",
     "arm_crash_dispatched",
     "arm_crash_filtered",
+    "arm_seh",
     "arm_sched",
     "arm_fault_ud",
     "arm_fault_pagefault",
@@ -12537,8 +12540,7 @@ const SCENARIOS: &[Scenario] = &[
     },
     Scenario {
         // As `crash_dispatched`: the exception goes to gala's ntdll's ARM64
-        // dispatcher, finds no handler (the ledger says the frames were not
-        // searched: ARM64 unwinding is to come) and ends the process.
+        // dispatcher, no frame has a handler, and the process ends.
         name: "arm_crash_dispatched",
         cmdline: "qemu_exit run=crash.exe",
         exit_status: QEMU_EXIT_SUCCESS,
@@ -12567,6 +12569,17 @@ const SCENARIOS: &[Scenario] = &[
             "process crash.exe (pid 4) exited with status 0xffff7002",
             BOOT_OK_MARKER,
         ],
+    },
+    Scenario {
+        // seh_test's ARM64 build (as `seh_test`): ARM64 unwind data (.pdata
+        // and .xdata, packed and full) read by gala's ntdll: lookups,
+        // RtlVirtualUnwind in a body, prologue and epilogue, frame
+        // handlers in dispatch and unwind, a hardware exception through
+        // KiUserExceptionDispatcher's frame, unwind consolidation.
+        name: "arm_seh",
+        cmdline: "qemu_exit run=seh_test.exe",
+        exit_status: QEMU_EXIT_SUCCESS,
+        expect: &["seh_test: ok", "exited with status 0x00000000", BOOT_OK_MARKER],
     },
     Scenario {
         // The hang watchdog on aarch64 (as `watchdog`): CPU 1 spins in its

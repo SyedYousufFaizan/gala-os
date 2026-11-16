@@ -228,6 +228,17 @@ versions are pinned in `web/package-lock.json` (CI installs with `npm ci`).
   `brk #0xf000` for `__debugbreak` also from Microsoft's documentation of
   that intrinsic. The ARM64 CONTEXT's layout from winnt.h's
   ARM64_NT_CONTEXT. No code copied.
+- gala's ARM64 unwinder (`user/testntdll/src/seh_arm64.rs`): the formats,
+  the canonical prologue of packed unwind data and the partial
+  prologue/epilogue rules from Microsoft's "ARM64 exception handling";
+  the choices that document leaves open (the establisher frame is the sp
+  the unwind ends with; a handler only from a function's body; the
+  custom-stack codes' effect on the pc and CONTEXT_UNWOUND_TO_CALL; a
+  frame's pc 4 bytes back when it was reached by unwinding a call) from
+  Wine's `dlls/ntdll/unwind.c` and `signal_arm64.c`
+  (github.com/wine-mirror/wine master as of 2026-11-16, LGPL-2.1+) as a
+  description of Windows' behaviour; DISPATCHER_CONTEXT_ARM64's layout
+  from winnt.h. No code copied.
 - The tar reader of `user/wsl` (`src/tar.rs`): POSIX.1-2008's pax
   description of the ustar and pax formats and GNU tar's manual (long
   names, base-256 numbers). gzip's member header: RFC 1952 (the

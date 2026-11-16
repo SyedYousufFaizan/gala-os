@@ -23,8 +23,13 @@ fn main() {
             "RtlUnwind",
             "KiUserExceptionDispatcher",
         ],
-        // ARM64: no unwinding yet (RtlUnwindEx, ROADMAP AR).
-        Ok("aarch64") => &["RtlCaptureContext", "RtlRaiseException", "KiUserExceptionDispatcher"],
+        Ok("aarch64") => &[
+            "RtlCaptureContext",
+            "RtlRaiseException",
+            "RtlUnwindEx",
+            "RtlUnwind",
+            "KiUserExceptionDispatcher",
+        ],
         _ => &[],
     };
     for name in names {
